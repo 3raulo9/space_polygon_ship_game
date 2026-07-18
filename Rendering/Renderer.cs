@@ -2,6 +2,7 @@ using System.Numerics;
 using Raylib_cs;
 using VoidTanks.Core;
 using VoidTanks.Entities;
+using VoidTanks.UI;
 
 namespace VoidTanks.Rendering;
 
@@ -54,6 +55,35 @@ public sealed class Renderer : IDisposable
         GridRenderer.Draw(player.Position);
         _entities.Draw(world, player.Position);
         Raylib.EndMode3D();
+
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// Renders the title menu into the low-res target so it shares the world's
+    /// chunky pixels. A grid drifts slowly behind it — the void is still out
+    /// there, waiting — with the UI drawn flat on top. Kept in the Renderer so
+    /// the Menu class stays pure state and never touches Raylib.
+    /// </summary>
+    public void DrawMenu(UI.Menu menu, float elapsed)
+    {
+        // A slow, aimless drift over the empty grid. No player, no craft — just
+        // the machine idling. The eye creeps forward and pans a hair so the void
+        // reads as alive-but-indifferent rather than a frozen backdrop.
+        var pos = new Vector2(elapsed * 0.6f, elapsed * 1.4f);
+        float pan = MathF.Sin(elapsed * 0.05f) * 0.25f;
+        var eye = new Vector3(pos.X, Config.CameraHeight + 1.5f, pos.Y);
+        _camera.Position = eye;
+        _camera.Target = eye + new Vector3(pan, -0.16f, 1f);
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+
+        Raylib.BeginMode3D(_camera);
+        GridRenderer.Draw(pos);
+        Raylib.EndMode3D();
+
+        MenuRenderer.Draw(menu, elapsed);
 
         Raylib.EndTextureMode();
     }
