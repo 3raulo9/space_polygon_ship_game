@@ -22,6 +22,10 @@ public sealed class World
     private const float GrenadeDamage = 4f;      // heavy round, dealt to all in the blast
     private const float EnemyShotDamage = 12f;   // vs player's 100-point shield
 
+    // Shield fraction at which the low-health alarm sounds. Crossing *down*
+    // through this line fires warning.wav once — not once per frame below it.
+    private const float LowShieldWarning = 0.45f;
+
     public World()
     {
         Player = new PlayerTank(Vector2.Zero);
@@ -103,6 +107,9 @@ public sealed class World
             if (p.Active) continue;
             if (grenade) p.FireGrenade(origin, dir, fromPlayer);
             else p.Fire(origin, dir, fromPlayer);
+            // The report of a barrel firing — same clip for player and enemy
+            // shots, since both spawn through here.
+            Audio.PlayDetonation();
             return;
         }
         // Pool full: silently drop the shot rather than allocate. Rare.
@@ -126,7 +133,7 @@ public sealed class World
                         if (p.IsGrenade)
                             Detonate(p);           // area burst, damages the whole cluster
                         else
-                            e.TakeDamage(PlayerShotDamage);
+                            DamageEnemy(e, PlayerShotDamage);
                         p.Active = false;
                         break;
                     }
@@ -139,11 +146,45 @@ public sealed class World
                 if (!Player.IsAirborne &&
                     WithinHit(p.Position, Player.Position, PlayerTank.Radius))
                 {
-                    Player.TakeDamage(EnemyShotDamage);
+                    DamagePlayer(EnemyShotDamage);
                     p.Active = false;
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Applies enemy damage to the player and sounds the right combat cue: the
+    /// death explosion if this shot ends the run; otherwise the low-shield
+    /// warning while the craft sits at/below the danger line (it *replaces* the
+    /// normal hit clip there, so a wounded player hears the alarm on every hit);
+    /// otherwise the plain hit. A respawn refills the shield above the line, so
+    /// hits go back to the normal clip.
+    /// </summary>
+    private void DamagePlayer(float amount)
+    {
+        Player.TakeDamage(amount);
+
+        // A lost life that ends the run is still a destroyed craft.
+        if (!Player.Alive)
+            Audio.PlayExplosion();
+        else if (Player.ShieldFraction <= LowShieldWarning)
+            Audio.PlayWarning();
+        else
+            Audio.PlayHit();
+    }
+
+    /// <summary>
+    /// Deals damage to an enemy and sounds the explosion if this hit is what
+    /// destroys it — the alive→dead transition, so a cluster killed by one blast
+    /// each reports its own death.
+    /// </summary>
+    private void DamageEnemy(EnemyTank enemy, float amount)
+    {
+        bool wasAlive = enemy.Alive;
+        enemy.TakeDamage(amount);
+        if (wasAlive && !enemy.Alive)
+            Audio.PlayExplosion();
     }
 
     /// <summary>
@@ -157,7 +198,7 @@ public sealed class World
         {
             if (!e.Alive) continue;
             if (WithinHit(p.Position, e.Position, reach))
-                e.TakeDamage(GrenadeDamage);
+                DamageEnemy(e, GrenadeDamage);
         }
     }
 

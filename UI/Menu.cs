@@ -1,3 +1,4 @@
+using VoidTanks.Core;
 using VoidTanks.Input;
 
 namespace VoidTanks.UI;
@@ -71,7 +72,12 @@ public sealed class Menu
             int next = i + step;
             if (next < 0 || next >= count) break; // no wrap — a hard edge feels right here
             i = next;
-            if (IsSelectable((Item)i)) { Selected = (Item)i; return; }
+            if (IsSelectable((Item)i))
+            {
+                Selected = (Item)i;
+                Audio.PlayBlip(); // only when the cursor truly lands on a new option
+                return;
+            }
         }
     }
 }

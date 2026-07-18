@@ -11,4 +11,8 @@
     <PackageReference Include="Raylib-cs" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
