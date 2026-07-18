@@ -56,6 +56,9 @@ public sealed class Renderer : IDisposable
         _entities.Draw(world, player.Position);
         Raylib.EndMode3D();
 
+        // Flat instrument panel over the scene: vital bars + radar along the top.
+        HudRenderer.Draw(world);
+
         Raylib.EndTextureMode();
     }
 

@@ -31,8 +31,8 @@ public sealed class PlayerTank
     private const float TurnAccel = 6.5f;
     private const float TurnDrag = 8.0f;
 
-    private const float JumpVel = 11f;      // initial upward kick
-    private const float Gravity = 30f;
+    private const float JumpVel = 15f;      // initial upward kick — a taller leap
+    private const float Gravity = 18f;      // low pull → the dodge floats and hangs
 
     public bool IsAirborne => Height > 0.001f;
 
@@ -40,8 +40,24 @@ public sealed class PlayerTank
     public float MaxShield = 100f;
     public float Shield;
     public int Lives = 3;
+    public int MaxAmmo = 100;
     public int Ammo = 40;
     public bool Alive => Shield > 0f || Lives > 0;
+
+    // Hyper Engine: the reserve for tactical moves. Slowly refills on its own,
+    // so jumping and hyperspacing are rationed, not free. Jump takes a quarter of
+    // the bar; hyperspace drains almost all of it to panic-warp across the map.
+    public float MaxHyper = 100f;
+    public float Hyper;
+    private const float HyperRegen = 6f;        // points/sec, a slow trickle
+    private const float JumpHyperCost = 25f;    // ~25% of the bar
+    private const float HyperspaceCost = 90f;   // a massive drain to teleport
+    private const float TeleportRange = 90f;    // how far a warp can fling you
+
+    // A single heavy grenade eats ten cannon rounds at once — a burst you pay
+    // dearly for. Cooldown is longer than the cannon so it can't be spammed.
+    private const int GrenadeAmmoCost = 10;
+    private const float GrenadeInterval = 0.9f;
 
     // Ammo is a resource, not infinite: a cooldown plus finite rounds forces
     // restraint and makes panic-firing into the fog feel costly.
@@ -56,6 +72,7 @@ public sealed class PlayerTank
         Position = start;
         Heading = heading;
         Shield = MaxShield;
+        Hyper = MaxHyper;
     }
 
     public void Update(float dt)
@@ -63,6 +80,10 @@ public sealed class PlayerTank
         UpdateTurn(dt);
         UpdateDrive(dt);
         UpdateJump(dt);
+
+        // The Hyper reserve creeps back up when it isn't being spent.
+        if (Hyper < MaxHyper)
+            Hyper = MathF.Min(MaxHyper, Hyper + HyperRegen * dt);
 
         if (_fireCooldown > 0f) _fireCooldown -= dt;
 
@@ -86,6 +107,44 @@ public sealed class PlayerTank
         origin = Position + direction * (Radius + 0.6f); // out past the nose
         _fireCooldown = FireInterval;
         Ammo--;
+        return true;
+    }
+
+    /// <summary>
+    /// Attempts a heavy grenade: needs the full 10-round ammo cost and the (shared)
+    /// fire cooldown clear. On success returns the muzzle origin and direction and
+    /// spends the ammo. The projectile itself carries the splash — this just launches.
+    /// </summary>
+    public bool TryFireGrenade(out Vector2 origin, out Vector2 direction)
+    {
+        origin = default;
+        direction = default;
+        if (_fireCooldown > 0f || Ammo < GrenadeAmmoCost) return false;
+
+        direction = Forward;
+        origin = Position + direction * (Radius + 0.6f);
+        _fireCooldown = GrenadeInterval;
+        Ammo -= GrenadeAmmoCost;
+        return true;
+    }
+
+    /// <summary>
+    /// Panic-warp: drains the bulk of the Hyper reserve and flings the craft to a
+    /// random spot within range. Blocked (returns false) when the reserve is too
+    /// low. A grounded craft only — you can't warp mid-jump.
+    /// </summary>
+    public bool TryHyperspace()
+    {
+        if (Hyper < HyperspaceCost || IsAirborne) return false;
+
+        // Random bearing and distance — a genuine gamble, not a controlled blink.
+        float angle = Random.Shared.NextSingle() * MathF.Tau;
+        float dist = TeleportRange * (0.4f + 0.6f * Random.Shared.NextSingle());
+        Position += new Vector2(MathF.Sin(angle), MathF.Cos(angle)) * dist;
+
+        Hyper -= HyperspaceCost;
+        _speed = 0f;        // the warp kills momentum — you arrive dead-stopped
+        _turnRate = 0f;
         return true;
     }
 
@@ -141,8 +200,13 @@ public sealed class PlayerTank
 
     private void UpdateJump(float dt)
     {
-        if (InputMap.JumpPressed && !IsAirborne)
+        // Jumping is a Hyper move now: it costs a quarter of the bar and is
+        // simply refused if the reserve is too low to pay for it.
+        if (InputMap.JumpPressed && !IsAirborne && Hyper >= JumpHyperCost)
+        {
             _verticalVel = JumpVel;
+            Hyper -= JumpHyperCost;
+        }
 
         if (IsAirborne || _verticalVel > 0f)
         {
@@ -161,6 +225,11 @@ public sealed class PlayerTank
 
     /// <summary>0..1 speed fraction — drives engine-hum pitch later (Doc 04).</summary>
     public float SpeedFraction => Math.Abs(_speed) / MaxSpeed;
+
+    // --- 0..1 fractions for the HUD bars ---
+    public float ShieldFraction => MaxShield > 0f ? Math.Clamp(Shield / MaxShield, 0f, 1f) : 0f;
+    public float AmmoFraction => MaxAmmo > 0 ? Math.Clamp((float)Ammo / MaxAmmo, 0f, 1f) : 0f;
+    public float HyperFraction => MaxHyper > 0f ? Math.Clamp(Hyper / MaxHyper, 0f, 1f) : 0f;
 
     private static float MoveToward(float value, float target, float maxDelta)
     {

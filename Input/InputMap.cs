@@ -30,6 +30,14 @@ public static class InputMap
     // Fire. Held is fine — the tank's own cooldown paces it, and ammo is finite.
     public static bool Fire => Active.FireDown();
 
+    // Heavy grenade (Button B): a burst that spends ten rounds at once. Held is
+    // fine; the longer grenade cooldown keeps it costly.
+    public static bool Grenade => Active.GrenadeDown();
+
+    // Hyperspace warp (Button X): one press panic-teleports across the map, if
+    // the Hyper reserve can pay for it.
+    public static bool HyperspacePressed => Active.HyperspacePressed();
+
     public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
 
     // --- Menu navigation (fixed; only meaningful while a menu screen is up) ---

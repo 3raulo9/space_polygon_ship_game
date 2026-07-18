@@ -19,6 +19,7 @@ public sealed class World
 
     private const int MaxProjectiles = 64;
     private const float PlayerShotDamage = 1f;   // vs shield "points"
+    private const float GrenadeDamage = 4f;      // heavy round, dealt to all in the blast
     private const float EnemyShotDamage = 12f;   // vs player's 100-point shield
 
     public World()
@@ -46,10 +47,17 @@ public sealed class World
 
     public void Update(float dt)
     {
-        // Read player fire from global input, then run the shared sim step. The
+        // Read player actions from global input, then run the shared sim step. The
         // step itself is input-free so the headless self-test can reuse it.
-        if (InputMap.Fire)
+        // Grenade takes precedence over the cannon on the frame both are held,
+        // since they share the fire cooldown.
+        if (InputMap.Grenade)
+            FirePlayerGrenade();
+        else if (InputMap.Fire)
             FirePlayerShot();
+
+        if (InputMap.HyperspacePressed)
+            Player.TryHyperspace();
 
         StepForTest(dt);
     }
@@ -81,12 +89,20 @@ public sealed class World
             SpawnProjectile(origin, dir, fromPlayer: true);
     }
 
-    private void SpawnProjectile(Vector2 origin, Vector2 dir, bool fromPlayer)
+    /// <summary>Requests a heavy grenade; honoured only if off cooldown with 10 ammo.</summary>
+    public void FirePlayerGrenade()
+    {
+        if (Player.TryFireGrenade(out Vector2 origin, out Vector2 dir))
+            SpawnProjectile(origin, dir, fromPlayer: true, grenade: true);
+    }
+
+    private void SpawnProjectile(Vector2 origin, Vector2 dir, bool fromPlayer, bool grenade = false)
     {
         foreach (var p in _projectiles)
         {
             if (p.Active) continue;
-            p.Fire(origin, dir, fromPlayer);
+            if (grenade) p.FireGrenade(origin, dir, fromPlayer);
+            else p.Fire(origin, dir, fromPlayer);
             return;
         }
         // Pool full: silently drop the shot rather than allocate. Rare.
@@ -107,7 +123,10 @@ public sealed class World
                     if (!e.Alive) continue;
                     if (WithinHit(p.Position, e.Position, EnemyTank.Radius))
                     {
-                        e.TakeDamage(PlayerShotDamage);
+                        if (p.IsGrenade)
+                            Detonate(p);           // area burst, damages the whole cluster
+                        else
+                            e.TakeDamage(PlayerShotDamage);
                         p.Active = false;
                         break;
                     }
@@ -124,6 +143,21 @@ public sealed class World
                     p.Active = false;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Grenade blast: deals damage to every live enemy whose centre falls inside
+    /// the projectile's splash radius — the whole cluster feels one hit.
+    /// </summary>
+    private void Detonate(Projectile p)
+    {
+        float reach = p.SplashRadius + EnemyTank.Radius;
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive) continue;
+            if (WithinHit(p.Position, e.Position, reach))
+                e.TakeDamage(GrenadeDamage);
         }
     }
 

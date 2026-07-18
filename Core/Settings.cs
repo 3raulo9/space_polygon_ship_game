@@ -118,6 +118,15 @@ public sealed class Settings
         _ => Down(KeyboardKey.LeftControl) || Down(KeyboardKey.RightControl),
     } || Raylib.IsMouseButtonDown(MouseButton.Left);
 
+    // Heavy grenade (the pad's "B"): a distinct button, held is fine — the tank's
+    // own longer cooldown paces it. Right mouse mirrors it for mouse-only play.
+    public bool GrenadeDown() =>
+        Down(KeyboardKey.G) || Raylib.IsMouseButtonDown(MouseButton.Right);
+
+    // Hyperspace warp (the pad's "X"): a single deliberate press, not a hold —
+    // you commit to the gamble once, you don't chain-warp.
+    public bool HyperspacePressed() => Pressed(KeyboardKey.X);
+
     // Jump is Space unless Space is the fire key, in which case it moves to Shift
     // so the two never collide.
     public bool JumpPressed() =>
