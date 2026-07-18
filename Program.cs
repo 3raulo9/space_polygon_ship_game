@@ -13,10 +13,15 @@ Raylib.InitWindow(Config.WindowWidth, Config.WindowHeight, "VOID TANKS");
 Raylib.SetExitKey(KeyboardKey.Null); // Escape is handled in the loop, not by Raylib
 Raylib.SetTargetFPS(60);
 
+// Sound bank — opens the audio device and loads the SFX. The self-test above
+// returns before this, so headless runs never touch audio.
+Audio.Init();
+
 using (var game = new Game())
 {
     game.Run();
 }
 
+Audio.Shutdown();
 Raylib.CloseWindow();
 return 0;
