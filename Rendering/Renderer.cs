@@ -89,6 +89,30 @@ public sealed class Renderer : IDisposable
     }
 
     /// <summary>
+    /// Renders the settings screen over the same drifting-grid backdrop as the
+    /// menu, so moving between them feels like one continuous cold terminal.
+    /// </summary>
+    public void DrawSettings(UI.SettingsScreen screen, float elapsed)
+    {
+        var pos = new Vector2(elapsed * 0.6f, elapsed * 1.4f);
+        float pan = MathF.Sin(elapsed * 0.05f) * 0.25f;
+        var eye = new Vector3(pos.X, Config.CameraHeight + 1.5f, pos.Y);
+        _camera.Position = eye;
+        _camera.Target = eye + new Vector3(pan, -0.16f, 1f);
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+
+        Raylib.BeginMode3D(_camera);
+        GridRenderer.Draw(pos);
+        Raylib.EndMode3D();
+
+        MenuRenderer.DrawSettings(screen, elapsed);
+
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
     /// Blits the low-res target to the window: integer-scaled, nearest-neighbor,
     /// centered with letterbox bars in the void colour.
     /// </summary>

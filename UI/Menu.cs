@@ -17,6 +17,7 @@ public sealed class Menu
     {
         None,
         StartSinglePlayer,
+        OpenSettings,
         OpenTestScreen, // the secret hatch — wired, but goes nowhere yet
         Quit,
     }
@@ -24,6 +25,7 @@ public sealed class Menu
     public enum Item
     {
         SinglePlayer,
+        Settings,
         Multiplayer, // present but unavailable — a door that won't open
     }
 
@@ -46,8 +48,14 @@ public sealed class Menu
         if (InputMap.MenuUp) MoveSelection(-1);
         if (InputMap.MenuDown) MoveSelection(+1);
 
-        if (InputMap.MenuConfirm && Selected == Item.SinglePlayer)
-            return Action.StartSinglePlayer;
+        if (InputMap.MenuConfirm)
+        {
+            switch (Selected)
+            {
+                case Item.SinglePlayer: return Action.StartSinglePlayer;
+                case Item.Settings: return Action.OpenSettings;
+            }
+        }
 
         return Action.None;
     }

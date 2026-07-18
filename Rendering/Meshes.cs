@@ -16,57 +16,100 @@ namespace VoidTanks.Rendering;
 public static class Meshes
 {
     /// <summary>
-    /// A low, wide combat wedge: a hull box with a sloped front glacis and a
-    /// stubby raised barrel. The wedge nose points +Z. One colour, hard facets.
+    /// An abstract combat tank built the old way: a stack of hard geometric
+    /// primitives, zero curves. Two flat track plates carry a wedged hull box;
+    /// a smaller turret box sits on top; a long tapering barrel juts forward.
+    /// Every facet is one flat colour with a hard crease at each edge, so it
+    /// reads as a menacing chess-piece silhouette from across the void — not a
+    /// blob hugging the floor. Nose points +Z (heading 0).
     /// </summary>
     public static PolyMesh Tank(Color fill)
     {
-        const float hw = 1.1f;   // half width
-        const float hl = 1.6f;   // half length
-        const float bodyH = 0.9f;
-        const float noseY = 0.35f; // front is lower than the back — the wedge
-
         var m = new PolyMesh();
 
-        // Body corners. Back is taller (bodyH), front glacis slopes down to noseY.
-        Vector3 blB = new(-hw, 0f, -hl);   // back-left bottom
-        Vector3 brB = new(hw, 0f, -hl);    // back-right bottom
-        Vector3 flB = new(-hw, 0f, hl);    // front-left bottom
-        Vector3 frB = new(hw, 0f, hl);     // front-right bottom
+        // Overall footprint. The tank stands ~2 units tall so it has real
+        // vertical presence at the camera's eye height.
+        const float hw = 1.15f;   // half width (outer edge of the tracks)
+        const float hl = 1.7f;    // half length (front-to-back)
 
-        Vector3 blT = new(-hw, bodyH, -hl);
-        Vector3 brT = new(hw, bodyH, -hl);
-        Vector3 flT = new(-hw, noseY, hl); // front top is lower → sloped glacis
-        Vector3 frT = new(hw, noseY, hl);
+        // 1) Track plates — two flat rectangular boxes flanking the centreline,
+        //    sitting on the grid. They give the tank its wide, grounded base.
+        const float trackH = 0.5f;        // top of the tracks
+        const float trackW = 0.42f;       // width of each plate
+        const float trackZ = hl;          // run the full length
+        m.AddBoxSpan(fill, -hw, -hw + trackW, -trackZ, trackZ, 0f, trackH);       // left track
+        m.AddBoxSpan(fill, hw - trackW, hw, -trackZ, trackZ, 0f, trackH);         // right track
 
-        // Top (sloping forward), back, front glacis, two sides, bottom.
-        m.AddFace(fill, blT, brT, frT, flT);            // top / glacis
-        m.AddFace(fill, brB, blB, blT, brT);            // back
-        m.AddFace(fill, flB, frB, frT, flT);            // front (short face)
-        m.AddFace(fill, blB, flB, flT, blT);            // left
-        m.AddFace(fill, frB, brB, brT, frT);            // right
-        m.AddFace(fill, blB, brB, frB, flB);            // bottom
+        // 2) Hull — a wedged box raised on the tracks, narrower than the track
+        //    span. The front face is a sloped glacis (a single hard flat facet).
+        const float hullHw = 0.9f;
+        const float hullHd = 1.45f;
+        const float hullBottom = trackH - 0.05f; // sits just into the tracks
+        const float hullBackTop = 1.35f;         // tall at the back
+        const float hullNoseTop = 0.85f;         // lower at the front → glacis slope
 
-        // Stubby barrel: a thin box jutting from the front, slightly raised.
-        const float bw = 0.16f;
-        float by = 0.55f;                 // barrel centre height
-        float bz0 = hl - 0.2f;            // starts near the nose
-        float bz1 = hl + 1.0f;            // pokes out front
-        Vector3 g0 = new(-bw, by - bw, bz0);
-        Vector3 g1 = new(bw, by - bw, bz0);
-        Vector3 g2 = new(bw, by + bw, bz0);
-        Vector3 g3 = new(-bw, by + bw, bz0);
-        Vector3 h0 = new(-bw, by - bw, bz1);
-        Vector3 h1 = new(bw, by - bw, bz1);
-        Vector3 h2 = new(bw, by + bw, bz1);
-        Vector3 h3 = new(-bw, by + bw, bz1);
-        m.AddFace(fill, h0, h1, h2, h3);   // muzzle cap
-        m.AddFace(fill, g3, g2, h2, h3);   // top
-        m.AddFace(fill, g0, h0, h3, g3);   // left
-        m.AddFace(fill, g1, g2, h2, h1);   // right (wound for outward normal)
-        m.AddFace(fill, g0, g1, h1, h0);   // bottom
+        // Hull as a box with a lowered front-top edge (built explicitly so the
+        // glacis is its own clean facet).
+        Vector3 hb_bl = new(-hullHw, hullBottom, -hullHd); // back-left bottom
+        Vector3 hb_br = new(hullHw, hullBottom, -hullHd);
+        Vector3 hf_bl = new(-hullHw, hullBottom, hullHd);  // front-left bottom
+        Vector3 hf_br = new(hullHw, hullBottom, hullHd);
+        Vector3 hb_tl = new(-hullHw, hullBackTop, -hullHd); // back-left top
+        Vector3 hb_tr = new(hullHw, hullBackTop, -hullHd);
+        Vector3 hf_tl = new(-hullHw, hullNoseTop, hullHd);  // front-left top (lower)
+        Vector3 hf_tr = new(hullHw, hullNoseTop, hullHd);
+
+        m.AddFace(fill, hb_tl, hb_tr, hf_tr, hf_tl); // top deck (slopes forward)
+        m.AddFace(fill, hb_br, hb_bl, hb_tl, hb_tr); // back
+        m.AddFace(fill, hf_bl, hf_br, hf_tr, hf_tl); // front glacis
+        m.AddFace(fill, hb_bl, hf_bl, hf_tl, hb_tl); // left
+        m.AddFace(fill, hf_br, hb_br, hb_tr, hf_tr); // right
+        m.AddFace(fill, hb_bl, hb_br, hf_br, hf_bl); // bottom
+
+        // 3) Turret — a smaller box perched on the rear of the hull deck. Sitting
+        //    it back leaves the sloped glacis clear and makes the barrel reach.
+        const float turHw = 0.62f;
+        const float turHd = 0.7f;
+        const float turZ = -0.35f;        // shifted toward the back
+        const float turBottom = hullBackTop - 0.05f;
+        const float turTop = turBottom + 0.55f;
+        m.AddBoxSpan(fill, -turHw, turHw, turZ - turHd, turZ + turHd, turBottom, turTop);
+
+        // 4) Gun barrel — a long tapering rectangular prism from the turret face.
+        //    Wider at the base, narrowing to the muzzle: an elongated pyramid-ish
+        //    prism, no cylinder. Reaches out past the nose.
+        float barrelY = (turBottom + turTop) * 0.5f;
+        const float baseHalf = 0.16f;     // half-thickness at the turret
+        const float muzzleHalf = 0.09f;   // narrower at the tip
+        float bz0 = turZ + turHd - 0.1f;  // starts at the turret front
+        float bz1 = hl + 1.15f;           // pokes well past the nose
+        AddTaperedBarrel(m, fill, barrelY, baseHalf, muzzleHalf, bz0, bz1);
 
         return m;
+    }
+
+    /// <summary>
+    /// A barrel as a tapering box along +Z: a square cross-section shrinking from
+    /// <paramref name="baseHalf"/> at z0 to <paramref name="muzzleHalf"/> at z1,
+    /// centred at height <paramref name="y"/>. Built by hand so all four sides
+    /// taper and the muzzle caps flat.
+    /// </summary>
+    private static void AddTaperedBarrel(PolyMesh m, Color fill,
+        float y, float baseHalf, float muzzleHalf, float z0, float z1)
+    {
+        float b = baseHalf, t = muzzleHalf;
+        // Base ring (at turret), muzzle ring (at tip).
+        Vector3 b0 = new(-b, y - b, z0), b1 = new(b, y - b, z0);
+        Vector3 b2 = new(b, y + b, z0), b3 = new(-b, y + b, z0);
+        Vector3 t0 = new(-t, y - t, z1), t1 = new(t, y - t, z1);
+        Vector3 t2 = new(t, y + t, z1), t3 = new(-t, y + t, z1);
+
+        m.AddFace(fill, t0, t1, t2, t3);   // muzzle cap
+        m.AddFace(fill, b3, b2, b1, b0);   // base cap (into the turret; harmless)
+        m.AddFace(fill, b3, b0, t0, t3);   // left
+        m.AddFace(fill, b1, b2, t2, t1);   // right
+        m.AddFace(fill, b2, b3, t3, t2);   // top
+        m.AddFace(fill, b0, b1, t1, t0);   // bottom
     }
 
     /// <summary>

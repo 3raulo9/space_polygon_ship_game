@@ -7,6 +7,7 @@ namespace VoidTanks.Core;
 public enum GameState
 {
     Menu,
+    Settings,
     LevelIntro,
     Playing,
     Dead,
