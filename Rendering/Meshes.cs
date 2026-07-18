@@ -147,9 +147,13 @@ public static class Meshes
     }
 
     /// <summary>A tiny projectile bolt — a small bright shard, barely a shape.</summary>
-    public static PolyMesh Bolt(Color fill)
+    public static PolyMesh Bolt(Color fill) => Octahedron(fill, 0.22f);
+
+    /// <summary>The heavy grenade round — a chunkier shard than a bolt, same form.</summary>
+    public static PolyMesh Grenade(Color fill) => Octahedron(fill, 0.5f);
+
+    private static PolyMesh Octahedron(Color fill, float s)
     {
-        const float s = 0.22f;
         var m = new PolyMesh();
         // A little octahedron: reads as a hot point from any angle.
         Vector3 up = new(0f, s, 0f), dn = new(0f, -s, 0f);

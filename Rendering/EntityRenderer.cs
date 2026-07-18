@@ -15,6 +15,7 @@ public sealed class EntityRenderer
     private readonly PolyMesh _standardTank = Meshes.Tank(Palette.EnemyFill);
     private readonly PolyMesh _eliteCone = Meshes.EliteCone(Palette.EliteFill);
     private readonly PolyMesh _bolt = Meshes.Bolt(Palette.Flag);
+    private readonly PolyMesh _grenade = Meshes.Grenade(Palette.EliteFill);
 
     public void Draw(World.World world, Vector2 cameraXZ)
     {
@@ -28,8 +29,11 @@ public sealed class EntityRenderer
         foreach (var p in world.Projectiles)
         {
             if (!p.Active) continue;
-            // Bolts hover at barrel height and don't need a heading.
-            _bolt.Draw(p.Position, 0f, 0.55f, cameraXZ);
+            // Bolts hover at barrel height and don't need a heading. The heavy
+            // grenade round is a fatter slug in the elite/orange colour, riding a
+            // touch higher so it reads as the dangerous one.
+            if (p.IsGrenade) _grenade.Draw(p.Position, 0f, 0.7f, cameraXZ);
+            else _bolt.Draw(p.Position, 0f, 0.55f, cameraXZ);
         }
     }
 }

@@ -15,8 +15,15 @@ public sealed class Projectile
     public bool FromPlayer;     // so a shot can't hit its own owner
     public bool Active;
 
+    // A grenade is the heavy Button-B round: slower, bigger, and it damages
+    // everything inside a blast radius on contact instead of a single target.
+    public bool IsGrenade;
+    public float SplashRadius;
+
     private const float Speed = 90f;
+    private const float GrenadeSpeed = 60f;   // heavier, so it lobs slower
     private const float MaxLife = 2.4f;
+    public const float GrenadeSplash = 7f;    // blast radius in world units
 
     public void Fire(Vector2 origin, Vector2 dir, bool fromPlayer)
     {
@@ -24,6 +31,20 @@ public sealed class Projectile
         Velocity = Vector2.Normalize(dir) * Speed;
         Life = MaxLife;
         FromPlayer = fromPlayer;
+        IsGrenade = false;
+        SplashRadius = 0f;
+        Active = true;
+    }
+
+    /// <summary>Launches the heavy splash round (Button B).</summary>
+    public void FireGrenade(Vector2 origin, Vector2 dir, bool fromPlayer)
+    {
+        Position = origin;
+        Velocity = Vector2.Normalize(dir) * GrenadeSpeed;
+        Life = MaxLife;
+        FromPlayer = fromPlayer;
+        IsGrenade = true;
+        SplashRadius = GrenadeSplash;
         Active = true;
     }
 
