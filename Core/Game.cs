@@ -3,18 +3,25 @@ using Raylib_cs;
 using VoidTanks.Entities;
 using VoidTanks.Input;
 using VoidTanks.Rendering;
+using VoidTanks.UI;
 
 namespace VoidTanks.Core;
 
 /// <summary>
 /// The loop. Simulation runs on a fixed timestep (deterministic movement and,
-/// later, collision/AI); rendering is decoupled and runs once per frame.
+/// later, collision/AI); rendering is decoupled and runs once per frame. The
+/// game opens on the title menu; the world isn't spun up until Single Player is
+/// chosen, so nothing hunts you while you're still deciding to enter.
 /// </summary>
 public sealed class Game : IDisposable
 {
     private readonly Renderer _renderer;
-    private readonly World.World _world;
-    private GameState _state = GameState.Playing;
+    private readonly Menu _menu = new();
+    private World.World? _world;
+    private GameState _state = GameState.Menu;
+
+    // Wall-clock seconds since boot — drives the menu's drift and flicker.
+    private float _menuTime;
 
     private double _accumulator;
 
@@ -22,19 +29,26 @@ public sealed class Game : IDisposable
     // of frames, save a screenshot, and exit. Lets the render be checked without
     // a human at the window. No effect on normal play.
     private readonly string? _capturePath = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE");
+    // When set, capture grabs the title menu instead of the world.
+    private readonly bool _captureMenu =
+        Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU") == "1";
     private int _frame;
 
     public Game()
     {
         _renderer = new Renderer();
-        _world = new World.World();
 
-        // For capture, aim the craft at the seeded enemy so the shot frames it.
-        // Harmless for normal play.
-        if (_capturePath != null && _world.Enemies.Count > 0)
+        // Capture runs the world directly (no menu), so build it now and aim the
+        // craft at the seeded enemy. Normal play starts on the menu instead. The
+        // menu-capture variant stays on the menu, so skip the world entirely.
+        if (_capturePath != null && !_captureMenu)
         {
-            Vector2 to = _world.Enemies[0].Position - _world.Player.Position;
-            _world.Player.Heading = MathF.Atan2(to.X, to.Y);
+            EnterSinglePlayer();
+            if (_world!.Enemies.Count > 0)
+            {
+                Vector2 to = _world.Enemies[0].Position - _world.Player.Position;
+                _world.Player.Heading = MathF.Atan2(to.X, to.Y);
+            }
         }
     }
 
@@ -42,9 +56,21 @@ public sealed class Game : IDisposable
     {
         while (!Raylib.WindowShouldClose())
         {
-            if (InputMap.QuitPressed) break;
-
             if (_capturePath != null && RunCaptureFrame()) break;
+
+            // The menu owns Escape (to quit); in-world, Escape returns to the menu.
+            if (_state == GameState.Menu)
+            {
+                if (UpdateMenu()) break; // Quit requested
+                DrawMenu();
+                continue;
+            }
+
+            if (InputMap.QuitPressed)
+            {
+                ReturnToMenu();
+                continue;
+            }
 
             // Accumulate real elapsed time and step the sim in fixed increments,
             // so a fast or slow display never changes the physics.
@@ -63,15 +89,64 @@ public sealed class Game : IDisposable
     }
 
     /// <summary>
+    /// Advances and draws the title menu. Returns true when the player asks to
+    /// quit the whole game.
+    /// </summary>
+    private bool UpdateMenu()
+    {
+        _menuTime += Raylib.GetFrameTime();
+
+        switch (_menu.Update())
+        {
+            case Menu.Action.StartSinglePlayer:
+                EnterSinglePlayer();
+                break;
+            case Menu.Action.OpenTestScreen:
+                // Secret keybind ('L' position): the test screen isn't built yet.
+                // The hook is here on purpose — wire the destination in later.
+                break;
+            case Menu.Action.Quit:
+                return true;
+        }
+        return false;
+    }
+
+    private void EnterSinglePlayer()
+    {
+        _world = new World.World();
+        _state = GameState.Playing;
+    }
+
+    private void ReturnToMenu()
+    {
+        _world = null;
+        _state = GameState.Menu;
+        _accumulator = 0;
+    }
+
+    /// <summary>
     /// Scripted capture: advance a few frames of forward motion so the grid is
     /// clearly in view, then screenshot and signal exit. Returns true when done.
     /// </summary>
     private bool RunCaptureFrame()
     {
+        _frame++;
+
+        // Menu variant: let the drift/flicker advance a little, then grab it.
+        if (_captureMenu)
+        {
+            _menuTime += (float)Config.FixedDt;
+            int menuAt = int.TryParse(
+                Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FRAME"), out int mf) ? mf : 30;
+            if (_frame < menuAt) return false;
+            DrawMenu();
+            Raylib.TakeScreenshot(_capturePath!);
+            return true;
+        }
+
         // Let the world run so the enemy advances out of the fog toward the
         // player before we grab the frame.
-        _world.Update((float)Config.FixedDt);
-        _frame++;
+        _world!.Update((float)Config.FixedDt);
 
         // Grab late enough that the enemy has closed to inside the fog boundary.
         int captureAt = int.TryParse(
@@ -90,14 +165,20 @@ public sealed class Game : IDisposable
         switch (_state)
         {
             case GameState.Playing:
-                _world.Update(dt);
+                _world!.Update(dt);
                 break;
         }
     }
 
     private void Draw()
     {
-        _renderer.DrawWorld(_world);
+        _renderer.DrawWorld(_world!);
+        _renderer.Present();
+    }
+
+    private void DrawMenu()
+    {
+        _renderer.DrawMenu(_menu, _menuTime);
         _renderer.Present();
     }
 
