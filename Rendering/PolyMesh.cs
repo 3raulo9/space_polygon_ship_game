@@ -32,6 +32,56 @@ public sealed class PolyMesh
         return this;
     }
 
+    /// <summary>
+    /// Add a six-sided box (optionally a frustum: the top rectangle can be a
+    /// different half-size than the bottom, for a tapering prism). Spans X in
+    /// [-hwB, hwB] at the bottom and [-hwT, hwT] at the top, similarly for Z, and
+    /// Y in [y0, y1]. Every face is wound for an outward normal so the flat
+    /// shading reads correctly. This is the primitive the stacked tank is built
+    /// from — track plates, hull, turret, tapering barrel are all boxes.
+    /// </summary>
+    public PolyMesh AddBox(Color color,
+        float hwB, float hdB, float hwT, float hdT, float y0, float y1)
+    {
+        // Bottom rectangle (larger for a taper), top rectangle (smaller).
+        Vector3 b0 = new(-hwB, y0, -hdB), b1 = new(hwB, y0, -hdB);
+        Vector3 b2 = new(hwB, y0, hdB), b3 = new(-hwB, y0, hdB);
+        Vector3 t0 = new(-hwT, y1, -hdT), t1 = new(hwT, y1, -hdT);
+        Vector3 t2 = new(hwT, y1, hdT), t3 = new(-hwT, y1, hdT);
+
+        AddFace(color, t0, t1, t2, t3);   // top
+        AddFace(color, b3, b2, b1, b0);   // bottom (wound downward)
+        AddFace(color, b0, b1, t1, t0);   // back  (-Z)
+        AddFace(color, b2, b3, t3, t2);   // front (+Z)
+        AddFace(color, b3, b0, t0, t3);   // left  (-X)
+        AddFace(color, b1, b2, t2, t1);   // right (+X)
+        return this;
+    }
+
+    /// <summary>Convenience: a straight (non-tapering) box with equal top/bottom.</summary>
+    public PolyMesh AddBox(Color color, float hw, float hd, float y0, float y1)
+        => AddBox(color, hw, hd, hw, hd, y0, y1);
+
+    /// <summary>
+    /// A straight box spanning explicit X/Z ranges (not centred on the axis) —
+    /// used for the two side track plates, which sit left and right of centre.
+    /// </summary>
+    public PolyMesh AddBoxSpan(Color color, float x0, float x1, float z0, float z1, float y0, float y1)
+    {
+        Vector3 b0 = new(x0, y0, z0), b1 = new(x1, y0, z0);
+        Vector3 b2 = new(x1, y0, z1), b3 = new(x0, y0, z1);
+        Vector3 t0 = new(x0, y1, z0), t1 = new(x1, y1, z0);
+        Vector3 t2 = new(x1, y1, z1), t3 = new(x0, y1, z1);
+
+        AddFace(color, t0, t1, t2, t3);   // top
+        AddFace(color, b3, b2, b1, b0);   // bottom
+        AddFace(color, b0, b1, t1, t0);   // back  (-Z)
+        AddFace(color, b2, b3, t3, t2);   // front (+Z)
+        AddFace(color, b3, b0, t0, t3);   // left  (-X)
+        AddFace(color, b1, b2, t2, t1);   // right (+X)
+        return this;
+    }
+
     // A fixed light direction (Doc 02): a single crude directional term. Points
     // down and to one side so facets read as distinct planes.
     private static readonly Vector3 LightDir = Vector3.Normalize(new Vector3(-0.4f, -1f, -0.3f));

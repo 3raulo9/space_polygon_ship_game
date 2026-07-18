@@ -16,7 +16,9 @@ namespace VoidTanks.Core;
 public sealed class Game : IDisposable
 {
     private readonly Renderer _renderer;
+    private readonly Settings _settings;
     private readonly Menu _menu = new();
+    private readonly SettingsScreen _settingsScreen;
     private World.World? _world;
     private GameState _state = GameState.Menu;
 
@@ -29,14 +31,20 @@ public sealed class Game : IDisposable
     // of frames, save a screenshot, and exit. Lets the render be checked without
     // a human at the window. No effect on normal play.
     private readonly string? _capturePath = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE");
-    // When set, capture grabs the title menu instead of the world.
-    private readonly bool _captureMenu =
-        Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU") == "1";
+    // When set, capture grabs a UI screen instead of the world: "menu" or "settings".
+    private readonly string? _captureScreen =
+        Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU");
+    private bool _captureMenu => _captureScreen is "1" or "menu" or "settings";
     private int _frame;
 
     public Game()
     {
         _renderer = new Renderer();
+
+        // Load persisted controls and make them the live binding set the sim polls.
+        _settings = Settings.Load();
+        InputMap.Active = _settings;
+        _settingsScreen = new SettingsScreen(_settings);
 
         // Capture runs the world directly (no menu), so build it now and aim the
         // craft at the seeded enemy. Normal play starts on the menu instead. The
@@ -63,6 +71,13 @@ public sealed class Game : IDisposable
             {
                 if (UpdateMenu()) break; // Quit requested
                 DrawMenu();
+                continue;
+            }
+
+            if (_state == GameState.Settings)
+            {
+                UpdateSettings();
+                DrawSettings();
                 continue;
             }
 
@@ -101,6 +116,9 @@ public sealed class Game : IDisposable
             case Menu.Action.StartSinglePlayer:
                 EnterSinglePlayer();
                 break;
+            case Menu.Action.OpenSettings:
+                _state = GameState.Settings;
+                break;
             case Menu.Action.OpenTestScreen:
                 // Secret keybind ('L' position): the test screen isn't built yet.
                 // The hook is here on purpose — wire the destination in later.
@@ -109,6 +127,21 @@ public sealed class Game : IDisposable
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Advances the controls screen. Leaving it saves the (already-live) settings
+    /// to disk so the choices — including the launch-time turn swap — persist.
+    /// </summary>
+    private void UpdateSettings()
+    {
+        _menuTime += Raylib.GetFrameTime();
+
+        if (_settingsScreen.Update() == SettingsScreen.Action.Back)
+        {
+            _settings.Save();
+            _state = GameState.Menu;
+        }
     }
 
     private void EnterSinglePlayer()
@@ -132,14 +165,20 @@ public sealed class Game : IDisposable
     {
         _frame++;
 
-        // Menu variant: let the drift/flicker advance a little, then grab it.
+        // UI variant: let the drift/flicker advance a little, then grab the screen.
         if (_captureMenu)
         {
             _menuTime += (float)Config.FixedDt;
             int menuAt = int.TryParse(
                 Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FRAME"), out int mf) ? mf : 30;
             if (_frame < menuAt) return false;
-            DrawMenu();
+            // Draw twice so both the front and back buffers hold the same image;
+            // TakeScreenshot reads after the swap, so a single draw would grab the
+            // previous (blank) frame.
+            for (int i = 0; i < 2; i++)
+            {
+                if (_captureScreen == "settings") DrawSettings(); else DrawMenu();
+            }
             Raylib.TakeScreenshot(_capturePath!);
             return true;
         }
@@ -153,6 +192,9 @@ public sealed class Game : IDisposable
             Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FRAME"), out int cf) ? cf : 180;
         if (_frame == captureAt)
         {
+            // Draw twice (see the UI branch): TakeScreenshot reads after the buffer
+            // swap, so a single draw would grab the prior frame.
+            Draw();
             Draw();
             Raylib.TakeScreenshot(_capturePath!);
             return true;
@@ -179,6 +221,12 @@ public sealed class Game : IDisposable
     private void DrawMenu()
     {
         _renderer.DrawMenu(_menu, _menuTime);
+        _renderer.Present();
+    }
+
+    private void DrawSettings()
+    {
+        _renderer.DrawSettings(_settingsScreen, _menuTime);
         _renderer.Present();
     }
 

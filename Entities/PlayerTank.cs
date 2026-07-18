@@ -106,9 +106,13 @@ public sealed class PlayerTank
 
     private void UpdateTurn(float dt)
     {
+        // Note the sign: the camera renders +X on the *left* of the screen, so a
+        // heading increase (toward +X) swings the view left. To make "turn left"
+        // actually look left, TurnLeft must *increase* heading and TurnRight
+        // decrease it — hence left is +1 here.
         float input = 0f;
-        if (InputMap.TurnLeft) input -= 1f;
-        if (InputMap.TurnRight) input += 1f;
+        if (InputMap.TurnLeft) input += 1f;
+        if (InputMap.TurnRight) input -= 1f;
 
         if (input != 0f)
             _turnRate += input * TurnAccel * dt;

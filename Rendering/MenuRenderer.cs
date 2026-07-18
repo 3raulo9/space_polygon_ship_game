@@ -30,6 +30,23 @@ internal static class MenuRenderer
         DrawFooter(elapsed);
     }
 
+    /// <summary>Draws the controls screen (rows of cyclable values) over the target.</summary>
+    public static void DrawSettings(SettingsScreen screen, float elapsed)
+    {
+        DrawHeading("SETTINGS", elapsed);
+
+        Font font = Raylib.GetFontDefault();
+        int y = 108;
+        const int step = 24;
+
+        DrawValueRow(font, screen, SettingsScreen.Row.SwapTurn, y);
+        DrawValueRow(font, screen, SettingsScreen.Row.Movement, y + step);
+        DrawValueRow(font, screen, SettingsScreen.Row.Fire, y + step * 2);
+        DrawBackRow(font, screen, y + step * 3 + 8);
+
+        DrawFooterHint("< > CHANGE · UP DN MOVE · ESC BACK");
+    }
+
     // --- Title: flickering, occasionally-dropped glyphs ---
     private static void DrawTitle(float elapsed)
     {
@@ -76,11 +93,12 @@ internal static class MenuRenderer
     private static void DrawItems(Menu menu)
     {
         Font font = Raylib.GetFontDefault();
-        int y = 128;
-        const int step = 26;
+        int y = 116;
+        const int step = 24;
 
         DrawItem(font, "SINGLE PLAYER", Menu.Item.SinglePlayer, menu, y, null);
-        DrawItem(font, "MULTIPLAYER", Menu.Item.Multiplayer, menu, y + step, "UNAVAILABLE");
+        DrawItem(font, "SETTINGS", Menu.Item.Settings, menu, y + step, null);
+        DrawItem(font, "MULTIPLAYER", Menu.Item.Multiplayer, menu, y + step * 2, "UNAVAILABLE");
     }
 
     private static void DrawItem(Font font, string label, Menu.Item item, Menu menu, int y, string? tag)
@@ -116,14 +134,72 @@ internal static class MenuRenderer
 
     // --- Footer hint (never mentions the secret keybind) ---
     private static void DrawFooter(float elapsed)
+        => DrawFooterHint("ARROWS / W S · ENTER SELECT");
+
+    private static void DrawFooterHint(string hint)
     {
         Font font = Raylib.GetFontDefault();
-        const string hint = "ARROWS / W S · ENTER SELECT";
         const int size = 8;
         Vector2 s = Raylib.MeasureTextEx(font, hint, size, Spacing);
         // Barely there — a prompt left glowing at the bottom of a dead terminal.
         Color c = Scale(Palette.HudChrome, 0.35f);
         Raylib.DrawTextEx(font, hint, new Vector2((W - s.X) * 0.5f, H - 18), size, Spacing, c);
+    }
+
+    // --- Settings screen pieces ---
+
+    /// <summary>A smaller, steadier version of the title flicker for sub-screen headings.</summary>
+    private static void DrawHeading(string text, float elapsed)
+    {
+        Font font = Raylib.GetFontDefault();
+        const int size = 22;
+        Vector2 m = Raylib.MeasureTextEx(font, text, size, Spacing);
+        float x = (W - m.X) * 0.5f;
+        const int y = 40;
+
+        float breathe = 0.78f + 0.22f * MathF.Abs(MathF.Sin(elapsed * 0.9f));
+        Raylib.DrawTextEx(font, text, new Vector2(x, y), size, Spacing, Scale(Palette.HudChrome, breathe));
+
+        int ruleW = (int)m.X;
+        Color rule = Scale(Palette.GridFar, 0.5f + 0.2f * MathF.Sin(elapsed * 1.7f));
+        Raylib.DrawRectangle((W - ruleW) / 2, y + size + 5, ruleW, 1, rule);
+    }
+
+    /// <summary>
+    /// A label on the left, its cyclable value (in arrow brackets when focused) on
+    /// the right, laid out in a fixed centred column so the rows read as a panel.
+    /// </summary>
+    private static void DrawValueRow(Font font, SettingsScreen screen, SettingsScreen.Row row, int y)
+    {
+        bool selected = screen.Selected == row;
+        const int size = ItemSize;
+        const int colLeft = 60;    // label left edge (internal px)
+        const int colRight = 260;  // value right edge
+
+        Color labelColor = selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.55f);
+        Raylib.DrawTextEx(font, SettingsScreen.Label(row), new Vector2(colLeft, y), size, Spacing, labelColor);
+
+        string value = screen.Value(row);
+        string shown = selected ? "< " + value + " >" : value;
+        Vector2 vs = Raylib.MeasureTextEx(font, shown, size, Spacing);
+        Color valColor = selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.45f);
+        Raylib.DrawTextEx(font, shown, new Vector2(colRight - vs.X, y), size, Spacing, valColor);
+    }
+
+    private static void DrawBackRow(Font font, SettingsScreen screen, int y)
+    {
+        bool selected = screen.Selected == SettingsScreen.Row.Back;
+        const int size = ItemSize;
+        string label = "BACK";
+        Vector2 s = Raylib.MeasureTextEx(font, label, size, Spacing);
+        float x = (W - s.X) * 0.5f;
+        Color c = selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.55f);
+        Raylib.DrawTextEx(font, label, new Vector2(x, y), size, Spacing, c);
+        if (selected)
+        {
+            Raylib.DrawTextEx(font, "[", new Vector2(x - 14, y), size, Spacing, Palette.HudChrome);
+            Raylib.DrawTextEx(font, "]", new Vector2(x + s.X + 6, y), size, Spacing, Palette.HudChrome);
+        }
     }
 
     // --- helpers ---
