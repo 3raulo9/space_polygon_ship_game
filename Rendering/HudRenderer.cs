@@ -31,7 +31,7 @@ internal static class HudRenderer
     private const int BarsLeft = 10; // left edge of the first (Shields) bar
 
     // --- Radar (right group) ---
-    private const int RadarSize = 34;               // square side, internal px
+    private const int RadarSize = 52;               // square side, internal px
     private const int RadarMargin = 6;
     private const float RadarWorldRange = 90f;       // world units mapped to the radar edge
 
@@ -104,10 +104,12 @@ internal static class HudRenderer
         Raylib.DrawLine(cx, y0 + 1, cx, y0 + RadarSize - 1, grid);
         Raylib.DrawLine(x0 + 1, cy, x0 + RadarSize - 1, cy, grid);
 
-        // The view rotates with the player so "up" on the radar is always where
-        // the craft is pointing. Rotate world offsets by -heading into screen space.
-        float c = MathF.Cos(-p.Heading);
-        float s = MathF.Sin(-p.Heading);
+        // The view rotates with the player so "up" on the radar is always where the
+        // craft is pointing. World forward is (sin h, cos h), so projecting an offset
+        // onto the craft's right/forward axes is a rotation by +heading — rotating by
+        // -heading (as before) only lines up facing north and flips once you turn.
+        float c = MathF.Cos(p.Heading);
+        float s = MathF.Sin(p.Heading);
         float scale = (RadarSize * 0.5f - 2f) / RadarWorldRange;
 
         foreach (var e in world.Enemies)
@@ -118,7 +120,9 @@ internal static class HudRenderer
             float rx = rel.X * c - rel.Y * s;
             float ry = rel.X * s + rel.Y * c;
 
-            float px = cx + rx * scale;
+            // The world is left-handed (facing east, the craft's right is +north), so
+            // screen-right is the negated rotated-X — otherwise the radar mirrors.
+            float px = cx - rx * scale;
             float py = cy - ry * scale;   // screen Y is down; forward should read up
 
             // Clamp blips to the rim so distant contacts still register at the edge.
@@ -137,7 +141,7 @@ internal static class HudRenderer
             float rx = rel.X * c - rel.Y * s;
             float ry = rel.X * s + rel.Y * c;
 
-            float px = cx + rx * scale;
+            float px = cx - rx * scale;   // negated X: match the left-handed world
             float py = cy - ry * scale;
             px = Math.Clamp(px, x0 + 1, x0 + RadarSize - 2);
             py = Math.Clamp(py, y0 + 1, y0 + RadarSize - 2);
@@ -151,20 +155,27 @@ internal static class HudRenderer
     }
 
     /// <summary>
-    /// A little upward-pointing triangle marking the (fixed, centred) craft. Drawn
-    /// as horizontal spans from apex to base so it can't be lost to Raylib's 2D
-    /// triangle back-face culling, and stays crisp at the internal resolution.
+    /// A proper upward-pointing arrow marking the (fixed, centred) craft: a triangular
+    /// head over a short shaft, so "up" reads unambiguously as the heading. Drawn as
+    /// horizontal spans so it can't be lost to Raylib's 2D triangle back-face culling,
+    /// and stays crisp at the internal resolution.
     /// </summary>
     private static void DrawPlayerArrow(int cx, int cy)
     {
-        const int half = 3;   // half-width at the base
-        // Rows from tip (top) down to the base; each row a little wider.
-        for (int row = 0; row <= half; row++)
+        Color col = Palette.HudChrome;
+        const int headH = 5;     // arrowhead height (rows widen 1,3,5,7,9 px)
+        const int shaftH = 4;    // shaft length below the head
+        const int shaftHalf = 1; // shaft half-width → 3 px stem
+        int top = cy - (headH + shaftH) / 2;   // the arrow's tip
+
+        // Arrowhead: each row a little wider, from the 1px tip down to the base.
+        for (int row = 0; row < headH; row++)
         {
-            int y = cy - half + row;
-            int w = row;                        // widens toward the base
-            Raylib.DrawRectangle(cx - w, y, w * 2 + 1, 1, Palette.HudChrome);
+            int w = row;                        // half-width grows toward the base
+            Raylib.DrawRectangle(cx - w, top + row, w * 2 + 1, 1, col);
         }
+        // Shaft: a stubby stem hanging under the head so it reads as an arrow, not a wedge.
+        Raylib.DrawRectangle(cx - shaftHalf, top + headH, shaftHalf * 2 + 1, shaftH, col);
     }
 
     // --- helpers (mirror MenuRenderer's) ---

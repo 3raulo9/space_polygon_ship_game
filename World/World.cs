@@ -39,54 +39,90 @@ public sealed class World
     // Floating pickups keep the field stocked: a handful of battery cells and stray
     // rounds drift on the grid at all times. Each restores 30% of its resource, and
     // a collected one respawns out in the fog so the supply never runs dry.
-    private const int BatteryCount = 4;
-    private const int AmmoCount = 3;
     private const float PickupRefill = 0.30f;
+
+    // --- Dynamic horizon spawning -------------------------------------------------
+    // Nothing is pinned to a fixed spot. Hunters, salvage and the rare Crab-Core all
+    // fade in out of the fog ring around the craft as it roams: each is rolled on its
+    // own timer and dropped at a random bearing on the far horizon, so the field is
+    // built by where the player goes rather than pre-placed. Turned off for the
+    // capture harness and the headless self-test, which want a fixed, known scene.
+    public bool DynamicSpawning = true;
+
+    // The fog band new arrivals drop into — past the near fog so they resolve as
+    // blips on the skyline, yet close enough to eventually drift into play.
+    private const float SpawnMinRange = 72f;
+    private const float SpawnMaxRange = 120f;
+
+    // Hunters: keep at most this many on the field. Rolls come at a slow cadence, and
+    // when the field is already full the farthest hunter (drifted off into the fog) is
+    // let go so a fresh one can always resolve on the horizon — spawning never stalls.
+    private const int MaxEnemies = 4;
+    private const float EnemySpawnInterval = 9f;
+    private const float EnemySpawnChance = 0.5f;
+    private const float EliteChance = 0.22f;
+    private float _enemyTimer;
+
+    // Floating salvage: a slow, endless drip. At the cap the farthest piece drifts out
+    // of play and a new one fades in, so batteries and rounds never stop appearing.
+    private const int MaxPickups = 7;
+    private const float PickupSpawnInterval = 7f;
+    private const float PickupSpawnChance = 0.6f;
+    private const float BatteryShare = 0.6f;   // this fraction of new salvage is batteries
+    private float _pickupTimer;
+
+    // The Crab-Core is rare: while none stalks the field, roll infrequently for one
+    // to rise out of the fog at a random bearing — never at a fixed spot.
+    private const float BossSpawnInterval = 18f;
+    private const float BossSpawnChance = 0.14f;
+    private float _bossTimer;
 
     public World()
     {
         Player = new PlayerTank(Vector2.Zero);
 
-        // Scatter the initial field around the player's start point, out past the
-        // near fog so they read as objects drifting in the void, not underfoot. A
-        // capture override instead seeds one battery and one round dead ahead so the
-        // verification harness can inspect the pickup silhouettes point-blank.
-        if (Environment.GetEnvironmentVariable("VOIDTANKS_PICKUP_NEAR") == "1")
+        _projectiles = new Projectile[MaxProjectiles];
+        for (int i = 0; i < _projectiles.Length; i++)
+            _projectiles[i] = new Projectile();
+
+        // Capture overrides freeze a controlled scene for the verification harness:
+        // exact point-blank placements and no drifting-in spawns.
+        string? nearPickup = Environment.GetEnvironmentVariable("VOIDTANKS_PICKUP_NEAR");
+        string? nearEnemy = Environment.GetEnvironmentVariable("VOIDTANKS_ENEMY_NEAR");
+        string? nearBoss = Environment.GetEnvironmentVariable("VOIDTANKS_BOSS_NEAR");
+        bool capture = nearPickup == "1" || nearEnemy is "1" or "elite" || nearBoss == "1";
+        if (capture) DynamicSpawning = false;
+
+        // Salvage. Capture seeds one battery and one round dead ahead; play seeds a
+        // small starter field at random fog bearings — no fixed spots — so there's
+        // salvage on the horizon from the first frame, then the director tops it up.
+        if (nearPickup == "1")
         {
             Pickups.Add(new Pickup(new Vector2(-2.5f, 14f), PickupKind.Battery));
             Pickups.Add(new Pickup(new Vector2(2.5f, 14f), PickupKind.Ammo));
         }
         else
         {
-            for (int i = 0; i < BatteryCount; i++)
-                Pickups.Add(new Pickup(RandomFieldPoint(28f, 110f), PickupKind.Battery));
-            for (int i = 0; i < AmmoCount; i++)
-                Pickups.Add(new Pickup(RandomFieldPoint(28f, 110f), PickupKind.Ammo));
+            for (int i = 0; i < 3; i++)
+                Pickups.Add(new Pickup(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), PickupKind.Battery));
+            for (int i = 0; i < 2; i++)
+                Pickups.Add(new Pickup(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), PickupKind.Ammo));
         }
 
-        _projectiles = new Projectile[MaxProjectiles];
-        for (int i = 0; i < _projectiles.Length; i++)
-            _projectiles[i] = new Projectile();
-
-        // One standard tank, spawned at range and off-axis so it enters from
-        // the fog rather than dead ahead — the blip-before-shape beat (Doc 03).
-        // A capture override lets the verification harness spawn it close enough
-        // to inspect the polygon silhouette.
-        string? near = Environment.GetEnvironmentVariable("VOIDTANKS_ENEMY_NEAR");
-        if (near == "1")
+        // One hunter to open on. Capture drops it in close on-axis so its polygon
+        // silhouette can be inspected; play fades it in from a random bearing out in
+        // the fog, and the director adds more over time.
+        if (nearEnemy == "1")
             Enemies.Add(new EnemyTank(new Vector2(4f, 16f), elite: false));
-        else if (near == "elite")
+        else if (nearEnemy == "elite")
             Enemies.Add(new EnemyTank(new Vector2(4f, 16f), elite: true));
         else
-            Enemies.Add(new EnemyTank(new Vector2(30f, 70f), elite: false));
+            Enemies.Add(new EnemyTank(RandomPointAroundPlayer(60f, 80f), elite: false));
 
-        // One Crab-Core boss, dead ahead so it can be walked up to and watched. It
-        // sits just outside its own detection radius, idling, until the player
-        // strays close and trips the Stalker Protocol. A capture override drops it
-        // in point-blank (and already awake) so the rig can be screenshotted.
-        Boss = Environment.GetEnvironmentVariable("VOIDTANKS_BOSS_NEAR") == "1"
-            ? new CrabCore(new Vector2(0f, 44f))
-            : new CrabCore(new Vector2(0f, 85f));
+        // The Crab-Core is no longer pre-placed on the field. A capture override drops
+        // it in point-blank for screenshots; in play it starts absent and rises rarely
+        // out of the fog via the spawn director.
+        Boss = nearBoss == "1" ? new CrabCore(new Vector2(0f, 44f)) : null;
     }
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
@@ -144,12 +180,62 @@ public sealed class World
             // closest foot — one clip can't overlap itself, so the nearest wins.
             if (nearestFoot < float.MaxValue)
                 Audio.PlayStompAt(nearestFoot);
+
+            // Once the death glitch has fully torn the rig apart, drop the boss so it
+            // stops updating and the director is free to raise a new one later.
+            if (boss.Dead) Boss = null;
         }
 
         UpdateProjectiles(dt);
         UpdatePickups(dt);
+        if (DynamicSpawning) UpdateSpawning(dt);
         Debris.Update(dt);
         Enemies.RemoveAll(e => !e.Alive);
+    }
+
+    /// <summary>
+    /// The horizon spawn director: on independent timers, rolls to raise a new hunter,
+    /// drift in fresh salvage, or — rarely — bring up a Crab-Core, always at a random
+    /// bearing out in the fog around the roaming craft and only while under each cap.
+    /// </summary>
+    private void UpdateSpawning(float dt)
+    {
+        _enemyTimer += dt;
+        if (_enemyTimer >= EnemySpawnInterval)
+        {
+            _enemyTimer = 0f;
+            if (Random.Shared.NextSingle() < EnemySpawnChance)
+            {
+                // At the cap, release the farthest hunter so a fresh one always has room
+                // to fade in — the population is bounded but the arrivals never stop.
+                if (Enemies.Count >= MaxEnemies) RemoveFarthest(Enemies, e => e.Position);
+                bool elite = Random.Shared.NextSingle() < EliteChance;
+                Enemies.Add(new EnemyTank(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), elite));
+            }
+        }
+
+        _pickupTimer += dt;
+        if (_pickupTimer >= PickupSpawnInterval)
+        {
+            _pickupTimer = 0f;
+            if (Random.Shared.NextSingle() < PickupSpawnChance)
+            {
+                // Same rule for salvage: when full, the farthest piece drifts out and a
+                // new one drifts in, so batteries and rounds keep coming forever.
+                if (Pickups.Count >= MaxPickups) RemoveFarthest(Pickups, pk => pk.Position);
+                var kind = Random.Shared.NextSingle() < BatteryShare ? PickupKind.Battery : PickupKind.Ammo;
+                Pickups.Add(new Pickup(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), kind));
+            }
+        }
+
+        _bossTimer += dt;
+        if (_bossTimer >= BossSpawnInterval)
+        {
+            _bossTimer = 0f;
+            // Only ever one crab, and only when the field is clear of a live one.
+            if (Boss is null && Random.Shared.NextSingle() < BossSpawnChance)
+                Boss = new CrabCore(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange));
+        }
     }
 
     /// <summary>
@@ -196,13 +282,24 @@ public sealed class World
         pk.Age = 0f;
     }
 
-    /// <summary>A random point on the plane at [min,max] from the world origin.</summary>
-    private static Vector2 RandomFieldPoint(float minDist, float maxDist)
-        => PointAround(Vector2.Zero, minDist, maxDist);
-
     /// <summary>A random point on the plane at [min,max] from the player.</summary>
     private Vector2 RandomPointAroundPlayer(float minDist, float maxDist)
         => PointAround(Player.Position, minDist, maxDist);
+
+    /// <summary>Drops the item farthest from the player from a list — used to make room
+    /// for a fresh spawn so a full field never blocks new arrivals.</summary>
+    private void RemoveFarthest<T>(List<T> list, Func<T, Vector2> posOf)
+    {
+        if (list.Count == 0) return;
+        int farthest = 0;
+        float best = Vector2.DistanceSquared(posOf(list[0]), Player.Position);
+        for (int i = 1; i < list.Count; i++)
+        {
+            float d = Vector2.DistanceSquared(posOf(list[i]), Player.Position);
+            if (d > best) { best = d; farthest = i; }
+        }
+        list.RemoveAt(farthest);
+    }
 
     private static Vector2 PointAround(Vector2 origin, float minDist, float maxDist)
     {
