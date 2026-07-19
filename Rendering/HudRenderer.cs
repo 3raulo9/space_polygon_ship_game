@@ -129,6 +129,23 @@ internal static class HudRenderer
             Raylib.DrawRectangle((int)px, (int)py, 2, 2, blip);
         }
 
+        // Floating salvage shows as friendly blips so the player can steer toward a
+        // resupply: charged green for batteries, flag-yellow for stray rounds.
+        foreach (var pk in world.Pickups)
+        {
+            Vector2 rel = pk.Position - p.Position;
+            float rx = rel.X * c - rel.Y * s;
+            float ry = rel.X * s + rel.Y * c;
+
+            float px = cx + rx * scale;
+            float py = cy - ry * scale;
+            px = Math.Clamp(px, x0 + 1, x0 + RadarSize - 2);
+            py = Math.Clamp(py, y0 + 1, y0 + RadarSize - 2);
+
+            Color blip = pk.Kind == PickupKind.Battery ? Palette.BatteryCore : Palette.Flag;
+            Raylib.DrawRectangle((int)px, (int)py, 1, 1, blip);
+        }
+
         // Player: a small chrome triangle fixed at centre, always pointing up.
         DrawPlayerArrow(cx, cy);
     }

@@ -15,11 +15,12 @@ public static class Audio
     // silently skipped; normal boot flips it on after InitAudioDevice succeeds.
     private static bool _enabled;
 
-    private static Sound _blip;       // menu cursor moving between options
-    private static Sound _detonation; // a barrel firing — player or enemy shot
-    private static Sound _explosion;  // a tank being destroyed (player or enemy)
-    private static Sound _hit;        // the player's craft taking a hit
-    private static Sound _warning;    // shield crosses the low-health line
+    private static Sound _blip;         // menu cursor moving between options
+    private static Sound _detonation;   // a barrel firing — player or enemy shot
+    private static Sound _explosion;    // a tank being destroyed (player or enemy)
+    private static Sound _distantBoom;  // an air shot coming down far off on the horizon
+    private static Sound _hit;          // the player's craft taking a hit
+    private static Sound _warning;      // shield crosses the low-health line
 
     // Assets are copied next to the executable by the .csproj, so a relative
     // path off the working directory resolves at runtime.
@@ -35,6 +36,7 @@ public static class Audio
         _blip = Load("blip.wav");
         _detonation = Load("detonation.wav");
         _explosion = Load("explosion.wav");
+        _distantBoom = Load("distantBoom.wav");
         _hit = Load("hit.wav");
         _warning = Load("warning.wav");
         _enabled = true;
@@ -55,7 +57,25 @@ public static class Audio
     /// <summary>A tank being destroyed — player or enemy. Mapped to explosion.wav.</summary>
     public static void PlayExplosion()
     {
-        if (_enabled) Raylib.PlaySound(_explosion);
+        if (!_enabled) return;
+        Raylib.SetSoundVolume(_explosion, 1f);   // full-volume, up close
+        Raylib.PlaySound(_explosion);
+    }
+
+    /// <summary>
+    /// The dedicated far-off detonation — an air shot coming down out on the horizon.
+    /// Its own low, rolling boom (distantBoom.wav), with volume falling off further
+    /// with range so a shot landing deep downrange is a faint thud rather than a bang
+    /// in your ear.
+    /// </summary>
+    public static void PlayExplosionAt(float distance)
+    {
+        if (!_enabled) return;
+        // Linear falloff to a quiet floor: nearby is full, ~200 units out is barely
+        // there. Clamped so it never goes fully silent or over unity.
+        float vol = Math.Clamp(1f - distance / 200f, 0.1f, 1f);
+        Raylib.SetSoundVolume(_distantBoom, vol);
+        Raylib.PlaySound(_distantBoom);
     }
 
     /// <summary>The player's craft absorbing a hit.</summary>
@@ -80,6 +100,16 @@ public static class Audio
         if (_enabled) Raylib.PlaySound(_hit);
     }
 
+    /// <summary>
+    /// A pickup being absorbed — a battery cell or stray round. Reuses the menu
+    /// blip (the only bright, non-combat transient in the bank) so the collect
+    /// reads as a clean positive chirp against the grim combat clips, no new asset.
+    /// </summary>
+    public static void PlayPickup()
+    {
+        if (_enabled) Raylib.PlaySound(_blip);
+    }
+
     /// <summary>Unloads the clips and closes the device. Mirrors <see cref="Init"/>.</summary>
     public static void Shutdown()
     {
@@ -87,6 +117,7 @@ public static class Audio
         Raylib.UnloadSound(_blip);
         Raylib.UnloadSound(_detonation);
         Raylib.UnloadSound(_explosion);
+        Raylib.UnloadSound(_distantBoom);
         Raylib.UnloadSound(_hit);
         Raylib.UnloadSound(_warning);
         Raylib.CloseAudioDevice();

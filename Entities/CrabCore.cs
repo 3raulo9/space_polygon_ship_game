@@ -27,11 +27,44 @@ namespace VoidTanks.Entities;
 /// </summary>
 public sealed class CrabCore
 {
-    public enum State { Idle, ThreatDisplay, Clamping, Pursuit }
+    public enum State { Idle, ThreatDisplay, Clamping, Pursuit, Dying, Dead }
 
     public Vector2 Position;
     public float Heading;               // radians; 0 faces +Z, matching the tanks
     public State Phase { get; private set; } = State.Idle;
+
+    // --- The vulnerable core --------------------------------------------------
+    // Only the exposed neon core takes damage, and only an airborne shot rides high
+    // enough to reach it: the whole fight is timing a jump so a level bolt threads
+    // the raised gem. Its chassis, legs and claws are inert armour.
+    public const float CoreMaxHealth = 4f;
+    private float _coreHealth = CoreMaxHealth;
+
+    /// <summary>The core's strike zone, in world space. Anchored a little up into the
+    /// gem from its base, with a generous planar reach (the boss is huge) and a
+    /// vertical band roughly the height of a leap — so a shot fired near the top of a
+    /// jump threads it, but a grounded bolt sails harmlessly underneath.</summary>
+    public static float CoreHitHeight => CrabRig.CoreWorldY + 1.4f;
+    public const float CoreHitRadius = 3.6f;    // planar reach around the core
+    public const float CoreHitVertical = 3.2f;  // half-height of the strike band
+
+    private float _deathTime;                   // seconds since the core blew
+    private const float DeathDuration = 1.3f;   // length of the glitch-apart death
+
+    /// <summary>True while the core still holds — it hunts and can be hit.</summary>
+    public bool Alive => Phase is not (State.Dying or State.Dead);
+
+    /// <summary>True once the death glitch has fully played out and the rig is gone.</summary>
+    public bool Dead => Phase == State.Dead;
+
+    /// <summary>0 while alive, ramping 0→1 across the death glitch — the renderer
+    /// reads this to fling the parts apart and tear the whole rig with static.</summary>
+    public float DeathProgress => Phase == State.Dying
+        ? Math.Clamp(_deathTime / DeathDuration, 0f, 1f)
+        : (Phase == State.Dead ? 1f : 0f);
+
+    /// <summary>0..1 remaining core integrity, for a HUD boss bar later if wanted.</summary>
+    public float CoreFraction => Math.Clamp(_coreHealth / CoreMaxHealth, 0f, 1f);
 
     // --- Protocol tuning ------------------------------------------------------
     public const float DetectRadius = 45f;   // the player crosses this and it wakes
@@ -98,6 +131,8 @@ public sealed class CrabCore
             case State.ThreatDisplay: UpdateThreat(dt); break;
             case State.Clamping:    snapped = UpdateClamping(dt); break;
             case State.Pursuit:     UpdatePursuit(dt, playerPos); break;
+            case State.Dying:       UpdateDying(dt); break;
+            case State.Dead:        return false;   // gone; nothing left to do
         }
 
         // Core always turns; flash always cools.
@@ -106,6 +141,46 @@ public sealed class CrabCore
 
         DetectFootfalls();
         return snapped;
+    }
+
+    // --- Death: the core is spent; freeze the brain and let the glitch play out ---
+    private void UpdateDying(float dt)
+    {
+        _deathTime += dt;
+        if (_deathTime >= DeathDuration) Phase = State.Dead;
+        // No footfalls, no pursuit — the legs are busy tearing off.
+    }
+
+    /// <summary>
+    /// True only when a shot's world position falls inside the core's strike zone:
+    /// within the planar reach of the gem *and* inside the vertical band a leaping
+    /// bolt rides through. Grounded shots sit far below the band and always miss.
+    /// </summary>
+    public bool HitsCore(Vector2 shotXZ, float shotHeight)
+    {
+        if (!Alive) return false;
+        if (MathF.Abs(shotHeight - CoreHitHeight) > CoreHitVertical) return false;
+        return Vector2.DistanceSquared(shotXZ, Position) <= CoreHitRadius * CoreHitRadius;
+    }
+
+    /// <summary>
+    /// Deals a hit to the core and flares it white-hot. Returns true on the exact hit
+    /// that spends the last of its integrity, so the caller can stage the death blast.
+    /// </summary>
+    public bool DamageCore(float amount)
+    {
+        if (!Alive) return false;
+        _coreHealth -= amount;
+        _flash = 1f;                            // the gem flares on every hit
+        if (_coreHealth <= 0f)
+        {
+            _coreHealth = 0f;
+            Phase = State.Dying;
+            _stateTime = 0f;
+            _deathTime = 0f;
+            return true;
+        }
+        return false;
     }
 
     /// <summary>

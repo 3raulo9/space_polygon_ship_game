@@ -63,4 +63,16 @@ public static class Palette
 
     // #FF2828 — flashing neon red. The core once the threat display begins.
     public static readonly Color NeonRed = new(255, 40, 40, 255);
+
+    // --- Floating pickups ----------------------------------------------------
+    // Salvage that drifts on the grid: a battery cell that recharges shield + hyper,
+    // and a stray round that restocks ammo. Both read as "good" — a cool charged
+    // green for the cell, the same jaundiced flag-yellow the ammo gauge already uses
+    // for the bullet — so they stand apart from the dried-blood enemies.
+
+    // #28786E — dark charged teal, the battery's casing.
+    public static readonly Color BatteryFill = new(40, 120, 110, 255);
+
+    // #5AE6C8 — bright charge-band / terminal glow on the battery cell.
+    public static readonly Color BatteryCore = new(90, 230, 200, 255);
 }

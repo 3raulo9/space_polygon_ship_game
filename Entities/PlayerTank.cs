@@ -100,14 +100,19 @@ public sealed class PlayerTank
     /// Attempts to fire: succeeds only if off cooldown and ammo remains. On
     /// success returns the muzzle origin and direction; otherwise false.
     /// </summary>
-    public bool TryFire(out Vector2 origin, out Vector2 direction)
+    public bool TryFire(out Vector2 origin, out Vector2 direction, out float launchHeight)
     {
         origin = default;
         direction = default;
+        launchHeight = Projectile.BoltHeight;
         if (_fireCooldown > 0f || Ammo <= 0) return false;
 
         direction = Forward;
         origin = Position + direction * (Radius + 0.6f); // out past the nose
+        // Fired mid-jump, the bolt leaves the barrel level with the leaping craft
+        // and sails out at that height — the airborne shot that can reach the boss's
+        // raised core.
+        launchHeight = Projectile.BoltHeight + Height;
         _fireCooldown = FireInterval;
         Ammo--;
         return true;
@@ -150,6 +155,28 @@ public sealed class PlayerTank
         _turnRate = 0f;
         return true;
     }
+
+    /// <summary>
+    /// Tops up the shield by a fraction of its maximum, capped at full — the
+    /// battery pickup's repair charge. A fraction of 0.3 restores 30 points on the
+    /// 100-point shield.
+    /// </summary>
+    public void RefillShield(float fraction)
+        => Shield = MathF.Min(MaxShield, Shield + MaxShield * fraction);
+
+    /// <summary>
+    /// Tops up the Hyper reserve by a fraction of its maximum, capped at full — the
+    /// battery pickup also recharges tactical moves (jump / hyperspace).
+    /// </summary>
+    public void RefillHyper(float fraction)
+        => Hyper = MathF.Min(MaxHyper, Hyper + MaxHyper * fraction);
+
+    /// <summary>
+    /// Restocks ammo by a fraction of the magazine, capped at full — the floating
+    /// bullet pickup. Rounded up so a 30% pull always yields whole rounds.
+    /// </summary>
+    public void RefillAmmo(float fraction)
+        => Ammo = Math.Min(MaxAmmo, Ammo + (int)MathF.Ceiling(MaxAmmo * fraction));
 
     /// <summary>Applies incoming damage; spends a life and resets shield at zero.</summary>
     public void TakeDamage(float amount)

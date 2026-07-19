@@ -404,6 +404,91 @@ public static class Meshes
         return m;
     }
 
+    // --- Floating pickups -----------------------------------------------------
+    // Salvage drifting on the grid, built in the same hard-facet spirit as the rest.
+    // Both stand upright about the origin and are spun/bobbed by the renderer.
+
+    /// <summary>
+    /// A polygon battery cell: an upright hexagonal can with a bright charge band
+    /// wrapping its middle and a small positive terminal nub on the crown. Reads as
+    /// a chunky power cell from any angle. Refuels shield + hyper when driven over.
+    /// </summary>
+    public static PolyMesh Battery(Color body, Color core)
+    {
+        var m = new PolyMesh();
+        const int sides = 6;
+        const float r = 0.6f;
+
+        // Four stacked rings split the can into three bands: base, a bright charge
+        // stripe, then the crown — the stripe is the tell that it's a battery.
+        float[] ys = { 0f, 0.55f, 1.05f, 1.5f };
+        Color[] bands = { body, core, body };
+        var rings = new Vector3[ys.Length][];
+        for (int k = 0; k < ys.Length; k++)
+        {
+            rings[k] = new Vector3[sides];
+            for (int i = 0; i < sides; i++)
+            {
+                float a = MathF.Tau * i / sides + MathF.PI / sides;
+                rings[k][i] = new Vector3(MathF.Cos(a) * r, ys[k], MathF.Sin(a) * r);
+            }
+        }
+        for (int k = 0; k < ys.Length - 1; k++)
+            for (int i = 0; i < sides; i++)
+            {
+                int j = (i + 1) % sides;
+                m.AddFace(bands[k], rings[k][i], rings[k][j], rings[k + 1][j], rings[k + 1][i]);
+            }
+        // End caps: base down, crown up.
+        for (int i = 1; i < sides - 1; i++)
+        {
+            m.AddFace(body, rings[0][0], rings[0][i + 1], rings[0][i]);
+            m.AddFace(body, rings[^1][0], rings[^1][i], rings[^1][i + 1]);
+        }
+        // Positive terminal: a small bright box on the crown.
+        m.AddBox(core, 0.22f, 0.22f, 1.5f, 1.78f);
+        return m;
+    }
+
+    /// <summary>
+    /// A stray round: a hexagonal casing capped by an ogive (pointed) jacket —
+    /// a floating bullet. Stands tip-up about the origin. Restocks ammo when
+    /// driven over.
+    /// </summary>
+    public static PolyMesh Bullet(Color jacket, Color casing)
+    {
+        var m = new PolyMesh();
+        const int sides = 6;
+        const float r = 0.34f;
+        const float y0 = 0f, yShoulder = 0.95f, apexY = 1.7f;
+
+        var bot = new Vector3[sides];
+        var sh = new Vector3[sides];
+        for (int i = 0; i < sides; i++)
+        {
+            float a = MathF.Tau * i / sides + MathF.PI / sides;
+            float cx = MathF.Cos(a) * r, cz = MathF.Sin(a) * r;
+            bot[i] = new Vector3(cx, y0, cz);
+            sh[i] = new Vector3(cx, yShoulder, cz);
+        }
+        // Casing wall + base cap.
+        for (int i = 0; i < sides; i++)
+        {
+            int j = (i + 1) % sides;
+            m.AddFace(casing, bot[i], bot[j], sh[j], sh[i]);
+        }
+        for (int i = 1; i < sides - 1; i++)
+            m.AddFace(casing, bot[0], bot[i + 1], bot[i]);
+        // Ogive jacket: facets rising from the shoulder to a single tip.
+        Vector3 tip = new(0f, apexY, 0f);
+        for (int i = 0; i < sides; i++)
+        {
+            int j = (i + 1) % sides;
+            m.AddFace(jacket, sh[i], sh[j], tip);
+        }
+        return m;
+    }
+
     /// <summary>A tiny projectile bolt — a small bright shard, barely a shape.</summary>
     public static PolyMesh Bolt(Color fill) => Octahedron(fill, 0.22f);
 
