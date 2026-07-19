@@ -23,6 +23,8 @@ public static class SelfTest
         failures += Check("air shot at core height kills the boss", AirShotKillsCore);
         failures += Check("air shot detonates on the horizon", AirShotExpiresForBlast);
         failures += Check("debug key spawns a random enemy", DebugSpawnAddsEnemy);
+        failures += Check("the boss seizes and throws a cornered player", BossSeizesPlayer);
+        failures += Check("a held player is raised to face the core", SeizureFramesTheCore);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -186,6 +188,95 @@ public static class SelfTest
                 return "a debug spawn added no enemy";
         }
         return world.Enemies.Count > 0 ? null : "no hunters on the field after 40 spawns";
+    }
+
+    private static string? BossSeizesPlayer()
+    {
+        var (boss, player) = CorneredByBoss();
+        if (boss == null || player == null) return "the boss never entered pursuit";
+
+        if (!Entities.CrabSeizure.CanSeize(boss, player))
+            return "a boss standing on the player wouldn't seize";
+
+        // Run the whole cinematic and count the moments that cost the player.
+        var seizure = new Entities.CrabSeizure(boss, player);
+        int struck = 0, landed = 0;
+        for (int i = 0; i < 60 * 20 && seizure.Active; i++)
+        {
+            boss.Update((float)Config.FixedDt, player.Position);
+            switch (seizure.Update((float)Config.FixedDt))
+            {
+                case Entities.CrabSeizure.Event.Struck: struck++; break;
+                case Entities.CrabSeizure.Event.Landed: landed++; break;
+            }
+        }
+
+        if (seizure.Active) return "the seizure never finished";
+        // Each damage moment has to fire exactly once: a strike that repeated every
+        // tick of the swing would delete the player outright.
+        if (struck != 1) return $"the claw's blow fired {struck} times, expected 1";
+        if (landed != 1) return $"the landing fired {landed} times, expected 1";
+
+        // The player must be handed back: on the grid, driving again, and thrown
+        // clear of the boss rather than dropped back inside its reach.
+        if (player.Captured) return "the player was never released from the grip";
+        if (player.Height > 0.001f) return "the player never came back down";
+        float thrown = Vector2.Distance(player.Position, boss.Position);
+        if (thrown <= Entities.CrabSeizure.GrabRadius)
+            return $"the throw only moved the player {thrown:F1} units — still in reach";
+        if (boss.Seizing) return "the boss is still posed as holding someone";
+        return null;
+    }
+
+    private static string? SeizureFramesTheCore()
+    {
+        // The whole point of being held is watching the core. The craft has to be
+        // lifted so the eye sits inside the pyramid's vertical span — too low and the
+        // player spends the scream staring at the chassis with the gem off-screen.
+        var (boss, player) = CorneredByBoss();
+        if (boss == null || player == null) return "the boss never entered pursuit";
+
+        float gemBase = Entities.CrabRig.CoreWorldY;
+        float gemApex = gemBase + 2.5f * Entities.CrabRig.Scale;   // the mesh's own height
+
+        var seizure = new Entities.CrabSeizure(boss, player);
+        bool sawScream = false;
+        for (int i = 0; i < 60 * 20 && seizure.Active; i++)
+        {
+            boss.Update((float)Config.FixedDt, player.Position);
+            seizure.Update((float)Config.FixedDt);
+            if (seizure.Phase != Entities.CrabSeizure.Stage.Scream) continue;
+
+            sawScream = true;
+            float eye = player.Height + Config.CameraHeight;
+            if (eye < gemBase || eye > gemApex)
+                return $"eye at {eye:F1} is outside the core's {gemBase:F1}..{gemApex:F1} band";
+            // And it must be looking up at it, not down onto it.
+            if (seizure.Pitch <= 0f) return "the view wasn't aimed up at the core";
+        }
+        return sawScream ? null : "the scream stage never played";
+    }
+
+    /// <summary>
+    /// Builds a boss and a player standing in each other's laps and runs the Stalker
+    /// Protocol forward until it commits to the hunt — the state a seizure needs.
+    /// Returns nulls if it never got there.
+    /// </summary>
+    private static (Entities.CrabCore?, Entities.PlayerTank?) CorneredByBoss()
+    {
+        var player = new Entities.PlayerTank(Vector2.Zero);
+        var boss = new Entities.CrabCore(new Vector2(0f, 9f));
+
+        // Idle -> threat display -> clamping -> pursuit takes a few fixed seconds.
+        for (int i = 0; i < 60 * 10 && boss.Phase != Entities.CrabCore.State.Pursuit; i++)
+            boss.Update((float)Config.FixedDt, player.Position);
+
+        if (boss.Phase != Entities.CrabCore.State.Pursuit) return (null, null);
+
+        // The display slides it sideways, so walk it back into arm's reach.
+        boss.Position = player.Position + new Vector2(0f, 9f);
+        boss.SnapToFace(player.Position);
+        return (boss, player);
     }
 
     // --- helpers: advance the sim without going through global input ---

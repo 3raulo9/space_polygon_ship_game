@@ -25,6 +25,13 @@ public sealed class World
     /// own Stalker Protocol against the player independent of the tank combat.</summary>
     public CrabCore? Boss { get; private set; }
 
+    /// <summary>
+    /// The boss's execution cinematic while it has hold of the player, or null the
+    /// rest of the time. While one exists it owns the player's transform outright and
+    /// the renderer reads its shake, roll and glow — see <see cref="CrabSeizure"/>.
+    /// </summary>
+    public CrabSeizure? Seizure { get; private set; }
+
     private readonly Projectile[] _projectiles;
 
     private const int MaxProjectiles = 64;
@@ -166,6 +173,12 @@ public sealed class World
         // out a stomp, mixed by how close the nearest planting foot is to the
         // player so the gait swells as the crab closes in and is a faint tremor
         // while it's still stalking across the arena.
+        // The seizure runs before the boss does, because while one is live it owns
+        // the player's transform and the boss is frozen in the hold — stepping them
+        // the other way round would let the crab chase a position the cinematic is
+        // about to overwrite.
+        UpdateSeizure(dt);
+
         if (Boss is { } boss)
         {
             if (boss.Update(dt, Player.Position))
@@ -198,6 +211,40 @@ public sealed class World
         if (DynamicSpawning) UpdateSpawning(dt);
         Debris.Update(dt);
         Enemies.RemoveAll(e => !e.Alive);
+    }
+
+    /// <summary>
+    /// Runs the boss's execution cinematic: starts one when a hunting Crab-Core has
+    /// closed to arm's length, steps the live one, and applies the two moments that
+    /// actually cost the player anything — the claw's blow and the landing.
+    ///
+    /// A seizure is held for its whole length, recovery included, and no new one can
+    /// begin until it has finished. That window is what stops a crab standing over a
+    /// grounded player and grabbing them again the instant they land, which would be
+    /// an inescapable loop rather than a set piece.
+    /// </summary>
+    private void UpdateSeizure(float dt)
+    {
+        if (Seizure is { } active)
+        {
+            switch (active.Update(dt))
+            {
+                case CrabSeizure.Event.Struck:
+                    DamagePlayer(CrabSeizure.StrikeDamage);
+                    break;
+                case CrabSeizure.Event.Landed:
+                    // A fraction of the shield's maximum, so the landing costs the
+                    // same whatever state the player was in when they were caught.
+                    DamagePlayer(Player.MaxShield * CrabSeizure.LandingDamageFraction);
+                    break;
+            }
+
+            if (!active.Active) Seizure = null;
+            return;
+        }
+
+        if (Boss is { } boss && CrabSeizure.CanSeize(boss, Player))
+            Seizure = new CrabSeizure(boss, Player);
     }
 
     /// <summary>

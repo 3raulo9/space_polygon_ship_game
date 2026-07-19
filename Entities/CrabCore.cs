@@ -151,6 +151,22 @@ public sealed class CrabCore
         _footfalls.Clear();
         bool snapped = false;
 
+        // Mid-seizure the protocol is suspended: it has already caught you, so there
+        // is nothing left to stalk. It plants where it stands and only the core keeps
+        // turning — the stillness is the point, since a boss that carried on
+        // skittering while holding someone would read as an animation glitch rather
+        // than as a thing giving you its full attention. Dying overrides even this:
+        // a core destroyed mid-hold still tears itself apart on schedule.
+        if (Seizing && Phase is not (State.Dying or State.Dead))
+        {
+            _legPhase += IdleLeg * 0.35f * dt;      // the barest brace-and-shift
+            _clawOpen = 0f;
+            _coreSpin += AgitatedSpin * dt;
+            if (_flash > 0f) _flash = MathF.Max(0f, _flash - dt * 4f);
+            DetectFootfalls();
+            return false;
+        }
+
         switch (Phase)
         {
             case State.Idle:        UpdateIdle(dt, playerPos); break;
@@ -346,9 +362,61 @@ public sealed class CrabCore
     /// <summary>The live visual snapshot the renderer poses the parts from.</summary>
     public CrabPose Pose => new(
         _coreSpin, _clawOpen, _legPhase,
-        CoreColorFor(Hostility, _flash), Vector2.Zero);
+        CoreColorFor(Hostility, MathF.Max(_flash, SeizureGlow)), Vector2.Zero,
+        GrabArm, StrikeArm);
 
     private float Hostility => Phase is State.Clamping or State.Pursuit ? 1f : 0f;
+
+    // --- Seizure: the boss has the player in its claw -------------------------
+    // The cinematic itself lives in CrabSeizure, which owns the timing and drives
+    // the player's transform. The boss only needs to know it is mid-seizure so it
+    // stops walking, and to expose the three channels the cinematic writes into:
+    // the two arms and the core's glow. Keeping the drive one-way like this means
+    // the protocol state machine above never has to know the seizure exists.
+
+    /// <summary>True while the boss is holding the player. Its whole body stops —
+    /// it has what it came for — but the core keeps turning and it keeps facing
+    /// them, so it reads as attending to you rather than as a paused animation.</summary>
+    public bool Seizing { get; private set; }
+
+    /// <summary>Front-right limb's commitment to the grip, 0..1. Written by the
+    /// cinematic, read by the renderer through <see cref="Pose"/>.</summary>
+    public float GrabArm { get; private set; }
+
+    /// <summary>Front-left limb's swing, 0 wound back to 1 struck through.</summary>
+    public float StrikeArm { get; private set; }
+
+    /// <summary>Extra white-hot glow on the core, 0..1, on top of whatever the
+    /// combat flash is doing — the gem blazing in the player's face as it screams.
+    /// Folded in with <see cref="MathF.Max"/> so a hit landing mid-seizure can still
+    /// flare brighter than the hold does.</summary>
+    public float SeizureGlow { get; private set; }
+
+    /// <summary>
+    /// Hands the boss the cinematic's current frame: whether it still has hold of
+    /// the player, how far each arm is committed, and how hard the core is blazing.
+    /// Called every tick of a seizure and once more on release with
+    /// <paramref name="held"/> false, which lets the rig fall straight back into its
+    /// normal pursuit pose.
+    /// </summary>
+    public void DriveSeizure(bool held, float grabArm, float strikeArm, float glow)
+    {
+        Seizing = held;
+        GrabArm = Math.Clamp(grabArm, 0f, 1f);
+        StrikeArm = Math.Clamp(strikeArm, 0f, 1f);
+        SeizureGlow = Math.Clamp(glow, 0f, 1f);
+    }
+
+    /// <summary>
+    /// Turns the chassis to face a world point in one hard snap — no easing, the way
+    /// every other move this thing makes lands. Used when it takes hold of the player,
+    /// so the grip, the scream and the blow all come from directly in front of them.
+    /// </summary>
+    public void SnapToFace(Vector2 target)
+    {
+        Vector2 to = target - Position;
+        if (to.LengthSquared() > 0.0001f) Heading = MathF.Atan2(to.X, to.Y);
+    }
 
     // --- Shared visual mapping ------------------------------------------------
 
@@ -457,4 +525,11 @@ public readonly record struct CrabPose(
     float ClawOpen,       // 0 = plates shut, 1 = plates yawned open
     float LegPhase,       // radians driving the skitter bob
     Color CoreColor,      // gem tint this frame (magenta..red..white flash)
-    Vector2 SlideOffset); // showcase-only world drift; zero for the live boss
+    Vector2 SlideOffset,  // showcase-only world drift; zero for the live boss
+    // The two front legs double as the boss's hands during a seizure: it has no
+    // dedicated arms, so the front-right limb swings forward to hold the player and
+    // the front-left winds back and clubs them. Both run 0 (a normal walking leg) to
+    // 1 (fully committed), and both are zero for every other phase — so the rig
+    // draws exactly as it always has unless it has actually got hold of someone.
+    float GrabArm = 0f,   // front-right limb extended into the grip
+    float StrikeArm = 0f);// front-left limb: 0 wound back, 1 swung through
