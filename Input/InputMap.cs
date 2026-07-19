@@ -51,4 +51,17 @@ public static class InputMap
     // Secret keybind: physical 'L' position drops into the (empty for now) test
     // screen. Undocumented on purpose — a maintenance hatch into the machine.
     public static bool SecretTestPressed => Raylib.IsKeyPressed(KeyboardKey.L);
+
+    /// <summary>
+    /// Number-row 1..4 as a just-pressed digit (0 if none). The test screen uses it
+    /// to scrub between an animated specimen's phases.
+    /// </summary>
+    public static int MenuDigitPressed()
+    {
+        if (Raylib.IsKeyPressed(KeyboardKey.One)) return 1;
+        if (Raylib.IsKeyPressed(KeyboardKey.Two)) return 2;
+        if (Raylib.IsKeyPressed(KeyboardKey.Three)) return 3;
+        if (Raylib.IsKeyPressed(KeyboardKey.Four)) return 4;
+        return 0;
+    }
 }

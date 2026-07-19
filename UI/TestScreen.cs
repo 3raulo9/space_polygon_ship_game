@@ -19,6 +19,15 @@ public sealed class TestScreen
     /// <summary>Index into <see cref="EnemyCatalog.All"/> of the specimen on show.</summary>
     public int Selected { get; private set; }
 
+    /// <summary>
+    /// For an animated specimen (the Crab-Core boss), which protocol phase is
+    /// looping on the turntable. Ignored for the static tank/ship silhouettes.
+    /// </summary>
+    public Entities.CrabCore.State CrabPhase { get; private set; }
+
+    /// <summary>Whether the shown specimen is the animated boss rig.</summary>
+    public bool ShowingBoss => Current.Kind == EnemyKind.CrabCoreBoss;
+
     public TestScreen()
     {
         // Capture harness: VOIDTANKS_TEST_INDEX picks which specimen to open on,
@@ -26,6 +35,12 @@ public sealed class TestScreen
         if (int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_TEST_INDEX"), out int i)
             && i >= 0 && i < EnemyCatalog.All.Count)
             Selected = i;
+
+        // Capture harness: VOIDTANKS_TEST_PHASE opens the boss on a chosen phase
+        // (0..3) so each of its animations can be screenshotted without keypresses.
+        if (int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_TEST_PHASE"), out int ph)
+            && ph >= 0 && ph <= 3)
+            CrabPhase = (Entities.CrabCore.State)ph;
     }
 
     public EnemyArchetype Current => EnemyCatalog.All[Selected];
@@ -40,6 +55,17 @@ public sealed class TestScreen
         // Up/down cycle too, so it's reachable however the tester reaches for it.
         if (InputMap.MenuUp) Step(-1);
         if (InputMap.MenuDown) Step(+1);
+
+        // On the animated boss, number keys 1..4 scrub between its protocol phases.
+        if (ShowingBoss)
+        {
+            int digit = InputMap.MenuDigitPressed();
+            if (digit != 0)
+            {
+                CrabPhase = (Entities.CrabCore.State)(digit - 1);
+                Audio.PlayBlip();
+            }
+        }
 
         return Action.None;
     }

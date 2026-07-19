@@ -12,6 +12,7 @@ public enum EnemyKind
     ShipInterceptor,
     ShipGunship,
     ShipScout,
+    CrabCoreBoss, // the Stalker — animated state-machine boss
 }
 
 /// <summary>
@@ -46,5 +47,8 @@ public static class EnemyCatalog
         new EnemyArchetype(EnemyKind.ShipInterceptor, "WRAITH-07",   "INTERCEPTOR", 2f,   8f),
         new EnemyArchetype(EnemyKind.ShipGunship,     "PALLBEARER",  "GUNSHIP",     6f,  16f),
         new EnemyArchetype(EnemyKind.ShipScout,       "NULL-9",      "SCOUT",       1.5f, 5f),
+
+        // The Stalker boss — animated rig, shown so its phases can be scrubbed.
+        new EnemyArchetype(EnemyKind.CrabCoreBoss,    "CRAB-CORE",   "STALKER",     40f, 20f),
     };
 }

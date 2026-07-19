@@ -70,6 +70,16 @@ public static class Audio
         if (_enabled) Raylib.PlaySound(_warning);
     }
 
+    /// <summary>
+    /// The Crab-Core's claw-plates snapping shut — a hard, bit-crushed CLANG. Reuses
+    /// the hit clip (the sharpest metallic transient in the bank) so the boss needs
+    /// no new asset; each of its three clamps fires this once.
+    /// </summary>
+    public static void PlayClamp()
+    {
+        if (_enabled) Raylib.PlaySound(_hit);
+    }
+
     /// <summary>Unloads the clips and closes the device. Mirrors <see cref="Init"/>.</summary>
     public static void Shutdown()
     {
