@@ -18,6 +18,17 @@ public static class Palette
     public static readonly Color GridNear = new(18, 160, 140, 255); // #12A08C
     public static readonly Color GridFar = new(14, 122, 107, 255);  // #0E7A6B
 
+    // Chess-board floor fill: solid filled cells, no outline. One tone is pure
+    // black, the other a dim cold blue so the lit squares read without glowing.
+    public static readonly Color FloorDark = new(0, 0, 0, 255);      // pure black
+    public static readonly Color FloorLight = new(44, 82, 118, 255); // #2C5276 dim blue
+
+    // Sky: a hot pink horizon glow banded up into pure black overhead — a chunky
+    // 90's stepped gradient, not a smooth blend. Bright pink at the ground line,
+    // darkening hard band by band until it's completely black up top.
+    public static readonly Color SkyHorizon = new(232, 108, 168, 255); // #E86CA8 hot pink
+    public static readonly Color SkyTop = new(0, 0, 0, 255);           // pure black
+
     // #8AA0A8 — desaturated cold grey, like old plastic. HUD chrome.
     public static readonly Color HudChrome = new(138, 160, 168, 255);
 
