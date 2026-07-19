@@ -80,8 +80,38 @@ public sealed class PlayerTank
         Hyper = MaxHyper;
     }
 
+    /// <summary>
+    /// True while a cinematic owns the craft's transform — currently only the
+    /// Crab-Core's seizure, which lifts the player off the grid, turns them to face
+    /// the core and throws them. While it is set, <see cref="Update"/> refuses to
+    /// drive: input is ignored and the physics are suspended, so the script can write
+    /// <see cref="Position"/>, <see cref="Height"/> and <see cref="Heading"/> outright
+    /// without the craft's own momentum fighting it for the same fields.
+    ///
+    /// Being airborne for the whole hold also means enemy fire passes through, which
+    /// is the behaviour we want: a player who cannot act must not be shot at by
+    /// anything else while the boss has them.
+    /// </summary>
+    public bool Captured;
+
+    /// <summary>
+    /// Drops all carried momentum — forward speed, turn rate and vertical velocity.
+    /// A cinematic calls this on release so the craft comes back under control dead
+    /// still, rather than resuming whatever it happened to be doing several seconds
+    /// ago when it was grabbed.
+    /// </summary>
+    public void ResetMomentum()
+    {
+        _speed = 0f;
+        _turnRate = 0f;
+        _verticalVel = 0f;
+    }
+
     public void Update(float dt)
     {
+        // A cinematic has the wheel: it writes the transform itself this tick.
+        if (Captured) return;
+
         UpdateTurn(dt);
         UpdateDrive(dt);
         UpdateJump(dt);

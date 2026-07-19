@@ -574,6 +574,213 @@ public static class SfxSynth
     }
 
     /// <summary>
+    /// The Crab-Core screaming into the player's face while it holds them off the
+    /// grid — the loudest, ugliest thing in the bank. This is the shriek layer; it is
+    /// always voiced together with <see cref="CrabScreamUnder"/>, and the pair is the
+    /// sound rather than either half alone.
+    ///
+    /// Where the death scream <em>falls</em> (something being dragged down), this one
+    /// climbs the whole way: a rising cry reads as aggression aimed at you, a falling
+    /// one as collapse. Two things make it wrong rather than merely loud. The detune
+    /// sits on a tritone at almost the same level as the fundamental, so there is no
+    /// root note to hold on to — the ear can't decide which voice is the sound. And
+    /// the vibrato is far too deep to be a machine holding a pitch, so the cry keeps
+    /// buckling as it rises, like something that has to force the note out.
+    /// </summary>
+    public static Params CrabScream(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(190f, 280f);
+        return new Params
+        {
+            Wave = Osc.Saw,                         // the harshest harmonics available
+            Length = Range(1.5f, 1.9f),             // it holds you there for all of it
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(3.4f, 5.2f),    // climbing at you, never sagging
+
+            Attack = Range(0.05f, 0.1f),            // lunges in, barely a swell
+            Sustain = Range(0.45f, 0.6f),           // and then just... keeps going
+            Decay = Range(0.3f, 0.45f),
+
+            Duty = Range(0.15f, 0.4f),
+            DutySweep = Range(-1.2f, 1.2f),         // the timbre writhes as it climbs
+
+            VibratoDepth = Range(0.13f, 0.2f),      // far too deep to sound controlled
+            VibratoSpeed = Range(7f, 15f),
+
+            Detune = Range(1.40f, 1.47f),           // tritone — no root to settle on
+            DetuneGain = Range(0.8f, 0.95f),        // nearly as loud as the fundamental
+
+            LpCutoff = Range(0.85f, 1f),            // nothing softens this at all
+            LpResonance = Range(0.3f, 0.6f),
+            HpCutoff = Range(0.02f, 0.05f),
+
+            CrushBits = rng.Next(3, 6),             // the grimiest setting in the bank
+            CrushRate = rng.Next(1, 4),
+            Volume = 0.92f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The body underneath <see cref="CrabScream"/>, voiced at the same instant. The
+    /// shriek alone is thin and reads as a noise being played at you; this puts a
+    /// chest behind it, so it lands as something with mass doing the screaming.
+    ///
+    /// Pitched down where the shriek is up, and slow where it is frantic: a near-
+    /// unison detune throbs against itself, and a heavy tremolo in the few-hertz
+    /// range heaves the level in and out. That heave is the trick — a steady drone
+    /// reads as machinery, but something that surges and drops at roughly the rate a
+    /// large animal breathes reads as alive, which is much worse.
+    /// </summary>
+    public static Params CrabScreamUnder(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(42f, 68f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = Range(1.5f, 1.9f),             // matched to the shriek it sits under
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.3f, 1.85f),   // rises with the cry, far more slowly
+
+            Attack = Range(0.1f, 0.18f),
+            Sustain = Range(0.5f, 0.65f),
+            Decay = Range(0.25f, 0.4f),
+
+            // Roughly breathing rate. This is what makes the low end sound like a
+            // thing rather than a tone.
+            TremoloDepth = Range(0.3f, 0.5f),
+            TremoloSpeed = Range(4.5f, 9f),
+
+            Duty = Range(0.3f, 0.55f),
+            VibratoDepth = Range(0.02f, 0.05f),
+            VibratoSpeed = Range(2.5f, 6f),
+
+            Detune = Range(1.01f, 1.03f),           // near-unison: a slow, sick throb
+            DetuneGain = Range(0.7f, 0.9f),
+
+            LpCutoff = Range(0.14f, 0.26f),         // felt through the floor
+            LpResonance = Range(0.3f, 0.6f),
+            HpCutoff = 0f,                          // every bit of the low end kept
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(2, 6),
+            Volume = 0.88f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The free claw coming down on the player: a single, dry, extremely short crunch.
+    /// Built on noise rather than a pitched oscillator, because an impact has no note
+    /// — what makes it read as <em>heavy</em> is the filter slamming shut across the
+    /// clip, which is the acoustic signature of a big dull mass rather than a snap.
+    /// Bit-crushed hard so it lands as damage in this palette rather than as a
+    /// realistic thud.
+    /// </summary>
+    public static Params ClawSlam(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.28f, 0.42f),
+
+            Attack = 0.005f,                        // no front at all: it is already here
+            Sustain = Range(0.1f, 0.2f),
+            Decay = Range(0.75f, 0.9f),             // and then collapses away
+
+            LpCutoff = Range(0.42f, 0.6f),
+            LpResonance = Range(0.35f, 0.65f),
+            LpSweep = 1f - Range(0.00002f, 0.00005f), // slams shut: the weight of it
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(3, 6),
+            CrushRate = rng.Next(2, 7),
+            Volume = 0.85f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The air tearing past while the player is in the air after being thrown. Noise
+    /// again — and noise is the only oscillator here that ignores frequency entirely,
+    /// so a whoosh can only be shaped by its envelope and its filter. This one opens
+    /// its low-pass as it goes, which is heard as the rush building rather than a
+    /// pitch rising, and its envelope swells and falls across the whole arc so the
+    /// loudest moment is the top of the flight.
+    /// </summary>
+    public static Params ThrowWhoosh(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(1.1f, 1.5f),             // spans the arc
+
+            Attack = Range(0.25f, 0.4f),            // builds as the ground drops away
+            Sustain = Range(0.15f, 0.25f),
+            Decay = Range(0.4f, 0.55f),
+
+            LpCutoff = Range(0.12f, 0.2f),
+            LpResonance = Range(0.15f, 0.35f),
+            LpSweep = 1f + Range(0.000008f, 0.00002f),  // the rush opening up
+            HpCutoff = Range(0.01f, 0.04f),
+
+            CrushBits = rng.Next(5, 9),
+            CrushRate = rng.Next(1, 4),
+            Volume = 0.55f,                         // under the action, not over it
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The player's craft hitting the grid at the end of the throw. Short, low and
+    /// falling — the pitch drop is what sells impact with the floor rather than with
+    /// another object, and the whole thing is over fast enough to read as one event.
+    /// </summary>
+    public static Params LandThud(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(80f, 130f);
+        return new Params
+        {
+            Wave = rng.NextDouble() < 0.5 ? Osc.Square : Osc.Saw,
+            Length = Range(0.3f, 0.45f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.28f, 0.42f),  // drops away into the floor
+
+            Attack = 0.01f,
+            Sustain = Range(0.15f, 0.25f),
+            Decay = Range(0.7f, 0.85f),
+
+            Duty = Range(0.3f, 0.55f),
+            DutySweep = Range(-0.6f, 0.6f),
+
+            Detune = Range(1.005f, 1.02f),          // a touch of grind on the impact
+            DetuneGain = Range(0.5f, 0.75f),
+
+            LpCutoff = Range(0.2f, 0.35f),
+            LpResonance = Range(0.25f, 0.5f),
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(3, 7),
+            CrushRate = rng.Next(2, 6),
+            Volume = 0.75f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
     /// The neon core taking a hit: a short, high, wrong-sounding shriek layered over
     /// the impact clip. <paramref name="severity"/> runs 0 on the first hit to 1 as
     /// the last of the core's integrity goes, and drives the whole thing higher,

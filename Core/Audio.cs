@@ -222,6 +222,61 @@ public static class Audio
     private const double HuntMinGap = 0.75;
     private const double HuntMaxGap = 1.9;
 
+    // --- The seizure: the boss has hold of the player ------------------------
+
+    /// <summary>
+    /// The Crab-Core screaming point-blank into the held player. Two synthesised
+    /// voices fired on the same tick — a rising, dissonant shriek
+    /// (<see cref="SfxSynth.CrabScream"/>) and a slow heaving sub-roar under it
+    /// (<see cref="SfxSynth.CrabScreamUnder"/>). They are deliberately voiced as a
+    /// pair: the shriek alone is thin and reads as a noise being played at the
+    /// player, while the low layer gives it a body and makes it something with mass
+    /// doing the screaming.
+    ///
+    /// The synth pool holds distinct Sound objects, so the two layers overlap
+    /// cleanly rather than cutting each other off the way one re-triggered clip
+    /// would. No distance falloff: this happens with the crab's face in yours.
+    /// </summary>
+    public static void PlayCrabScream()
+    {
+        if (!_enabled) return;
+        PlaySynth(SfxSynth.CrabScream(_sfxRng));
+        PlaySynth(SfxSynth.CrabScreamUnder(_sfxRng));
+    }
+
+    /// <summary>
+    /// The free claw landing its blow on the held player. The bank's explosion clip
+    /// carries the blast, with a synthesised crunch over the top
+    /// (<see cref="SfxSynth.ClawSlam"/>) so the hit reads as a heavy mass connecting
+    /// rather than another detonation — the player has heard that clip all game, and
+    /// this moment should not sound like anything else in it.
+    /// </summary>
+    public static void PlayClawSlam()
+    {
+        if (!_enabled) return;
+        Raylib.SetSoundVolume(_explosion, 1f);
+        Raylib.PlaySound(_explosion);
+        PlaySynth(SfxSynth.ClawSlam(_sfxRng));
+    }
+
+    /// <summary>The air tearing past across the thrown player's arc. One shot, fired
+    /// as they leave the claw — the recipe's own envelope shapes it over the flight,
+    /// so nothing has to drive it per-frame.</summary>
+    public static void PlayThrowWhoosh()
+    {
+        if (_enabled) PlaySynth(SfxSynth.ThrowWhoosh(_sfxRng));
+    }
+
+    /// <summary>The craft coming down at the end of the throw: a low synthesised
+    /// thud under the bank's standard impact clip, so the landing registers as
+    /// damage taken and not just a sound effect.</summary>
+    public static void PlayCrashLanding()
+    {
+        if (!_enabled) return;
+        Raylib.PlaySound(_hit);
+        PlaySynth(SfxSynth.LandThud(_sfxRng));
+    }
+
     // --- The Crab-Core's death: a scream over a cascade of pitched blasts -----
 
     /// <summary>How many detonations tear through the rig as it comes apart.</summary>

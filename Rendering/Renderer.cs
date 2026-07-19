@@ -66,11 +66,25 @@ public sealed class Renderer : IDisposable
         // a translational rumble on the eye plus an extra rotational rattle on the
         // aim point, so the closer it gets the less steady the world holds.
         float shake = world.Boss is { } b ? b.ProximityShake(player.Position) : 0f;
+        var seizure = world.Seizure;
+
+        // Being held in its claw dwarfs merely standing near it, so the cinematic's
+        // judder replaces the proximity rumble rather than adding to it — and at an
+        // order of magnitude more amplitude. Taking the larger of the two also means
+        // the shake never dips as the seizure hands back control: the ring-down in
+        // the recovery stage crosses the proximity level and blends straight into it.
+        // The 0.28 ceiling is the loudest the view is ever thrown, reached only on the
+        // frame the claw connects. At the internal 320x240 the eye's translation is
+        // magnified hard by the upscale, so this is a much larger effect on screen
+        // than the number suggests — the quiet stages of the cinematic sit an order of
+        // magnitude below it, which is what leaves the scream and the blow room to land.
+        float amp = 0.035f * shake;
+        if (seizure != null) amp = MathF.Max(amp, 0.28f * seizure.Shake);
+
         Vector3 rumble = Vector3.Zero, rattle = Vector3.Zero;
-        if (shake > 0f)
+        if (amp > 0f)
         {
             float t = (float)Raylib.GetTime();
-            float amp = 0.035f * shake;
             rumble = new Vector3(
                 MathF.Sin(t * 47f) * MathF.Sin(t * 13f),
                 MathF.Sin(t * 53f + 1.3f) * MathF.Sin(t * 17f),
@@ -78,13 +92,33 @@ public sealed class Renderer : IDisposable
             rattle = new Vector3(
                 MathF.Sin(t * 61f + 2.1f),
                 MathF.Sin(t * 67f + 4.2f), 0f) * (amp * 0.8f);
+
+            // A slow lurch under the fast rattle, only while the cinematic is driving.
+            // Fast noise alone reads as a rumble; it takes a low-frequency heave on
+            // top to read as something with mass throwing the craft around.
+            if (seizure != null)
+                rumble += new Vector3(
+                    MathF.Sin(t * 7.3f), MathF.Sin(t * 5.1f + 2f), MathF.Sin(t * 6.2f + 1f))
+                    * (amp * 0.55f);
         }
+
+        // The cinematic can also roll the horizon and drag the aim off the level —
+        // the tumble through the throw, and the view being wrenched up into the core
+        // or slammed down at the grid.
+        float roll = seizure?.Roll ?? 0f;
+        float pitch = seizure?.Pitch ?? 0f;
 
         _camera.Position = eye + rumble;
         // Pitch the eye up a touch so the horizon sits low on screen: that opens
         // up a tall sky band above the floor, where the pink glow can fade all
         // the way to black below the top HUD strip.
-        _camera.Target = eye + rumble + new Vector3(fwd.X, 0.15f, fwd.Y) + rattle;
+        _camera.Target = eye + rumble + new Vector3(fwd.X, 0.15f + pitch, fwd.Y) + rattle;
+        // Roll tips the whole world by turning the camera's idea of up. The axis is
+        // the craft's own right on the plane, so the horizon pivots about the centre
+        // of the view rather than sliding sideways.
+        _camera.Up = roll != 0f
+            ? new Vector3(fwd.Y * MathF.Sin(roll), MathF.Cos(roll), -fwd.X * MathF.Sin(roll))
+            : new Vector3(0f, 1f, 0f);
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void); // never pure black
@@ -95,10 +129,37 @@ public sealed class Renderer : IDisposable
         _entities.Draw(world, eye);
         Raylib.EndMode3D();
 
+        // The core blazing in the player's face while it screams at them. This is a
+        // first-person game, so there is no craft on screen to light up — the only
+        // way to show the player caught in that glare is to flood their whole view
+        // with it. Drawn over the scene but under the HUD, so the instruments stay
+        // readable through the flash.
+        if (seizure is { Glow: > 0f }) DrawCoreGlare(seizure.Glow);
+
         // Flat instrument panel over the scene: vital bars + radar along the top.
         HudRenderer.Draw(world);
 
         Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// Washes the frame in the Crab-Core's core light, by <paramref name="glow"/>
+    /// (0..1). The colour rides from the gem's neon magenta toward white as it
+    /// intensifies, so the swell of the scream reads as heat building rather than
+    /// as the screen simply getting brighter, and the blow — which spikes the glow —
+    /// lands as a white flash. Deliberately kept translucent even at full: the boss
+    /// should be blinding, but never actually hide itself behind its own light.
+    /// </summary>
+    private static void DrawCoreGlare(float glow)
+    {
+        glow = Math.Clamp(glow, 0f, 1f);
+        Color hot = GridRenderer.LerpColor(Palette.NeonMagenta, Color.White, glow * glow);
+        // Held to 90 rather than anything heavier for a specific reason: the sky in
+        // this game is already magenta, so a strong wash flattens the core against its
+        // own backdrop and the gem stops reading as the brightest thing in the frame —
+        // which defeats the point of holding the player up in front of it.
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(hot.R, hot.G, hot.B, (int)(90 * glow)));
     }
 
     /// <summary>
