@@ -136,14 +136,67 @@ internal static class MenuRenderer
     private static void DrawFooter(float elapsed)
         => DrawFooterHint("ARROWS / W S · ENTER SELECT");
 
-    private static void DrawFooterHint(string hint)
+    private static void DrawFooterHint(string hint) => DrawFooterHint(hint, 255);
+
+    private static void DrawFooterHint(string hint, byte alpha)
     {
         Font font = Raylib.GetFontDefault();
         const int size = 8;
         Vector2 s = Raylib.MeasureTextEx(font, hint, size, Spacing);
         // Barely there — a prompt left glowing at the bottom of a dead terminal.
-        Color c = Scale(Palette.HudChrome, 0.35f);
+        Color c = Fade(Scale(Palette.HudChrome, 0.35f), alpha);
         Raylib.DrawTextEx(font, hint, new Vector2((W - s.X) * 0.5f, H - 18), size, Spacing, c);
+    }
+
+    // --- Pause panel ---
+
+    /// <summary>
+    /// Draws the pause panel over the blurred frozen frame. It fades up only once
+    /// the pixel-blur has mostly closed (<paramref name="t"/> past ~0.35), so the
+    /// text arrives after the world has dissolved, not on top of a sharp scene.
+    /// </summary>
+    public static void DrawPause(UI.PauseMenu menu, float elapsed, float t)
+    {
+        float a = Math.Clamp((t - 0.35f) / 0.45f, 0f, 1f);
+        if (a <= 0f) return;
+        byte alpha = (byte)(a * 255);
+
+        Font font = Raylib.GetFontDefault();
+
+        // Heading — the same slow breathe as the other sub-screen titles.
+        const string head = "PAUSED";
+        const int hs = 28;
+        Vector2 hm = Raylib.MeasureTextEx(font, head, hs, Spacing);
+        float breathe = 0.8f + 0.2f * MathF.Abs(MathF.Sin(elapsed * 0.9f));
+        Raylib.DrawTextEx(font, head, new Vector2((W - hm.X) * 0.5f, 66), hs, Spacing,
+            Fade(Scale(Palette.HudChrome, breathe), alpha));
+
+        int ruleW = (int)hm.X;
+        Raylib.DrawRectangle((W - ruleW) / 2, 66 + hs + 6, ruleW, 1,
+            Fade(Scale(Palette.GridFar, 0.6f), alpha));
+
+        DrawPauseItem(font, "RESUME", UI.PauseMenu.Item.Resume, menu, 128, alpha);
+        DrawPauseItem(font, "BACK TO MENU", UI.PauseMenu.Item.BackToMenu, menu, 152, alpha);
+
+        DrawFooterHint("ESC / ENTER RESUME", alpha);
+    }
+
+    private static void DrawPauseItem(Font font, string label, UI.PauseMenu.Item item,
+        UI.PauseMenu menu, int y, byte alpha)
+    {
+        bool selected = menu.Selected == item;
+        Vector2 size = Raylib.MeasureTextEx(font, label, ItemSize, Spacing);
+        float x = (W - size.X) * 0.5f;
+
+        Color color = Fade(selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.55f), alpha);
+        Raylib.DrawTextEx(font, label, new Vector2(x, y), ItemSize, Spacing, color);
+
+        if (selected)
+        {
+            Color bracket = Fade(Palette.HudChrome, alpha);
+            Raylib.DrawTextEx(font, "[", new Vector2(x - 14, y), ItemSize, Spacing, bracket);
+            Raylib.DrawTextEx(font, "]", new Vector2(x + size.X + 6, y), ItemSize, Spacing, bracket);
+        }
     }
 
     // --- Settings screen pieces ---
@@ -210,6 +263,10 @@ internal static class MenuRenderer
         t = Math.Clamp(t, 0f, 1f);
         return new Color((int)(c.R * t), (int)(c.G * t), (int)(c.B * t), c.A);
     }
+
+    /// <summary>Scales a colour's alpha by <paramref name="alpha"/> (0..255), for fades.</summary>
+    private static Color Fade(Color c, byte alpha)
+        => new Color((int)c.R, (int)c.G, (int)c.B, (int)(c.A * alpha / 255));
 
     /// <summary>Cheap deterministic 0..1 hash — the classic fract(sin) trick, for flicker.</summary>
     private static float Hash(float x)

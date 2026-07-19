@@ -126,13 +126,24 @@ public sealed class World
 
         // The boss stalks on its own clock; a true return means the carapace just
         // slammed shut this tick, so sound the bit-crushed CLANG. Wherever a leg
-        // planted this tick, kick up a puff of grid dust under the foot.
+        // planted this tick, kick up a puff of grid dust under the foot — and thud
+        // out a stomp, mixed by how close the nearest planting foot is to the
+        // player so the gait swells as the crab closes in and is a faint tremor
+        // while it's still stalking across the arena.
         if (Boss is { } boss)
         {
             if (boss.Update(dt, Player.Position))
                 Audio.PlayClamp();
+            float nearestFoot = float.MaxValue;
             foreach (var f in boss.Footfalls)
+            {
                 Debris.FootPuff(new Vector3(f.X, 0f, f.Y));
+                nearestFoot = MathF.Min(nearestFoot, Vector2.Distance(f, Player.Position));
+            }
+            // One stomp per foot-plant tick (a tripod lands together), voiced at the
+            // closest foot — one clip can't overlap itself, so the nearest wins.
+            if (nearestFoot < float.MaxValue)
+                Audio.PlayStompAt(nearestFoot);
         }
 
         UpdateProjectiles(dt);

@@ -15,14 +15,24 @@ namespace VoidTanks.Rendering;
 public sealed class Renderer : IDisposable
 {
     private RenderTexture2D _target;
+    // A tiny buffer used only by the pause pixel-blur: the frozen frame is
+    // downsampled into this at a fraction of the resolution, then blown back up
+    // over the sharp frame. Sized to the low res so every blit is a full-texture
+    // read — partial-rect reads of a flipped render texture misbehave.
+    private RenderTexture2D _scratch;
+    private const int BlurW = Config.InternalWidth / PauseBlock;   // 40
+    private const int BlurH = Config.InternalHeight / PauseBlock;  // 30
+    private const int PauseBlock = 8; // world px per mosaic block at full pause
     private Camera3D _camera;
     private readonly EntityRenderer _entities = new();
 
     public Renderer()
     {
         _target = Raylib.LoadRenderTexture(Config.InternalWidth, Config.InternalHeight);
+        _scratch = Raylib.LoadRenderTexture(BlurW, BlurH);
         // Nearest-neighbor: hard, chunky pixels. No filtering, ever.
         Raylib.SetTextureFilter(_target.Texture, TextureFilter.Point);
+        Raylib.SetTextureFilter(_scratch.Texture, TextureFilter.Point);
 
         // Draw every facet of a solid, front- and back-facing alike. The meshes
         // are hand-wound and not all consistently oriented; with culling on, the
@@ -51,11 +61,30 @@ public sealed class Renderer : IDisposable
             player.Position.Y);
 
         var fwd = player.Forward;
-        _camera.Position = eye;
+
+        // The nearer an active Crab-Core stalks, the harder the whole rig judders —
+        // a translational rumble on the eye plus an extra rotational rattle on the
+        // aim point, so the closer it gets the less steady the world holds.
+        float shake = world.Boss is { } b ? b.ProximityShake(player.Position) : 0f;
+        Vector3 rumble = Vector3.Zero, rattle = Vector3.Zero;
+        if (shake > 0f)
+        {
+            float t = (float)Raylib.GetTime();
+            float amp = 0.035f * shake;
+            rumble = new Vector3(
+                MathF.Sin(t * 47f) * MathF.Sin(t * 13f),
+                MathF.Sin(t * 53f + 1.3f) * MathF.Sin(t * 17f),
+                MathF.Sin(t * 43f + 0.7f) * MathF.Sin(t * 11f)) * amp;
+            rattle = new Vector3(
+                MathF.Sin(t * 61f + 2.1f),
+                MathF.Sin(t * 67f + 4.2f), 0f) * (amp * 0.8f);
+        }
+
+        _camera.Position = eye + rumble;
         // Pitch the eye up a touch so the horizon sits low on screen: that opens
         // up a tall sky band above the floor, where the pink glow can fade all
         // the way to black below the top HUD strip.
-        _camera.Target = eye + new Vector3(fwd.X, 0.15f, fwd.Y);
+        _camera.Target = eye + rumble + new Vector3(fwd.X, 0.15f, fwd.Y) + rattle;
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void); // never pure black
@@ -169,6 +198,70 @@ public sealed class Renderer : IDisposable
     }
 
     /// <summary>
+    /// Draws a paused run: the frozen world with a pixel-blur closing over it and
+    /// the pause panel on top. <paramref name="t"/> (0..1) is how far the blur has
+    /// set in — 0 is the clean frame, 1 is the fully coarsened, dimmed hold. The
+    /// blur is a genuine downsample: the frame is squeezed to a fraction of its
+    /// size and blown back up nearest-neighbor, so it dissolves into fat blocks
+    /// rather than a soft smear — the same chunky logic as the world upscale.
+    /// </summary>
+    public void DrawPaused(World.World world, UI.PauseMenu menu, float elapsed, float t)
+    {
+        // The sim is frozen, so this redraws the same held frame into _target.
+        DrawWorld(world);
+        // Coarsen it, but only dim to a mid wash (not full void) so the world still
+        // reads behind the panel.
+        ApplyPixelDissolve(t, 150);
+
+        Raylib.BeginTextureMode(_target);
+        MenuRenderer.DrawPause(menu, elapsed, t);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// Dissolves whatever is currently in the low-res target into fat pixel blocks
+    /// and dims it toward the void, by <paramref name="amount"/> (0 untouched … 1
+    /// fully coarsened). It is a genuine downsample — the frame is squeezed into a
+    /// fraction of the resolution and blown back up nearest-neighbor, the same
+    /// chunky logic as the world upscale, not a soft smear. Shared by the pause
+    /// hold and the screen-to-screen fades. Call after a Draw* has filled the
+    /// target and before Present. <paramref name="maxDark"/> caps the wash alpha at
+    /// full amount: 255 fades all the way to void (screen wipes), less holds an
+    /// image readable underneath.
+    /// </summary>
+    public void ApplyPixelDissolve(float amount, int maxDark = 255)
+    {
+        if (amount <= 0f) return;
+
+        // Smoothstep so the pixels swell and settle rather than ramping linearly.
+        float ease = amount * amount * (3f - 2f * amount);
+
+        // Pass 1 — downsample the whole frame into the tiny _scratch. Both reads
+        // use the full-texture negative-height flip Present relies on (a render
+        // texture is stored bottom-up); full reads flip cleanly where partial ones
+        // do not.
+        Raylib.BeginTextureMode(_scratch);
+        Raylib.DrawTexturePro(
+            _target.Texture,
+            new Rectangle(0, 0, Config.InternalWidth, -Config.InternalHeight),
+            new Rectangle(0, 0, BlurW, BlurH), Vector2.Zero, 0f, Color.White);
+        Raylib.EndTextureMode();
+
+        // Pass 2 — blow the mosaic back up over the frame, opacity rising with
+        // `ease` so it visibly dissolves into fat blocks, then a cold wash deepens.
+        Raylib.BeginTextureMode(_target);
+        Raylib.DrawTexturePro(
+            _scratch.Texture,
+            new Rectangle(0, 0, BlurW, -BlurH),
+            new Rectangle(0, 0, Config.InternalWidth, Config.InternalHeight),
+            Vector2.Zero, 0f, new Color(255, 255, 255, (int)(255 * ease)));
+
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(5, 7, 10, (int)(maxDark * ease)));
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
     /// Blits the low-res target to the window: integer-scaled, nearest-neighbor,
     /// centered with letterbox bars in the void colour.
     /// </summary>
@@ -198,5 +291,6 @@ public sealed class Renderer : IDisposable
     public void Dispose()
     {
         Raylib.UnloadRenderTexture(_target);
+        Raylib.UnloadRenderTexture(_scratch);
     }
 }

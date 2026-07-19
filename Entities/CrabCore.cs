@@ -54,6 +54,22 @@ public sealed class CrabCore
     /// <summary>True while the core still holds — it hunts and can be hit.</summary>
     public bool Alive => Phase is not (State.Dying or State.Dead);
 
+    /// <summary>Within this range an active boss rattles the player's view.</summary>
+    public const float ShakeRadius = 34f;
+
+    /// <summary>
+    /// How hard the boss should shake the camera, 0..1, given the player's spot: it
+    /// ramps up the nearer an <em>active</em> (waking, clamping or hunting) boss
+    /// gets, and is flat zero while it's idle, dying or already dead — a dormant
+    /// crab you happen to walk past never shakes the screen.
+    /// </summary>
+    public float ProximityShake(Vector2 playerPos)
+    {
+        if (Phase is State.Idle or State.Dying or State.Dead) return 0f;
+        float dist = Vector2.Distance(playerPos, Position);
+        return Math.Clamp(1f - dist / ShakeRadius, 0f, 1f);
+    }
+
     /// <summary>True once the death glitch has fully played out and the rig is gone.</summary>
     public bool Dead => Phase == State.Dead;
 
@@ -68,7 +84,8 @@ public sealed class CrabCore
 
     // --- Protocol tuning ------------------------------------------------------
     public const float DetectRadius = 45f;   // the player crosses this and it wakes
-    public const float SlideSpeed = 16f;     // slow, mechanical strafe (units/sec)
+    public const float GiveUpRadius = 75f;   // outrun it past this and the hunt breaks off
+    public const float SlideSpeed = 10f;     // slow, mechanical strafe (units/sec) — a deliberate, telegraphed lurch
     public const float SlideTime = 0.5f;     // each hard slide lasts exactly this
     public const float PauseTime = 0.2f;     // the creepy dead beat between slides
     public const int ClampCount = 3;         // three snaps, always
@@ -99,6 +116,7 @@ public sealed class CrabCore
     private float _clawOpen;
     private float _flash;               // 0..1 white-hot pop on a clamp snap, decays
     private bool _jawWasOpen;           // edge-detect the open→shut snap
+    private float _lastSlideDir;        // threat-display slide dir last tick, to catch a new lurch
 
     // Per-leg gait sign last tick, to catch the instant a foot plants (the +→-
     // zero-crossing of its lift sine), plus the world spots those plants happened.
@@ -227,6 +245,11 @@ public sealed class CrabCore
         float dir = ThreatSlideDir(t, out bool done);   // +1 right, -1 left, 0 paused
         if (done) { Enter(State.Clamping); return; }
 
+        // The instant it commits to a new side (a pause/zero → moving edge), blare
+        // the alarm — it lurches right, then left, then right, sounding each time.
+        if (dir != 0f && _lastSlideDir == 0f) Audio.PlayAlarm();
+        _lastSlideDir = dir;
+
         Position += RightVector() * (SlideSpeed * dir) * dt;
     }
 
@@ -278,6 +301,13 @@ public sealed class CrabCore
 
         Vector2 to = playerPos - Position;
         float dist = to.Length();
+
+        // Keep enough distance for long enough and the hunt breaks off — it stops
+        // dead and sinks back to idle, spinning lazily until the player strays into
+        // detection range again. The give-up radius sits well past detection so a
+        // player hovering at the edge doesn't flip it on and off.
+        if (dist > GiveUpRadius) { Enter(State.Idle); return; }
+
         if (dist < 0.0001f) return;
         Vector2 dir = to / dist;
 
@@ -290,6 +320,7 @@ public sealed class CrabCore
         Phase = next;
         _stateTime = 0f;
         _jawWasOpen = false;
+        _lastSlideDir = 0f;
     }
 
     /// <summary>Unit vector pointing to the boss's own right, given its heading.</summary>
