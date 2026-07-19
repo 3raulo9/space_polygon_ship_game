@@ -18,6 +18,10 @@ public sealed class EntityRenderer
     private readonly PolyMesh _bolt = Meshes.Bolt(Palette.Flag);
     private readonly PolyMesh _grenade = Meshes.Grenade(Palette.EliteFill);
 
+    // Floating salvage: a battery cell (shield + hyper) and a stray round (ammo).
+    private readonly PolyMesh _battery = Meshes.Battery(Palette.BatteryFill, Palette.BatteryCore);
+    private readonly PolyMesh _bullet = Meshes.Bullet(Palette.Flag, Palette.HudChrome);
+
     // Death debris: a jagged chunk and a bright spark. Both are drawn white and
     // tinted per-instance so each piece can carry its own (fading) colour.
     private readonly PolyMesh _shard = Meshes.Shard(Color.White);
@@ -34,9 +38,10 @@ public sealed class EntityRenderer
 
     public void Draw(World.World world, Vector3 cameraPos)
     {
-        // The lone Stalker, if the stage seeded one, drawn from its live pose.
-        if (world.Boss is { } boss)
-            _crab.Draw(boss.Pose, boss.Position, boss.Heading, cameraPos);
+        // The lone Stalker, if the stage seeded one, drawn from its live pose. Once
+        // it's fully dead the rig is gone; while dying it draws mid-glitch-apart.
+        if (world.Boss is { } boss && !boss.Dead)
+            _crab.Draw(boss.Pose, boss.Position, boss.Heading, cameraPos, boss.DeathProgress);
 
         foreach (var e in world.Enemies)
         {
@@ -47,14 +52,23 @@ public sealed class EntityRenderer
             mesh.Draw(e.Position, e.Heading, 0f, cameraPos, EnemyTank.Scale);
         }
 
+        // Floating pickups: bob at waist height and turn slowly on the spot, so the
+        // charge band and bullet tip catch the light as they drift in the fog.
+        foreach (var pk in world.Pickups)
+        {
+            var mesh = pk.Kind == PickupKind.Battery ? _battery : _bullet;
+            mesh.Draw(pk.Position, pk.Spin, pk.BobHeight, cameraPos);
+        }
+
         foreach (var p in world.Projectiles)
         {
             if (!p.Active) continue;
-            // Bolts hover at barrel height and don't need a heading. The heavy
-            // grenade round is a fatter slug in the elite/orange colour, riding a
-            // touch higher so it reads as the dangerous one.
-            if (p.IsGrenade) _grenade.Draw(p.Position, 0f, 0.7f, cameraPos);
-            else _bolt.Draw(p.Position, 0f, 0.55f, cameraPos);
+            // Draw each bolt at its own height, so a shot fired mid-jump visibly
+            // rides high — level with the leap — and sinks toward the horizon, rather
+            // than snapping back to barrel height. The heavy grenade is a fatter slug
+            // in the elite/orange colour.
+            if (p.IsGrenade) _grenade.Draw(p.Position, 0f, p.Height, cameraPos);
+            else _bolt.Draw(p.Position, 0f, p.Height, cameraPos);
         }
 
         // Death debris last: chunks and sparks flung from destroyed enemies, each

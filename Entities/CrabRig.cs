@@ -26,6 +26,15 @@ public static class CrabRig
     /// <summary>How far the body origin sits above the feet, so the feet touch y=0.</summary>
     public const float BodyHeight = 2.3f;
 
+    /// <summary>The neon core gem's base height in the body's local frame (pre-scale)
+    /// — it stands <c>CoreLocalY</c> up in the well. Mirrors the renderer's placement
+    /// so the entity's hit-test on the core lines up with where it's drawn.</summary>
+    public const float CoreLocalY = BodyHeight + 0.5f;
+
+    /// <summary>World-space height of the core gem's base, once <see cref="Scale"/>
+    /// is applied — the anchor for the "shoot the red core mid-jump" strike zone.</summary>
+    public static float CoreWorldY => CoreLocalY * Scale;
+
     /// <summary>Peak lift of a skittering foot (raw units, before Scale).</summary>
     public const float LegBob = 0.9f;
 
