@@ -215,6 +215,176 @@ public static class Meshes
         return m;
     }
 
+    // --- Crab-Core boss parts -------------------------------------------------
+    // The Stalker is a towering spider-thing: an octagonal open bowl carried high
+    // on six long, raised-knee legs with clawed feet, a neon pyramid gem sitting in
+    // the bowl's well. It's drawn as separate rigid parts the CrabRenderer poses
+    // each frame — the carapace lid snaps down on the base (the "clamp"), the gem
+    // spins, the legs skitter. Convention: +Z forward, +Y up, pivots at the origin.
+
+    /// <summary>
+    /// The upper carapace: an octagonal bowl with an open, magenta-dark well at its
+    /// centre where the core sits. This is the "lid" — during the clamp it lifts and
+    /// slams back onto the lower base, the two plates snapping shut around the core.
+    /// Built about the origin so the renderer can raise it straight up.
+    /// </summary>
+    public static PolyMesh CrabBodyUpper(Color fill)
+    {
+        var m = new PolyMesh();
+        Color wellDark = new(70, 22, 62, 255); // recessed, magenta-lit interior
+
+        Vector3[] lipTop = Ngon(8, 2.7f, 1.6f);   // wide flat rim
+        Vector3[] lipBot = Ngon(8, 2.3f, 0.85f);  // rim skirt bottom
+        Vector3[] wellTop = Ngon(8, 1.7f, 1.6f);  // inner edge of the rim
+        Vector3[] wellBot = Ngon(8, 1.25f, 0.7f); // floor of the well
+
+        RingWall(m, fill, lipBot, lipTop);        // outer bevel of the rim
+        RingCap(m, fill, lipTop, wellTop);        // flat top annulus
+        RingWall(m, wellDark, wellBot, wellTop);  // inner well wall, dark
+        NgonCap(m, wellDark, wellBot, up: true);  // well floor
+        return m;
+    }
+
+    /// <summary>
+    /// The lower base: a narrower octagonal tier under the lid that the legs bolt
+    /// onto and the core stands on. Sits just below the lid's skirt, leaving the
+    /// hard dark slot between the two plates that closes when the boss clamps.
+    /// </summary>
+    public static PolyMesh CrabBodyLower(Color fill)
+    {
+        var m = new PolyMesh();
+        Vector3[] top = Ngon(8, 2.1f, 0.55f);
+        Vector3[] bot = Ngon(8, 1.75f, -0.5f);
+        RingWall(m, fill, bot, top);
+        NgonCap(m, fill, top, up: true);
+        NgonCap(m, fill, bot, up: false);
+        return m;
+    }
+
+    /// <summary>
+    /// The neon core: an apex-up square pyramid standing in the well, ringed by a
+    /// few small shard bits that hang in the air around it (the reference's floating
+    /// splinters). Built white via <paramref name="fill"/>; the renderer tints the
+    /// whole thing magenta, or flashing red, per frame. Pivot at its base centre.
+    /// </summary>
+    public static PolyMesh CrabCoreGem(Color fill)
+    {
+        var m = new PolyMesh();
+        const float r = 1.15f, h = 2.5f;
+        Vector3 b0 = new(-r, 0f, -r), b1 = new(r, 0f, -r);
+        Vector3 b2 = new(r, 0f, r), b3 = new(-r, 0f, r);
+        Vector3 apex = new(0f, h, 0f);
+
+        m.AddFace(fill, b0, b1, apex); m.AddFace(fill, b1, b2, apex);
+        m.AddFace(fill, b2, b3, apex); m.AddFace(fill, b3, b0, apex);
+        m.AddFace(fill, b3, b2, b1, b0); // base
+
+        // A little constellation of shrapnel hanging around the upper pyramid.
+        Vector3[] bits = { new(1.1f, 1.6f, 0.3f), new(-1.0f, 1.9f, -0.4f),
+                           new(0.2f, 2.5f, 0.9f), new(-0.4f, 1.4f, 1.1f) };
+        foreach (var p in bits) AddTetra(m, fill, p, 0.28f);
+        return m;
+    }
+
+    /// <summary>
+    /// One long spider leg: a femur strut rising up-and-out from the shoulder to a
+    /// high knee, a tibia dropping back down-and-out to a foot far from the body,
+    /// and a three-pronged claw at the foot. Built pointing +X about the shoulder
+    /// (origin); the renderer fans six around the body and bobs them for the skitter.
+    /// </summary>
+    public static PolyMesh CrabLeg(Color fill)
+    {
+        var m = new PolyMesh();
+        Vector3 shoulder = Vector3.Zero;
+        Vector3 knee = Entities.CrabRig.Knee;
+        Vector3 foot = Entities.CrabRig.Foot;
+
+        AddStrut(m, fill, new Vector3(-0.25f, 0.1f, 0f), new Vector3(0.5f, 0.2f, 0f), 0.42f); // coxa
+        AddStrut(m, fill, shoulder, knee, 0.34f);                     // femur
+        AddTetra(m, fill, knee, 0.5f);                                // knee joint
+        AddStrut(m, fill, knee, foot, 0.28f);                         // tibia
+
+        // Foot claw: three short prongs raking down and out from the ankle.
+        Vector3[] prongs = { new(0.5f, -1f, 0.4f), new(0.65f, -1f, 0f), new(0.5f, -1f, -0.4f) };
+        foreach (var d in prongs)
+            AddStrut(m, fill, foot, foot + Vector3.Normalize(d) * 0.95f, 0.11f);
+        return m;
+    }
+
+    // --- Low-poly building blocks for the boss --------------------------------
+
+    /// <summary>A square-section strut (prism) between two points — the leg segments.</summary>
+    private static void AddStrut(PolyMesh m, Color c, Vector3 a, Vector3 b, float half)
+    {
+        Vector3 d = b - a;
+        float len = d.Length();
+        if (len < 1e-4f) return;
+        d /= len;
+        Vector3 refUp = MathF.Abs(d.Y) > 0.9f ? Vector3.UnitX : Vector3.UnitY;
+        Vector3 u = Vector3.Normalize(Vector3.Cross(d, refUp)) * half;
+        Vector3 v = Vector3.Normalize(Vector3.Cross(d, u)) * half;
+
+        Vector3 a0 = a - u - v, a1 = a + u - v, a2 = a + u + v, a3 = a - u + v;
+        Vector3 b0 = b - u - v, b1 = b + u - v, b2 = b + u + v, b3 = b - u + v;
+        m.AddFace(c, a0, a1, b1, b0); m.AddFace(c, a1, a2, b2, b1);
+        m.AddFace(c, a2, a3, b3, b2); m.AddFace(c, a3, a0, b0, b3);
+        m.AddFace(c, a3, a2, a1, a0); m.AddFace(c, b0, b1, b2, b3);
+    }
+
+    /// <summary>A small hard chunk (irregular tetra) at a point — joints and shards.</summary>
+    private static void AddTetra(PolyMesh m, Color c, Vector3 o, float s)
+    {
+        Vector3 a = o + new Vector3(0f, s, 0.15f * s);
+        Vector3 b = o + new Vector3(0.9f * s, -0.4f * s, 0.8f * s);
+        Vector3 d = o + new Vector3(-0.95f * s, -0.35f * s, 0.5f * s);
+        Vector3 e = o + new Vector3(0.1f * s, -0.5f * s, -0.95f * s);
+        m.AddFace(c, a, b, d); m.AddFace(c, a, d, e);
+        m.AddFace(c, a, e, b); m.AddFace(c, b, e, d);
+    }
+
+    /// <summary>Ring of n verts at radius r, height y, with a flat top edge forward.</summary>
+    private static Vector3[] Ngon(int n, float r, float y)
+    {
+        var ring = new Vector3[n];
+        for (int i = 0; i < n; i++)
+        {
+            float ang = MathF.Tau * i / n + MathF.PI / n;
+            ring[i] = new Vector3(MathF.Cos(ang) * r, y, MathF.Sin(ang) * r);
+        }
+        return ring;
+    }
+
+    /// <summary>Quad wall connecting a lower ring to an upper ring (same vert count).</summary>
+    private static void RingWall(PolyMesh m, Color c, Vector3[] lower, Vector3[] upper)
+    {
+        int n = lower.Length;
+        for (int i = 0; i < n; i++)
+        {
+            int j = (i + 1) % n;
+            m.AddFace(c, lower[i], lower[j], upper[j], upper[i]);
+        }
+    }
+
+    /// <summary>Flat annulus between an outer ring and an inner ring at the same height.</summary>
+    private static void RingCap(PolyMesh m, Color c, Vector3[] outer, Vector3[] inner)
+    {
+        int n = outer.Length;
+        for (int i = 0; i < n; i++)
+        {
+            int j = (i + 1) % n;
+            m.AddFace(c, outer[i], outer[j], inner[j], inner[i]);
+        }
+    }
+
+    /// <summary>Solid n-gon cap, wound up or down.</summary>
+    private static void NgonCap(PolyMesh m, Color c, Vector3[] ring, bool up)
+    {
+        int n = ring.Length;
+        for (int i = 1; i < n - 1; i++)
+            if (up) m.AddFace(c, ring[0], ring[i], ring[i + 1]);
+            else m.AddFace(c, ring[0], ring[i + 1], ring[i]);
+    }
+
     /// <summary>
     /// A jagged debris chunk — an irregular tetrahedron, the cheapest thing that
     /// still reads as a hard broken-off piece tumbling through the air. Built at

@@ -138,9 +138,11 @@ public sealed class Renderer : IDisposable
         // camera eye doubles as the fog/shading reference; sitting close keeps the
         // model unfogged and its facets lit toward the viewer.
         var specimen = Vector2.Zero;
-        var eye = new Vector3(0f, 3.0f, -6.8f);
+        // The boss rig towers ~10× a tank, so frame it from far back and higher up;
+        // the smaller silhouettes keep the close view.
+        var eye = screen.ShowingBoss ? new Vector3(0f, 20f, -36f) : new Vector3(0f, 3.0f, -6.8f);
         _camera.Position = eye;
-        _camera.Target = new Vector3(0f, 1.2f, 0f);
+        _camera.Target = screen.ShowingBoss ? new Vector3(0f, 5.5f, 0f) : new Vector3(0f, 1.2f, 0f);
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);
@@ -148,8 +150,17 @@ public sealed class Renderer : IDisposable
 
         Raylib.BeginMode3D(_camera);
         GridRenderer.Draw(specimen);
-        float heading = elapsed * 0.6f; // slow turntable spin
-        _entities.DrawShowcase(screen.Current.Kind, specimen, heading, eye);
+        if (screen.ShowingBoss)
+        {
+            // The boss is a rig: hold it still (no turntable) and loop the chosen
+            // protocol phase so its animation reads.
+            _entities.DrawCrabShowcase(screen.CrabPhase, specimen, elapsed, eye);
+        }
+        else
+        {
+            float heading = elapsed * 0.6f; // slow turntable spin
+            _entities.DrawShowcase(screen.Current.Kind, specimen, heading, eye);
+        }
         Raylib.EndMode3D();
 
         TestRenderer.Draw(screen, elapsed);

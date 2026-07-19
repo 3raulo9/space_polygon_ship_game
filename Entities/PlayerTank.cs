@@ -22,7 +22,10 @@ public sealed class PlayerTank
     private float _verticalVel;
 
     // --- Feel tuning (units per second) ---
-    private const float MaxSpeed = 26f;
+    // Public so the Crab-Core boss can hardcode its pursuit run to exactly the
+    // player's top walking speed (the Stalker Protocol's cruelty: it moves no
+    // faster than you, so you can never simply out-walk it once it locks on).
+    public const float MaxSpeed = 26f;
     private const float Accel = 34f;        // how hard the engine pushes
     private const float Drag = 22f;         // coast-down when no input
     private const float ReverseFactor = 0.55f;

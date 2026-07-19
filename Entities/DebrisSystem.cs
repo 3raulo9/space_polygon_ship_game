@@ -40,6 +40,10 @@ public sealed class DebrisSystem
     // so the spray reads as a flash against the void.
     private static readonly Color SparkColor = new(255, 208, 120, 255);
 
+    // Kicked-up floor dust: a dim, cold grey so it reads as grime off the grid
+    // rather than fire — for the boss's feet slamming down.
+    private static readonly Color DustColor = new(120, 132, 138, 255);
+
     private readonly Shard[] _shards = new Shard[Max];
 
     /// <summary>The pool for the renderer to walk; skip entries where !Active.</summary>
@@ -59,6 +63,44 @@ public sealed class DebrisSystem
             Spawn(origin, bodyColor, isSpark: false, elite);
         for (int i = 0; i < sparks; i++)
             Spawn(origin, SparkColor, isSpark: true, elite);
+    }
+
+    /// <summary>
+    /// A low puff of grid dust where a boss foot has just struck the floor — a few
+    /// grey chunks kicked out sideways with little upward throw, gone in a moment.
+    /// Purely cosmetic, like <see cref="Burst"/>.
+    /// </summary>
+    public void FootPuff(Vector3 origin)
+    {
+        var r = Random.Shared;
+        int puffs = 3 + r.Next(2);
+        for (int i = 0; i < puffs; i++)
+        {
+            int slot = -1;
+            for (int j = 0; j < _shards.Length; j++)
+                if (!_shards[j].Active) { slot = j; break; }
+            if (slot < 0) return;
+
+            // Fan out low across the ground, only a small upward kick.
+            float az = r.NextSingle() * MathF.Tau;
+            float el = 0.05f + r.NextSingle() * 0.3f;
+            float cosEl = MathF.Cos(el);
+            var dir = new Vector3(MathF.Cos(az) * cosEl, MathF.Sin(el), MathF.Sin(az) * cosEl);
+            float speed = 4f + r.NextSingle() * 4f;
+
+            _shards[slot] = new Shard
+            {
+                Position = origin + new Vector3(0f, 0.1f, 0f),
+                Velocity = dir * speed,
+                Angle = r.NextSingle() * MathF.Tau,
+                Spin = (r.NextSingle() - 0.5f) * 10f,
+                MaxLife = 0.3f + r.NextSingle() * 0.35f,
+                Size = 0.7f + r.NextSingle() * 0.9f,
+                Color = DustColor,
+                IsSpark = false,
+            };
+            _shards[slot].Life = _shards[slot].MaxLife;
+        }
     }
 
     public void Update(float dt)

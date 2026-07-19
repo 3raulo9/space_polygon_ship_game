@@ -27,7 +27,43 @@ internal static class TestRenderer
         DrawRoster(font, screen);
         DrawStats(font, screen.Current);
 
-        DrawFooter(font, "< > CYCLE · ESC BACK");
+        if (screen.ShowingBoss)
+        {
+            DrawPhasePicker(font, screen, elapsed);
+            DrawFooter(font, "< > CYCLE · 1-4 ANIM · ESC BACK");
+        }
+        else
+        {
+            DrawFooter(font, "< > CYCLE · ESC BACK");
+        }
+    }
+
+    // --- Animation phase picker for the boss rig (bottom-left of the panel) ---
+    private static readonly string[] PhaseNames =
+        { "0 IDLE", "1 THREAT DISPLAY", "2 CLAMPING", "3 PURSUIT" };
+
+    private static void DrawPhasePicker(Font font, TestScreen screen, float elapsed)
+    {
+        const int size = 8;
+        const int x = 10;
+        int y = 150;
+
+        Raylib.DrawTextEx(font, "ANIMATION", new Vector2(x, y), size, Spacing,
+            Scale(Palette.HudChrome, 0.7f));
+        y += size + 4;
+
+        int cur = (int)screen.CrabPhase;
+        for (int i = 0; i < PhaseNames.Length; i++)
+        {
+            bool on = i == cur;
+            // The live phase gets a bright, faintly pulsing row; the rest sit dim.
+            float pulse = on ? 0.8f + 0.2f * MathF.Abs(MathF.Sin(elapsed * 3f)) : 0.35f;
+            Color c = Scale(Palette.HudChrome, pulse);
+            if (on)
+                Raylib.DrawTextEx(font, ">", new Vector2(x - 6, y), size, Spacing, c);
+            Raylib.DrawTextEx(font, PhaseNames[i], new Vector2(x, y), size, Spacing, c);
+            y += 11;
+        }
     }
 
     // --- Heading (a steadier echo of the title flicker) ---

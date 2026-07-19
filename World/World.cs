@@ -17,6 +17,11 @@ public sealed class World
     public readonly PlayerTank Player;
     public readonly List<EnemyTank> Enemies = new();
     public readonly DebrisSystem Debris = new();
+
+    /// <summary>The lone Crab-Core boss seeded into the stage, or null. Runs its
+    /// own Stalker Protocol against the player independent of the tank combat.</summary>
+    public CrabCore? Boss { get; private set; }
+
     private readonly Projectile[] _projectiles;
 
     private const int MaxProjectiles = 64;
@@ -47,6 +52,14 @@ public sealed class World
             Enemies.Add(new EnemyTank(new Vector2(4f, 16f), elite: true));
         else
             Enemies.Add(new EnemyTank(new Vector2(30f, 70f), elite: false));
+
+        // One Crab-Core boss, dead ahead so it can be walked up to and watched. It
+        // sits just outside its own detection radius, idling, until the player
+        // strays close and trips the Stalker Protocol. A capture override drops it
+        // in point-blank (and already awake) so the rig can be screenshotted.
+        Boss = Environment.GetEnvironmentVariable("VOIDTANKS_BOSS_NEAR") == "1"
+            ? new CrabCore(new Vector2(0f, 44f))
+            : new CrabCore(new Vector2(0f, 85f));
     }
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
@@ -82,6 +95,17 @@ public sealed class World
             if (!e.Alive) continue;
             if (e.Update(dt, Player.Position, out Vector2 eOrigin, out Vector2 eDir))
                 SpawnProjectile(eOrigin, eDir, fromPlayer: false);
+        }
+
+        // The boss stalks on its own clock; a true return means the carapace just
+        // slammed shut this tick, so sound the bit-crushed CLANG. Wherever a leg
+        // planted this tick, kick up a puff of grid dust under the foot.
+        if (Boss is { } boss)
+        {
+            if (boss.Update(dt, Player.Position))
+                Audio.PlayClamp();
+            foreach (var f in boss.Footfalls)
+                Debris.FootPuff(new Vector3(f.X, 0f, f.Y));
         }
 
         UpdateProjectiles(dt);

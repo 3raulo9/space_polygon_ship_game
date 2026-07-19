@@ -28,8 +28,16 @@ public sealed class EntityRenderer
     private readonly PolyMesh _shipGunship = Meshes.ShipGunship(Palette.EliteFill);
     private readonly PolyMesh _shipScout = Meshes.ShipScout(Palette.PlayerFill);
 
+    // The Crab-Core boss is a posed rig, not a single mesh — its own renderer owns
+    // the parts and places them from a per-frame pose.
+    private readonly CrabRenderer _crab = new();
+
     public void Draw(World.World world, Vector3 cameraPos)
     {
+        // The lone Stalker, if the stage seeded one, drawn from its live pose.
+        if (world.Boss is { } boss)
+            _crab.Draw(boss.Pose, boss.Position, boss.Heading, cameraPos);
+
         foreach (var e in world.Enemies)
         {
             if (!e.Alive) continue;
@@ -81,5 +89,17 @@ public sealed class EntityRenderer
             _                         => (_standardTank, 0f),
         };
         mesh.Draw(pos, heading, height, cameraPos);
+    }
+
+    /// <summary>
+    /// Draws the Crab-Core boss for the test screen, looping a single protocol
+    /// phase so the tester can study each animation in isolation. Held at a fixed
+    /// three-quarter heading (no turntable spin) so the mechanical slides, clamps
+    /// and skitter read cleanly.
+    /// </summary>
+    public void DrawCrabShowcase(CrabCore.State phase, Vector2 pos, float elapsed, Vector3 cameraPos)
+    {
+        const float showHeading = 0.6f; // a slight turn off head-on
+        _crab.Draw(CrabCore.ShowcasePose(phase, elapsed), pos, showHeading, cameraPos);
     }
 }

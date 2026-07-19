@@ -46,4 +46,21 @@ public static class Palette
 
     /// <summary>Player craft body — a cold, desaturated survivor colour.</summary>
     public static readonly Color PlayerFill = new(96, 120, 128, 255);
+
+    // --- Crab-Core boss ------------------------------------------------------
+    // The Stalker: a dead gunmetal chassis wrapped around a neon core that has no
+    // business glowing that bright in this dim world. The chassis stays grim; the
+    // core is the wrongness — a hot magenta pilot light that flips to a flashing
+    // red the instant it decides to kill you.
+
+    // #737A86 — cold light gunmetal-grey, like old moulded plastic. The boss's
+    // carapace, legs and claws read as a pale silhouette against the dark, the way
+    // its neon core reads as the one wrong bright thing.
+    public static readonly Color CrabChassis = new(115, 122, 134, 255);
+
+    // #E63CC8 — hot neon magenta. The spinning pyramid core at rest.
+    public static readonly Color NeonMagenta = new(230, 60, 200, 255);
+
+    // #FF2828 — flashing neon red. The core once the threat display begins.
+    public static readonly Color NeonRed = new(255, 40, 40, 255);
 }
