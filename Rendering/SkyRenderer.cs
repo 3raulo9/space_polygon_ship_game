@@ -17,6 +17,17 @@ public static class SkyRenderer
     private const int StarCount = 70;
     private const float DriftSpeed = 1.6f; // pixels/sec the field slides sideways
 
+    private const int Levels = 6; // quantisation steps for the dithered gradient
+
+    // 4x4 ordered-dither (Bayer) thresholds, flattened row-major.
+    private static readonly int[] Bayer =
+    {
+        0, 8, 2, 10,
+        12, 4, 14, 6,
+        3, 11, 1, 9,
+        15, 7, 13, 5,
+    };
+
     // Each star: x,y as fractions of the (width x horizon) sky box plus a
     // brightness so the field has depth. Fixed at load; the whole field drifts.
     private static readonly (float X, float Y, float B)[] _stars = BuildStars();
@@ -56,22 +67,33 @@ public static class SkyRenderer
         int horizonY = (int)MathF.Round(scr.Y);
         horizonY = Math.Clamp(horizonY, 0, h);
 
-        // Bright pink band at the horizon, stepping up into pure black overhead.
-        // Hard bands rather than a smooth blend give the chunky 90's sky look.
+        // Purple-magenta glow at the horizon fading up into pure black. The ramp
+        // runs black -> dark purple -> magenta and is quantised into a handful of
+        // levels, then ordered-dithered per pixel so the band boundaries break up
+        // into the speckled 8-bit texture instead of hard lines.
         if (horizonY > 0)
         {
-            const int Bands = 8;
-            for (int b = 0; b < Bands; b++)
+            for (int y = 0; y < horizonY; y++)
             {
-                int y0 = b * horizonY / Bands;
-                int y1 = (b + 1) * horizonY / Bands;
-                // f: 1 at the ground line, 0 up top. Raised to a power so the
-                // pink glow collapses into a thin band right on the horizon and
-                // the black takes over the sky far lower down.
-                float f = (y0 + y1) * 0.5f / horizonY;
-                float t = MathF.Pow(f, 4f);
-                Color c = GridRenderer.LerpColor(Palette.SkyTop, Palette.SkyHorizon, t);
-                Raylib.DrawRectangle(0, y0, w, y1 - y0, c);
+                // f: 0 up top .. 1 at the ground line. Powered so the black keeps
+                // the top of the sky and the purple gathers toward the horizon.
+                float f = (float)y / horizonY;
+                float t = MathF.Pow(f, 1.6f);
+
+                // Quantise into Levels steps and dither the leftover fraction with a
+                // 4x4 Bayer matrix so each row scatters between two adjacent shades.
+                float level = t * Levels;
+                int lo = (int)level;
+                float frac = level - lo;
+                for (int x = 0; x < w; x++)
+                {
+                    float thr = (Bayer[(y & 3) * 4 + (x & 3)] + 0.5f) / 16f;
+                    float tq = (frac > thr ? lo + 1 : lo) / (float)Levels;
+                    Color cq = tq < 0.5f
+                        ? GridRenderer.LerpColor(Palette.SkyTop, Palette.SkyMid, tq * 2f)
+                        : GridRenderer.LerpColor(Palette.SkyMid, Palette.SkyHorizon, (tq - 0.5f) * 2f);
+                    Raylib.DrawPixel(x, y, cq);
+                }
             }
         }
 
