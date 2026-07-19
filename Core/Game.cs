@@ -81,6 +81,12 @@ public sealed class Game : IDisposable
     {
         while (!Raylib.WindowShouldClose())
         {
+            // Drain any time-scheduled audio (the boss's death cascade). Sits above
+            // every early-out below on purpose: the cascade is queued as absolute
+            // wall-clock times, so if the player pauses or bails to the menu part-way
+            // through it still finishes rather than stranding a half-played death.
+            Audio.Update();
+
             if (_capturePath != null && RunCaptureFrame()) break;
 
             // F11 flips borderless fullscreen from any screen. The Renderer already

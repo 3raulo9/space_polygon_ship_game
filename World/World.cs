@@ -170,20 +170,27 @@ public sealed class World
         {
             if (boss.Update(dt, Player.Position))
                 Audio.PlayClamp();
-            float nearestFoot = float.MaxValue;
+            // Every planting foot is voiced on its own — a tripod lands together, so
+            // this is three overlapping impacts, each with its own limb's pitch and
+            // its own distance to the player.
             foreach (var f in boss.Footfalls)
             {
-                Debris.FootPuff(new Vector3(f.X, 0f, f.Y));
-                nearestFoot = MathF.Min(nearestFoot, Vector2.Distance(f, Player.Position));
+                Debris.FootPuff(new Vector3(f.Pos.X, 0f, f.Pos.Y));
+                Audio.PlayFootstep(f.Leg, Vector2.Distance(f.Pos, Player.Position));
             }
-            // One stomp per foot-plant tick (a tripod lands together), voiced at the
-            // closest foot — one clip can't overlap itself, so the nearest wins.
-            if (nearestFoot < float.MaxValue)
-                Audio.PlayStompAt(nearestFoot);
+
+            // Its machinery hums the whole time it exists, spooling up the moment it
+            // notices the player. Fed every tick; Audio eases the rate and level.
+            Audio.SetBossHum(true, Vector2.Distance(boss.Position, Player.Position), boss.Agitation);
 
             // Once the death glitch has fully torn the rig apart, drop the boss so it
             // stops updating and the director is free to raise a new one later.
             if (boss.Dead) Boss = null;
+        }
+        else
+        {
+            // No boss on the field — let the rotor fade out and stop.
+            Audio.SetBossHum(false, 0f, 0f);
         }
 
         UpdateProjectiles(dt);
@@ -393,7 +400,9 @@ public sealed class World
                     if (liveBoss.DamageCore(PlayerShotDamage))
                         DestroyBoss(liveBoss);
                     else
-                        Audio.PlayHit();           // a sharp core-ping on a non-lethal hit
+                        // A shriek over the impact, pitched by how far gone the core
+                        // is — the boss loses composure as it's worn down.
+                        Audio.PlayCoreHit(1f - liveBoss.CoreFraction);
                     p.Active = false;
                     continue;
                 }
@@ -488,7 +497,10 @@ public sealed class World
     /// </summary>
     private void DestroyBoss(CrabCore boss)
     {
-        Audio.PlayExplosion();
+        // Not the stock one-shot blast the tanks get — the boss gets its own death:
+        // a falling scream over a cascade of pitched detonations, spread across the
+        // glitch-apart animation rather than fired all at once.
+        Audio.PlayBossDeath();
 
         var c = boss.Position;
         // The core itself, up high where the gem sat — a hot neon-red burst.

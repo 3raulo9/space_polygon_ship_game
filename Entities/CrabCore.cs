@@ -73,6 +73,14 @@ public sealed class CrabCore
     /// <summary>True once the death glitch has fully played out and the rig is gone.</summary>
     public bool Dead => Phase == State.Dead;
 
+    /// <summary>
+    /// 0 while the boss is dormant, 1 once it has noticed the player and is working
+    /// — the threat display counts, so its internal rotor is already winding up
+    /// before it has taken a step toward you. Drives the pitch of the machinery hum;
+    /// a dying crab spins back down.
+    /// </summary>
+    public float Agitation => Phase is State.ThreatDisplay or State.Clamping or State.Pursuit ? 1f : 0f;
+
     /// <summary>0 while alive, ramping 0→1 across the death glitch — the renderer
     /// reads this to fling the parts apart and tear the whole rig with static.</summary>
     public float DeathProgress => Phase == State.Dying
@@ -121,11 +129,11 @@ public sealed class CrabCore
     // Per-leg gait sign last tick, to catch the instant a foot plants (the +→-
     // zero-crossing of its lift sine), plus the world spots those plants happened.
     private readonly float[] _legSinLast = new float[CrabRig.Legs.Length];
-    private readonly List<Vector2> _footfalls = new();
+    private readonly List<Footfall> _footfalls = new();
 
-    /// <summary>World XZ points where a foot struck the floor this tick — the caller
-    /// spawns dust there. Refilled every <see cref="Update"/>.</summary>
-    public IReadOnlyList<Vector2> Footfalls => _footfalls;
+    /// <summary>Feet that struck the floor this tick — the caller spawns dust at each
+    /// and voices each limb separately. Refilled every <see cref="Update"/>.</summary>
+    public IReadOnlyList<Footfall> Footfalls => _footfalls;
 
     public CrabCore(Vector2 start, float heading = MathF.PI)
     {
@@ -213,7 +221,7 @@ public sealed class CrabCore
         {
             float s = MathF.Sin(_legPhase + legs[i].PhaseOffset);
             if (_legSinLast[i] > 0f && s <= 0f)
-                _footfalls.Add(CrabRig.FootWorldXZ(legs[i], Position, Heading));
+                _footfalls.Add(new Footfall(i, CrabRig.FootWorldXZ(legs[i], Position, Heading)));
             _legSinLast[i] = s;
         }
     }
@@ -307,6 +315,11 @@ public sealed class CrabCore
         // detection range again. The give-up radius sits well past detection so a
         // player hovering at the edge doesn't flip it on and off.
         if (dist > GiveUpRadius) { Enter(State.Idle); return; }
+
+        // It calls while it runs. Fired every tick on purpose — Audio owns the
+        // cadence and the irregular gaps between groans, so the sim stays
+        // deterministic and this stays a plain "I am hunting, at this range".
+        Audio.PlayHuntCall(dist);
 
         if (dist < 0.0001f) return;
         Vector2 dir = to / dist;
@@ -424,6 +437,15 @@ public sealed class CrabCore
             255);
     }
 }
+
+/// <summary>
+/// One foot striking the grid: which leg it was (an index into
+/// <see cref="CrabRig.Legs"/>) and where it landed in world XZ. The index matters
+/// because each limb is voiced as its own actuator — a tripod lands together, and
+/// hearing three distinct joints rather than one clank is what makes the gait read
+/// as a machine with six legs instead of a thing that goes thud.
+/// </summary>
+public readonly record struct Footfall(int Leg, Vector2 Pos);
 
 /// <summary>
 /// A frame's worth of Crab-Core animation state, produced by the entity (or the
