@@ -21,6 +21,8 @@ public static class Audio
     private static Sound _distantBoom;  // an air shot coming down far off on the horizon
     private static Sound _hit;          // the player's craft taking a hit
     private static Sound _warning;      // shield crosses the low-health line
+    private static Sound _stomp;        // a Crab-Core foot planting on the grid
+    private static Sound _alarm;        // Crab-Core threat-display lurch to one side
 
     // Assets are copied next to the executable by the .csproj, so a relative
     // path off the working directory resolves at runtime.
@@ -39,6 +41,8 @@ public static class Audio
         _distantBoom = Load("distantBoom.wav");
         _hit = Load("hit.wav");
         _warning = Load("warning.wav");
+        _stomp = Load("stomping.wav");
+        _alarm = Load("scaryAlarm.wav");
         _enabled = true;
     }
 
@@ -101,6 +105,36 @@ public static class Audio
     }
 
     /// <summary>
+    /// A Crab-Core foot slamming down on the grid, mixed by range so the boss's
+    /// gait is a floor-shaking thud when it's on top of you and a faint, distant
+    /// tremor when it's still stalking across the arena. <paramref name="distance"/>
+    /// is the world-space gap between the planting foot and the player. Falls off
+    /// linearly to nothing past <see cref="StompRange"/>, so far-off steps don't
+    /// even reach the ear — the sound tracks the crab's place in the world, never
+    /// just firing flat whenever a leg happens to move.
+    /// </summary>
+    public static void PlayStompAt(float distance)
+    {
+        if (!_enabled) return;
+        float vol = 1f - distance / StompRange;
+        if (vol <= 0f) return;                  // too far off to hear at all
+        Raylib.SetSoundVolume(_stomp, vol);
+        Raylib.PlaySound(_stomp);
+    }
+
+    /// <summary>Beyond this many world units a Crab-Core footfall is inaudible.</summary>
+    public const float StompRange = 70f;
+
+    /// <summary>
+    /// The Crab-Core's threat-display lurch — a rising alarm blare fired each time
+    /// it hard-slides to a new side, telegraphing the hunt before it commits.
+    /// </summary>
+    public static void PlayAlarm()
+    {
+        if (_enabled) Raylib.PlaySound(_alarm);
+    }
+
+    /// <summary>
     /// A pickup being absorbed — a battery cell or stray round. Reuses the menu
     /// blip (the only bright, non-combat transient in the bank) so the collect
     /// reads as a clean positive chirp against the grim combat clips, no new asset.
@@ -120,6 +154,8 @@ public static class Audio
         Raylib.UnloadSound(_distantBoom);
         Raylib.UnloadSound(_hit);
         Raylib.UnloadSound(_warning);
+        Raylib.UnloadSound(_stomp);
+        Raylib.UnloadSound(_alarm);
         Raylib.CloseAudioDevice();
         _enabled = false;
     }

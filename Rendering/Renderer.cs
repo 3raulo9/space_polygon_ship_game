@@ -51,11 +51,30 @@ public sealed class Renderer : IDisposable
             player.Position.Y);
 
         var fwd = player.Forward;
-        _camera.Position = eye;
+
+        // The nearer an active Crab-Core stalks, the harder the whole rig judders —
+        // a translational rumble on the eye plus an extra rotational rattle on the
+        // aim point, so the closer it gets the less steady the world holds.
+        float shake = world.Boss is { } b ? b.ProximityShake(player.Position) : 0f;
+        Vector3 rumble = Vector3.Zero, rattle = Vector3.Zero;
+        if (shake > 0f)
+        {
+            float t = (float)Raylib.GetTime();
+            float amp = 0.035f * shake;
+            rumble = new Vector3(
+                MathF.Sin(t * 47f) * MathF.Sin(t * 13f),
+                MathF.Sin(t * 53f + 1.3f) * MathF.Sin(t * 17f),
+                MathF.Sin(t * 43f + 0.7f) * MathF.Sin(t * 11f)) * amp;
+            rattle = new Vector3(
+                MathF.Sin(t * 61f + 2.1f),
+                MathF.Sin(t * 67f + 4.2f), 0f) * (amp * 0.8f);
+        }
+
+        _camera.Position = eye + rumble;
         // Pitch the eye up a touch so the horizon sits low on screen: that opens
         // up a tall sky band above the floor, where the pink glow can fade all
         // the way to black below the top HUD strip.
-        _camera.Target = eye + new Vector3(fwd.X, 0.15f, fwd.Y);
+        _camera.Target = eye + rumble + new Vector3(fwd.X, 0.15f, fwd.Y) + rattle;
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void); // never pure black
