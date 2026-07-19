@@ -52,10 +52,14 @@ public sealed class Renderer : IDisposable
 
         var fwd = player.Forward;
         _camera.Position = eye;
-        _camera.Target = eye + new Vector3(fwd.X, -0.12f, fwd.Y); // slightly low horizon
+        // Pitch the eye up a touch so the horizon sits low on screen: that opens
+        // up a tall sky band above the floor, where the pink glow can fade all
+        // the way to black below the top HUD strip.
+        _camera.Target = eye + new Vector3(fwd.X, 0.15f, fwd.Y);
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void); // never pure black
+        SkyRenderer.Draw(_camera, (float)Raylib.GetTime());
 
         Raylib.BeginMode3D(_camera);
         GridRenderer.Draw(player.Position);
@@ -87,6 +91,7 @@ public sealed class Renderer : IDisposable
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);
+        SkyRenderer.Draw(_camera, elapsed);
 
         Raylib.BeginMode3D(_camera);
         GridRenderer.Draw(pos);
@@ -111,6 +116,7 @@ public sealed class Renderer : IDisposable
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);
+        SkyRenderer.Draw(_camera, elapsed);
 
         Raylib.BeginMode3D(_camera);
         GridRenderer.Draw(pos);
@@ -138,6 +144,7 @@ public sealed class Renderer : IDisposable
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);
+        SkyRenderer.Draw(_camera, elapsed);
 
         Raylib.BeginMode3D(_camera);
         GridRenderer.Draw(specimen);
