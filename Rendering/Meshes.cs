@@ -16,73 +16,46 @@ namespace VoidTanks.Rendering;
 public static class Meshes
 {
     /// <summary>
-    /// An abstract combat tank built the old way: a stack of hard geometric
-    /// primitives, zero curves. Two flat track plates carry a wedged hull box;
-    /// a smaller turret box sits on top; a long tapering barrel juts forward.
-    /// Every facet is one flat colour with a hard crease at each edge, so it
-    /// reads as a menacing chess-piece silhouette from across the void — not a
-    /// blob hugging the floor. Nose points +Z (heading 0).
+    /// The Grinder: a squat box-pyramid hunter. A wide flat base carries a stepped
+    /// stack of ever-smaller boxes — a blunt ziggurat — topped by a hard pyramidal
+    /// cap, with a single tapering gun jutting forward. Zero curves, every facet a
+    /// flat colour with a hard crease, so it reads as a heavy chess-piece pyramid
+    /// climbing out of the fog. Nose points +Z (heading 0).
     /// </summary>
     public static PolyMesh Tank(Color fill)
     {
         var m = new PolyMesh();
 
-        // Overall footprint. The tank stands ~2 units tall so it has real
-        // vertical presence at the camera's eye height.
-        const float hw = 1.15f;   // half width (outer edge of the tracks)
-        const float hl = 1.7f;    // half length (front-to-back)
+        // Stepped tiers of the box-pyramid: each box is centred on the axis, wider
+        // and deeper at the bottom, shrinking as it climbs. (hw, hd, y0, y1)
+        (float hw, float hd, float y0, float y1)[] tiers =
+        {
+            (1.5f,  1.6f,  0.0f, 0.45f),  // base slab — the wide, grounded footing
+            (1.12f, 1.2f,  0.45f, 0.95f), // second step
+            (0.75f, 0.8f,  0.95f, 1.4f),  // third step
+        };
+        foreach (var (hw, hd, y0, y1) in tiers)
+            m.AddBox(fill, hw, hd, y0, y1);
 
-        // 1) Track plates — two flat rectangular boxes flanking the centreline,
-        //    sitting on the grid. They give the tank its wide, grounded base.
-        const float trackH = 0.5f;        // top of the tracks
-        const float trackW = 0.42f;       // width of each plate
-        const float trackZ = hl;          // run the full length
-        m.AddBoxSpan(fill, -hw, -hw + trackW, -trackZ, trackZ, 0f, trackH);       // left track
-        m.AddBoxSpan(fill, hw - trackW, hw, -trackZ, trackZ, 0f, trackH);         // right track
+        // Pyramidal cap: four hard facets rising from the top step to a single
+        // apex point — the tell that makes the whole stack read as a pyramid.
+        const float capHw = 0.75f, capHd = 0.8f, capY = 1.4f, apexY = 2.15f;
+        Vector3 fl = new(-capHw, capY, capHd), fr = new(capHw, capY, capHd);
+        Vector3 br = new(capHw, capY, -capHd), bl = new(-capHw, capY, -capHd);
+        Vector3 apex = new(0f, apexY, 0f);
+        m.AddFace(fill, fl, fr, apex); // front
+        m.AddFace(fill, fr, br, apex); // right
+        m.AddFace(fill, br, bl, apex); // back
+        m.AddFace(fill, bl, fl, apex); // left
 
-        // 2) Hull — a wedged box raised on the tracks, narrower than the track
-        //    span. The front face is a sloped glacis (a single hard flat facet).
-        const float hullHw = 0.9f;
-        const float hullHd = 1.45f;
-        const float hullBottom = trackH - 0.05f; // sits just into the tracks
-        const float hullBackTop = 1.35f;         // tall at the back
-        const float hullNoseTop = 0.85f;         // lower at the front → glacis slope
-
-        // Hull as a box with a lowered front-top edge (built explicitly so the
-        // glacis is its own clean facet).
-        Vector3 hb_bl = new(-hullHw, hullBottom, -hullHd); // back-left bottom
-        Vector3 hb_br = new(hullHw, hullBottom, -hullHd);
-        Vector3 hf_bl = new(-hullHw, hullBottom, hullHd);  // front-left bottom
-        Vector3 hf_br = new(hullHw, hullBottom, hullHd);
-        Vector3 hb_tl = new(-hullHw, hullBackTop, -hullHd); // back-left top
-        Vector3 hb_tr = new(hullHw, hullBackTop, -hullHd);
-        Vector3 hf_tl = new(-hullHw, hullNoseTop, hullHd);  // front-left top (lower)
-        Vector3 hf_tr = new(hullHw, hullNoseTop, hullHd);
-
-        m.AddFace(fill, hb_tl, hb_tr, hf_tr, hf_tl); // top deck (slopes forward)
-        m.AddFace(fill, hb_br, hb_bl, hb_tl, hb_tr); // back
-        m.AddFace(fill, hf_bl, hf_br, hf_tr, hf_tl); // front glacis
-        m.AddFace(fill, hb_bl, hf_bl, hf_tl, hb_tl); // left
-        m.AddFace(fill, hf_br, hb_br, hb_tr, hf_tr); // right
-        m.AddFace(fill, hb_bl, hb_br, hf_br, hf_bl); // bottom
-
-        // 3) Turret — a smaller box perched on the rear of the hull deck. Sitting
-        //    it back leaves the sloped glacis clear and makes the barrel reach.
-        const float turHw = 0.62f;
-        const float turHd = 0.7f;
-        const float turZ = -0.35f;        // shifted toward the back
-        const float turBottom = hullBackTop - 0.05f;
-        const float turTop = turBottom + 0.55f;
-        m.AddBoxSpan(fill, -turHw, turHw, turZ - turHd, turZ + turHd, turBottom, turTop);
-
-        // 4) Gun barrel — a long tapering rectangular prism from the turret face.
-        //    Wider at the base, narrowing to the muzzle: an elongated pyramid-ish
-        //    prism, no cylinder. Reaches out past the nose.
-        float barrelY = (turBottom + turTop) * 0.5f;
-        const float baseHalf = 0.16f;     // half-thickness at the turret
-        const float muzzleHalf = 0.09f;   // narrower at the tip
-        float bz0 = turZ + turHd - 0.1f;  // starts at the turret front
-        float bz1 = hl + 1.15f;           // pokes well past the nose
+        // Gun barrel — a tapering square prism from the pyramid's flank, reaching
+        // past the nose. Kept low on the second step so it clears the base and
+        // still reads as a weapon rather than a spire.
+        const float barrelY = 0.7f;
+        const float baseHalf = 0.18f;    // half-thickness at the body
+        const float muzzleHalf = 0.1f;   // narrower at the tip
+        const float bz0 = 0.4f;          // starts inside the stack
+        const float bz1 = 2.9f;          // pokes well past the base front
         AddTaperedBarrel(m, fill, barrelY, baseHalf, muzzleHalf, bz0, bz1);
 
         return m;
@@ -143,6 +116,121 @@ public static class Meshes
         for (int i = 1; i < sides - 1; i++)
             m.AddFace(fill, ring[0], ring[i + 1], ring[i]);
 
+        return m;
+    }
+
+    // --- Placeholder polygon spaceships (test screen only) --------------------
+    // Built in the same hard-facet, no-curves spirit as the tanks, but airborne:
+    // these are the 90's vector-craft the test screen shows off. Nose points +Z.
+
+    /// <summary>
+    /// A sleek interceptor: a flat arrowhead delta with a raised dorsal spine and
+    /// a belly keel, so it's a diamond head-on and a dart from above. Zero curves,
+    /// eight facets — the cheapest thing that still reads as "fast".
+    /// </summary>
+    public static PolyMesh ShipInterceptor(Color fill)
+    {
+        var m = new PolyMesh();
+
+        Vector3 nose = new(0f, 0.05f, 2.4f);
+        Vector3 wingL = new(-1.8f, 0f, -1.0f);
+        Vector3 wingR = new(1.8f, 0f, -1.0f);
+        Vector3 tail = new(0f, 0f, -1.4f);
+        Vector3 spine = new(0f, 0.55f, -0.1f);   // dorsal peak
+        Vector3 keel = new(0f, -0.32f, -0.1f);   // belly point
+
+        // Top surface: four panels meeting at the spine (wound CCW seen from above).
+        m.AddFace(fill, nose, spine, wingR);
+        m.AddFace(fill, wingR, spine, tail);
+        m.AddFace(fill, spine, nose, wingL);
+        m.AddFace(fill, spine, wingL, tail);
+
+        // Belly: the same four panels mirrored down to the keel.
+        m.AddFace(fill, nose, wingR, keel);
+        m.AddFace(fill, wingR, tail, keel);
+        m.AddFace(fill, nose, keel, wingL);
+        m.AddFace(fill, wingL, tail, keel);
+
+        return m;
+    }
+
+    /// <summary>
+    /// A heavy gunship: a blunt slab hull with a raised rear bridge, a stubby nose
+    /// block, and two engine nacelles slung off the flanks. Chunky and grounded-
+    /// looking — the silhouette should read "this one is armoured".
+    /// </summary>
+    public static PolyMesh ShipGunship(Color fill)
+    {
+        var m = new PolyMesh();
+
+        // Main hull slab.
+        m.AddBox(fill, 0.78f, 1.7f, -0.36f, 0.34f);
+        // Rear bridge perched on the deck.
+        m.AddBoxSpan(fill, -0.42f, 0.42f, -1.45f, -0.25f, 0.34f, 0.9f);
+        // Blunt nose block poking forward.
+        m.AddBoxSpan(fill, -0.5f, 0.5f, 1.7f, 2.25f, -0.18f, 0.18f);
+        // Two engine nacelles off the flanks, riding a touch lower than the hull.
+        m.AddBoxSpan(fill, -1.55f, -0.9f, -1.25f, 0.85f, -0.3f, 0.22f);   // left
+        m.AddBoxSpan(fill, 0.9f, 1.55f, -1.25f, 0.85f, -0.3f, 0.22f);     // right
+
+        return m;
+    }
+
+    /// <summary>
+    /// A tiny scout: a slim spindle fuselage with two swept-back winglets and a
+    /// single upright tail fin — a needle, not a slab. Small and spindly so it
+    /// reads as fragile, and it keeps a ship silhouette from any turn of the
+    /// turntable (the fuselage never collapses to a flat wall the way panels do).
+    /// </summary>
+    public static PolyMesh ShipScout(Color fill)
+    {
+        var m = new PolyMesh();
+
+        // Spindle fuselage: a diamond cross-section tapering to a nose and tail.
+        Vector3 nose = new(0f, 0f, 1.35f);
+        Vector3 tail = new(0f, 0f, -1.15f);
+        const float r = 0.26f;
+        Vector3 rTop = new(0f, r, 0f), rBot = new(0f, -r, 0f);
+        Vector3 rL = new(-r, 0f, 0f), rR = new(r, 0f, 0f);
+
+        // Nose cone (four facets) then tail cone (four facets).
+        m.AddFace(fill, nose, rR, rTop); m.AddFace(fill, nose, rTop, rL);
+        m.AddFace(fill, nose, rL, rBot); m.AddFace(fill, nose, rBot, rR);
+        m.AddFace(fill, tail, rTop, rR); m.AddFace(fill, tail, rL, rTop);
+        m.AddFace(fill, tail, rBot, rL); m.AddFace(fill, tail, rR, rBot);
+
+        // Two swept-back winglets — flat triangles raking out and aft from mid-body.
+        m.AddFace(fill, new Vector3(-0.15f, 0f, 0.25f),
+                        new Vector3(-1.05f, 0f, -0.75f),
+                        new Vector3(-0.15f, 0f, -0.55f)); // left
+        m.AddFace(fill, new Vector3(0.15f, 0f, 0.25f),
+                        new Vector3(0.15f, 0f, -0.55f),
+                        new Vector3(1.05f, 0f, -0.75f));   // right
+
+        // Upright tail fin so it never goes fully edge-on and invisible.
+        m.AddFace(fill, new Vector3(0f, 0f, -0.35f),
+                        new Vector3(0f, 0.7f, -1.05f),
+                        new Vector3(0f, 0f, -1.05f));
+
+        return m;
+    }
+
+    /// <summary>
+    /// A jagged debris chunk — an irregular tetrahedron, the cheapest thing that
+    /// still reads as a hard broken-off piece tumbling through the air. Built at
+    /// unit-ish size; the debris system scales and tints each instance.
+    /// </summary>
+    public static PolyMesh Shard(Color fill)
+    {
+        var m = new PolyMesh();
+        Vector3 a = new(0f, 0.55f, 0.1f);
+        Vector3 b = new(0.5f, -0.25f, 0.45f);
+        Vector3 c = new(-0.55f, -0.2f, 0.3f);
+        Vector3 d = new(0.05f, -0.3f, -0.6f);
+        m.AddFace(fill, a, b, c);
+        m.AddFace(fill, a, c, d);
+        m.AddFace(fill, a, d, b);
+        m.AddFace(fill, b, d, c);
         return m;
     }
 

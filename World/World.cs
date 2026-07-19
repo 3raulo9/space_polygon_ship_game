@@ -1,4 +1,5 @@
 using System.Numerics;
+using Raylib_cs;
 using VoidTanks.Core;
 using VoidTanks.Entities;
 using VoidTanks.Input;
@@ -15,6 +16,7 @@ public sealed class World
 {
     public readonly PlayerTank Player;
     public readonly List<EnemyTank> Enemies = new();
+    public readonly DebrisSystem Debris = new();
     private readonly Projectile[] _projectiles;
 
     private const int MaxProjectiles = 64;
@@ -83,6 +85,7 @@ public sealed class World
         }
 
         UpdateProjectiles(dt);
+        Debris.Update(dt);
         Enemies.RemoveAll(e => !e.Alive);
     }
 
@@ -184,7 +187,14 @@ public sealed class World
         bool wasAlive = enemy.Alive;
         enemy.TakeDamage(amount);
         if (wasAlive && !enemy.Alive)
+        {
             Audio.PlayExplosion();
+            // Break the hunter into flying polygon shards + sparks at roughly its
+            // body's centre height (the mesh sits on the grid, scaled up in view).
+            var origin = new Vector3(enemy.Position.X, 1.6f, enemy.Position.Y);
+            Color body = enemy.IsElite ? Palette.EliteFill : Palette.EnemyFill;
+            Debris.Burst(origin, body, enemy.IsElite);
+        }
     }
 
     /// <summary>

@@ -8,6 +8,7 @@ public enum GameState
 {
     Menu,
     Settings,
+    Test,        // hidden bestiary reached by the secret 'L' hatch
     LevelIntro,
     Playing,
     Dead,
