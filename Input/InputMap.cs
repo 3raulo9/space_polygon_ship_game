@@ -40,6 +40,10 @@ public static class InputMap
 
     public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
 
+    // F11 toggles borderless fullscreen. Fixed (never rebindable) and read from
+    // every screen, so it works on the menu just as well as mid-run.
+    public static bool FullscreenPressed => Raylib.IsKeyPressed(KeyboardKey.F11);
+
     // --- Menu navigation (fixed; only meaningful while a menu screen is up) ---
     public static bool MenuUp => Raylib.IsKeyPressed(KeyboardKey.W) || Raylib.IsKeyPressed(KeyboardKey.Up);
     public static bool MenuDown => Raylib.IsKeyPressed(KeyboardKey.S) || Raylib.IsKeyPressed(KeyboardKey.Down);

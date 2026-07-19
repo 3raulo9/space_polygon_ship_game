@@ -83,6 +83,11 @@ public sealed class Game : IDisposable
         {
             if (_capturePath != null && RunCaptureFrame()) break;
 
+            // F11 flips borderless fullscreen from any screen. The Renderer already
+            // rescales the low-res target off the live window size each Present, so
+            // nothing else needs to know the resolution changed.
+            if (InputMap.FullscreenPressed) ToggleFullscreen();
+
             // A screen-to-screen pixel fade is in flight: it owns the frame,
             // drawing whatever state we're in (or have just switched to) under the
             // dissolve, until it resolves back in.
@@ -316,6 +321,32 @@ public sealed class Game : IDisposable
         }
         _renderer.ApplyPixelDissolve(_fade);
         _renderer.Present();
+    }
+
+    /// <summary>
+    /// Flips between windowed and borderless fullscreen (F11). Borderless adopts
+    /// the monitor resolution and reads cleaner than exclusive mode; the Renderer's
+    /// Present recomputes the integer upscale and letterbox off the live window
+    /// size, so the picture just re-fits itself. Leaving fullscreen restores the
+    /// original windowed size and re-centers on the current monitor.
+    /// </summary>
+    private void ToggleFullscreen()
+    {
+        bool goingFullscreen = !Raylib.IsWindowState(ConfigFlags.BorderlessWindowMode);
+
+        Raylib.ToggleBorderlessWindowed();
+
+        if (!goingFullscreen)
+        {
+            // Back to windowed: restore the launch size and re-center it.
+            Raylib.SetWindowSize(Config.WindowWidth, Config.WindowHeight);
+            int mon = Raylib.GetCurrentMonitor();
+            int mw = Raylib.GetMonitorWidth(mon);
+            int mh = Raylib.GetMonitorHeight(mon);
+            Raylib.SetWindowPosition((mw - Config.WindowWidth) / 2, (mh - Config.WindowHeight) / 2);
+        }
+
+        Audio.PlayBlip();
     }
 
     private void EnterSinglePlayer()
