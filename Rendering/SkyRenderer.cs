@@ -76,9 +76,11 @@ public static class SkyRenderer
             for (int y = 0; y < horizonY; y++)
             {
                 // f: 0 up top .. 1 at the ground line. Powered so the black keeps
-                // the top of the sky and the purple gathers toward the horizon.
+                // the top of the sky and the purple gathers toward the horizon. A
+                // steeper exponent pushes the glow lower and holds the darkness up
+                // top, so the sky reads deeper and colder overhead.
                 float f = (float)y / horizonY;
-                float t = MathF.Pow(f, 1.6f);
+                float t = MathF.Pow(f, 6.5f);
 
                 // Quantise into Levels steps and dither the leftover fraction with a
                 // 4x4 Bayer matrix so each row scatters between two adjacent shades.

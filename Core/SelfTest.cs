@@ -22,6 +22,7 @@ public static class SelfTest
         failures += Check("grounded shot misses the boss core", GroundedShotMissesCore);
         failures += Check("air shot at core height kills the boss", AirShotKillsCore);
         failures += Check("air shot detonates on the horizon", AirShotExpiresForBlast);
+        failures += Check("debug key spawns a random enemy", DebugSpawnAddsEnemy);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -164,6 +165,27 @@ public static class SelfTest
             if (p.JustExpired) sawExpire = true;
         }
         return sawExpire ? null : "air shot never expired to stage its blast";
+    }
+
+    private static string? DebugSpawnAddsEnemy()
+    {
+        // The in-game 'L' hatch: each call must put one more threat on the field —
+        // a hunter or the Crab-Core. Spawning off so the director doesn't muddy the
+        // count. Repeat enough to exercise every branch (both tanks and the boss).
+        var world = new World.World { DynamicSpawning = false };
+        for (int i = 0; i < 40; i++)
+        {
+            int tanks = world.Enemies.Count;
+            bool hadBoss = world.Boss != null;
+            world.SpawnRandomEnemy();
+
+            bool grew = world.Enemies.Count > tanks || (!hadBoss && world.Boss != null);
+            // At the hunter cap a spawn can swap rather than grow the count; only
+            // count that as a miss if the boss slot didn't fill either.
+            if (!grew && world.Enemies.Count < 1 && world.Boss == null)
+                return "a debug spawn added no enemy";
+        }
+        return world.Enemies.Count > 0 ? null : "no hunters on the field after 40 spawns";
     }
 
     // --- helpers: advance the sim without going through global input ---

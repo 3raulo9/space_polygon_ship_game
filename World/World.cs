@@ -308,6 +308,36 @@ public sealed class World
         return origin + new Vector2(MathF.Sin(angle), MathF.Cos(angle)) * dist;
     }
 
+    /// <summary>
+    /// Debug hatch: drops one random enemy from the live roster onto the horizon at
+    /// a random bearing — a standard hunter, an elite hunter, or (only if the field
+    /// is clear of one) a Crab-Core. Wired to the in-game 'L' key so a tester can
+    /// stack up threats on demand without waiting on the spawn director. Respects the
+    /// same caps as the director: at the hunter cap the farthest is released first.
+    /// </summary>
+    public void SpawnRandomEnemy()
+    {
+        Vector2 at = RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange);
+
+        // Weight toward tanks; only offer the boss when none stalks the field, so
+        // the roll never wastes on an impossible pick.
+        int forms = Boss is null ? 3 : 2;
+        switch (Random.Shared.Next(forms))
+        {
+            case 0: // standard hunter
+                if (Enemies.Count >= MaxEnemies) RemoveFarthest(Enemies, e => e.Position);
+                Enemies.Add(new EnemyTank(at, elite: false));
+                break;
+            case 1: // elite hunter
+                if (Enemies.Count >= MaxEnemies) RemoveFarthest(Enemies, e => e.Position);
+                Enemies.Add(new EnemyTank(at, elite: true));
+                break;
+            default: // Crab-Core (only reachable when Boss is null)
+                Boss = new CrabCore(at);
+                break;
+        }
+    }
+
     /// <summary>Requests a player shot; honoured only if off cooldown with ammo.</summary>
     public void FirePlayerShot()
     {

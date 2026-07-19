@@ -56,6 +56,10 @@ public static class InputMap
     // screen. Undocumented on purpose — a maintenance hatch into the machine.
     public static bool SecretTestPressed => Raylib.IsKeyPressed(KeyboardKey.L);
 
+    // In-world twin of the same 'L' hatch: a debug spawn that drops one random enemy
+    // onto the horizon each press, so threats can be stacked on demand while playing.
+    public static bool DebugSpawnPressed => Raylib.IsKeyPressed(KeyboardKey.L);
+
     /// <summary>
     /// Number-row 1..4 as a just-pressed digit (0 if none). The test screen uses it
     /// to scrub between an animated specimen's phases.

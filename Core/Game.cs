@@ -140,6 +140,11 @@ public sealed class Game : IDisposable
                 continue;
             }
 
+            // Debug hatch: 'L' drops one random enemy on the horizon each press.
+            // Polled once per frame (a just-pressed edge), not per fixed step.
+            if (InputMap.DebugSpawnPressed)
+                _world!.SpawnRandomEnemy();
+
             // Accumulate real elapsed time and step the sim in fixed increments,
             // so a fast or slow display never changes the physics.
             _accumulator += Raylib.GetFrameTime();

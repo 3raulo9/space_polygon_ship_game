@@ -35,7 +35,9 @@ public sealed class PlayerTank
     private const float TurnDrag = 8.0f;
 
     private const float JumpVel = 15f;      // initial upward kick — a taller leap
-    private const float Gravity = 18f;      // low pull → the dodge floats and hangs
+    private const float Gravity = 18f;      // upward pull → the rise still slows crisply
+    private const float FallGravity = 13f;  // gentler pull coming down → floats + hangs longer
+    private const float JumpForwardDrift = 4f; // small forward glide while airborne — carries you a bit further to the front
 
     public bool IsAirborne => Height > 0.001f;
 
@@ -240,8 +242,16 @@ public sealed class PlayerTank
 
         if (IsAirborne || _verticalVel > 0f)
         {
-            _verticalVel -= Gravity * dt;
+            // Ascend under a firm pull but fall under a gentler one, so the arc
+            // hangs at its peak and drifts back down slowly rather than dropping.
+            float g = _verticalVel > 0f ? Gravity : FallGravity;
+            _verticalVel -= g * dt;
             Height += _verticalVel * dt;
+
+            // A slight forward glide the whole time you're off the ground carries
+            // the craft a small bit further to the front than a dead-vertical hop.
+            Position += Forward * JumpForwardDrift * dt;
+
             if (Height <= 0f)
             {
                 Height = 0f;
