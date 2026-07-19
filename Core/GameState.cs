@@ -11,6 +11,7 @@ public enum GameState
     Test,        // hidden bestiary reached by the secret 'L' hatch
     LevelIntro,
     Playing,
+    Paused,      // world frozen behind a pixel-blur while the pause panel is up
     Dead,
     LevelClear,
 }
