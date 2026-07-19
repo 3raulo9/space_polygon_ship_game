@@ -43,8 +43,9 @@ public static class SelfTest
 
     private static string? PlayerKillsEnemy()
     {
-        var world = new World.World();
-        // Face the enemy and hold fire; step a few seconds of sim.
+        var world = new World.World { DynamicSpawning = false };
+        // Face the enemy and hold fire; step a few seconds of sim. Spawning is off so
+        // the seeded hunter is the only one — killing it clears the field.
         AimPlayerAtFirstEnemy(world);
 
         for (int i = 0; i < 60 * 8 && world.Enemies.Count > 0; i++)
@@ -58,7 +59,7 @@ public static class SelfTest
 
     private static string? EnemyDamagesPlayer()
     {
-        var world = new World.World();
+        var world = new World.World { DynamicSpawning = false };
         float startShield = world.Player.Shield;
 
         // Don't fire; just let the enemy close and shoot. Player stays grounded
