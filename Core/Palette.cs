@@ -23,11 +23,12 @@ public static class Palette
     public static readonly Color FloorDark = new(0, 0, 0, 255);      // pure black
     public static readonly Color FloorLight = new(44, 82, 118, 255); // #2C5276 dim blue
 
-    // Sky: a hot pink horizon glow banded up into pure black overhead — a chunky
-    // 90's stepped gradient, not a smooth blend. Bright pink at the ground line,
-    // darkening hard band by band until it's completely black up top.
-    public static readonly Color SkyHorizon = new(232, 108, 168, 255); // #E86CA8 hot pink
-    public static readonly Color SkyTop = new(0, 0, 0, 255);           // pure black
+    // Sky: a purple-magenta horizon glow dithered up into pure black overhead — a
+    // chunky 8-bit stepped gradient, not a smooth blend. A deep magenta band at the
+    // ground line spreading into dark purple, then falling off to black up top.
+    public static readonly Color SkyHorizon = new(150, 50, 128, 255); // #96327F magenta-purple
+    public static readonly Color SkyMid = new(74, 24, 66, 255);       // #4A1842 dark purple
+    public static readonly Color SkyTop = new(0, 0, 0, 255);          // pure black
 
     // #8AA0A8 — desaturated cold grey, like old plastic. HUD chrome.
     public static readonly Color HudChrome = new(138, 160, 168, 255);
