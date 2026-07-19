@@ -19,6 +19,7 @@ public sealed class Game : IDisposable
     private readonly Settings _settings;
     private readonly Menu _menu = new();
     private readonly SettingsScreen _settingsScreen;
+    private readonly TestScreen _testScreen = new();
     private World.World? _world;
     private GameState _state = GameState.Menu;
 
@@ -34,7 +35,7 @@ public sealed class Game : IDisposable
     // When set, capture grabs a UI screen instead of the world: "menu" or "settings".
     private readonly string? _captureScreen =
         Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU");
-    private bool _captureMenu => _captureScreen is "1" or "menu" or "settings";
+    private bool _captureMenu => _captureScreen is "1" or "menu" or "settings" or "test";
     private int _frame;
 
     public Game()
@@ -81,6 +82,13 @@ public sealed class Game : IDisposable
                 continue;
             }
 
+            if (_state == GameState.Test)
+            {
+                UpdateTest();
+                DrawTest();
+                continue;
+            }
+
             if (InputMap.QuitPressed)
             {
                 ReturnToMenu();
@@ -120,8 +128,8 @@ public sealed class Game : IDisposable
                 _state = GameState.Settings;
                 break;
             case Menu.Action.OpenTestScreen:
-                // Secret keybind ('L' position): the test screen isn't built yet.
-                // The hook is here on purpose — wire the destination in later.
+                // Secret keybind ('L' position): drop into the hidden bestiary.
+                _state = GameState.Test;
                 break;
             case Menu.Action.Quit:
                 return true;
@@ -142,6 +150,18 @@ public sealed class Game : IDisposable
             _settings.Save();
             _state = GameState.Menu;
         }
+    }
+
+    /// <summary>
+    /// Advances the hidden test screen. Escape (its only exit) returns to the
+    /// menu; the turntable spin is driven by the same wall-clock as the menu drift.
+    /// </summary>
+    private void UpdateTest()
+    {
+        _menuTime += Raylib.GetFrameTime();
+
+        if (_testScreen.Update() == TestScreen.Action.Back)
+            _state = GameState.Menu;
     }
 
     private void EnterSinglePlayer()
@@ -177,7 +197,9 @@ public sealed class Game : IDisposable
             // previous (blank) frame.
             for (int i = 0; i < 2; i++)
             {
-                if (_captureScreen == "settings") DrawSettings(); else DrawMenu();
+                if (_captureScreen == "settings") DrawSettings();
+                else if (_captureScreen == "test") DrawTest();
+                else DrawMenu();
             }
             Raylib.TakeScreenshot(_capturePath!);
             return true;
@@ -227,6 +249,12 @@ public sealed class Game : IDisposable
     private void DrawSettings()
     {
         _renderer.DrawSettings(_settingsScreen, _menuTime);
+        _renderer.Present();
+    }
+
+    private void DrawTest()
+    {
+        _renderer.DrawTest(_testScreen, _menuTime);
         _renderer.Present();
     }
 

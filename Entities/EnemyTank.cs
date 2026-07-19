@@ -24,7 +24,12 @@ public sealed class EnemyTank
     private float _fireCooldown;
     private readonly float _fireInterval;
 
-    public const float Radius = 1.3f;
+    // Visual + collision size are one and the same: the renderer scales the mesh
+    // by <see cref="Scale"/>, and the hitbox scales with it, so what you see is
+    // what you can hit. Change this one number to resize the whole enemy.
+    public const float Scale = 1.6f;
+    private const float BaseRadius = 1.3f;   // hitbox on the unscaled mesh
+    public const float Radius = BaseRadius * Scale;
 
     public EnemyTank(Vector2 start, bool elite, int shieldBonus = 0)
     {

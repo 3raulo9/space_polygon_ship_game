@@ -90,12 +90,17 @@ public sealed class PolyMesh
     /// Draws the mesh at a world position, rotated by <paramref name="heading"/>
     /// (radians about Y). Each face gets a single quantized-brightness colour,
     /// then fades toward the fog colour by the model's distance from the camera.
+    /// Backface culling is left disabled by the Renderer so every facet draws;
+    /// shading is two-sided (see <see cref="ShadeFace"/>) so a solid reads solid
+    /// no matter which way each triangle happens to be wound.
     /// </summary>
-    public void Draw(Vector2 position, float heading, float height, Vector2 cameraXZ)
+    public void Draw(Vector2 position, float heading, float height, Vector3 cameraPos,
+        float scale = 1f, Color? tint = null)
     {
         float cos = MathF.Cos(heading);
         float sin = MathF.Sin(heading);
 
+        var cameraXZ = new Vector2(cameraPos.X, cameraPos.Z);
         float dist = Vector2.Distance(position, cameraXZ);
         float fog = GridRenderer.FogFactor(dist);
         // Fully-fogged: don't draw at all. Just inside the boundary it snaps into
@@ -104,20 +109,23 @@ public sealed class PolyMesh
 
         foreach (var f in _faces)
         {
-            Vector3 a = Transform(f.A, cos, sin, position, height);
-            Vector3 b = Transform(f.B, cos, sin, position, height);
-            Vector3 c = Transform(f.C, cos, sin, position, height);
+            Vector3 a = Transform(f.A, cos, sin, position, height, scale);
+            Vector3 b = Transform(f.B, cos, sin, position, height, scale);
+            Vector3 c = Transform(f.C, cos, sin, position, height, scale);
 
-            Color shaded = ShadeFace(a, b, c, f.BaseColor);
+            // A per-instance tint (used by short-lived debris that fade as they
+            // die) overrides the face's built-in colour before shading.
+            Color shaded = ShadeFace(a, b, c, tint ?? f.BaseColor, cameraPos);
             Color final = GridRenderer.LerpColor(shaded, Palette.Fog, fog);
 
             Raylib.DrawTriangle3D(a, b, c, final);
         }
     }
 
-    /// <summary>Rotate about Y (heading), then translate to world position.</summary>
-    private static Vector3 Transform(Vector3 v, float cos, float sin, Vector2 pos, float height)
+    /// <summary>Scale about the model origin, rotate about Y (heading), then translate to world position.</summary>
+    private static Vector3 Transform(Vector3 v, float cos, float sin, Vector2 pos, float height, float scale)
     {
+        v *= scale;
         // Heading 0 faces +Z, matching PlayerTank: rotate X/Z about Y.
         float x = v.X * cos + v.Z * sin;
         float z = -v.X * sin + v.Z * cos;
@@ -128,10 +136,21 @@ public sealed class PolyMesh
     /// Flat directional shading quantized to 3 discrete brightness steps. The
     /// face normal comes from the transformed triangle, so lighting is per-face
     /// and hard-edged — never interpolated across the surface.
+    ///
+    /// Shading is two-sided: the normal is flipped to face the camera before
+    /// lighting, so a facet lights as the solid surface it is regardless of its
+    /// triangle winding. This is what keeps a closed mesh reading as a solid
+    /// block instead of an inside-out, folded-paper shell.
     /// </summary>
-    private static Color ShadeFace(Vector3 a, Vector3 b, Vector3 c, Color baseColor)
+    private static Color ShadeFace(Vector3 a, Vector3 b, Vector3 c, Color baseColor, Vector3 cameraPos)
     {
         Vector3 normal = Vector3.Normalize(Vector3.Cross(b - a, c - a));
+
+        // Orient the normal toward the viewer so back-wound facets don't light as
+        // if inverted (the "unwrapped paper" look).
+        Vector3 centroid = (a + b + c) / 3f;
+        if (Vector3.Dot(normal, cameraPos - centroid) < 0f) normal = -normal;
+
         float d = Vector3.Dot(normal, -LightDir);      // -1..1
         float lit = Math.Clamp(d, 0f, 1f);
 

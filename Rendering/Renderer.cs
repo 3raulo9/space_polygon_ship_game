@@ -24,6 +24,12 @@ public sealed class Renderer : IDisposable
         // Nearest-neighbor: hard, chunky pixels. No filtering, ever.
         Raylib.SetTextureFilter(_target.Texture, TextureFilter.Point);
 
+        // Draw every facet of a solid, front- and back-facing alike. The meshes
+        // are hand-wound and not all consistently oriented; with culling on, the
+        // "wrong" faces vanish and you see into the model (the folded-paper look).
+        // PolyMesh shades two-sided, so drawing them all reads as a solid instead.
+        Rlgl.DisableBackfaceCulling();
+
         _camera = new Camera3D
         {
             Up = new Vector3(0f, 1f, 0f),
@@ -53,7 +59,7 @@ public sealed class Renderer : IDisposable
 
         Raylib.BeginMode3D(_camera);
         GridRenderer.Draw(player.Position);
-        _entities.Draw(world, player.Position);
+        _entities.Draw(world, eye);
         Raylib.EndMode3D();
 
         // Flat instrument panel over the scene: vital bars + radar along the top.
@@ -111,6 +117,35 @@ public sealed class Renderer : IDisposable
         Raylib.EndMode3D();
 
         MenuRenderer.DrawSettings(screen, elapsed);
+
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// Renders the hidden test screen: a single roster specimen turning slowly on
+    /// the spot over the grid, with the 2D stat overlay on top. The camera holds
+    /// still and low, a few units back, so the turntable does all the moving.
+    /// </summary>
+    public void DrawTest(UI.TestScreen screen, float elapsed)
+    {
+        // Fixed low three-quarter view onto the specimen at the origin. The
+        // camera eye doubles as the fog/shading reference; sitting close keeps the
+        // model unfogged and its facets lit toward the viewer.
+        var specimen = Vector2.Zero;
+        var eye = new Vector3(0f, 3.0f, -6.8f);
+        _camera.Position = eye;
+        _camera.Target = new Vector3(0f, 1.2f, 0f);
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+
+        Raylib.BeginMode3D(_camera);
+        GridRenderer.Draw(specimen);
+        float heading = elapsed * 0.6f; // slow turntable spin
+        _entities.DrawShowcase(screen.Current.Kind, specimen, heading, eye);
+        Raylib.EndMode3D();
+
+        TestRenderer.Draw(screen, elapsed);
 
         Raylib.EndTextureMode();
     }
