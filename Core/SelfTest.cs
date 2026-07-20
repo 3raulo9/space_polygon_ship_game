@@ -25,6 +25,7 @@ public static class SelfTest
         failures += Check("debug key spawns a random enemy", DebugSpawnAddsEnemy);
         failures += Check("the boss seizes and throws a cornered player", BossSeizesPlayer);
         failures += Check("a held player is raised to face the core", SeizureFramesTheCore);
+        failures += Check("the boss's beam fires where the player was", BeamLocksItsDirection);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -255,6 +256,75 @@ public static class SelfTest
             if (seizure.Pitch <= 0f) return "the view wasn't aimed up at the core";
         }
         return sawScream ? null : "the scream stage never played";
+    }
+
+    /// <summary>
+    /// The lance's one promise: once it fires, it fires where the player <em>was</em>.
+    ///
+    /// This is the property the whole attack is balanced on — the charge is a window
+    /// to leave the line, and that window is only real if walking out of it works. So
+    /// this drives a boss all the way to the shot and then teleports the player a long
+    /// way sideways mid-burn, and asserts the beam neither turns to follow nor lands a
+    /// hit. If a future change ever makes the beam track, this fails rather than the
+    /// attack quietly becoming unavoidable.
+    /// </summary>
+    private static string? BeamLocksItsDirection()
+    {
+        var (boss, player) = CorneredByBoss();
+        if (boss == null || player == null) return "boss never reached pursuit";
+
+        // Stand it off at lance range — inside the grab radius it goes for the claw.
+        var aimedAt = new Vector2(0f, 34f);
+        boss.Position = aimedAt;
+        float dt = (float)Config.FixedDt;
+
+        // The cooldown runs down over several seconds of pursuit, during which the
+        // boss is walking in. Pin it at range each tick — in play that gap is held by
+        // the player outrunning it, which is the situation the attack exists for; here
+        // it just keeps the wait from ending with the crab in the player's lap.
+        for (int i = 0; i < 60 * 30 && !boss.BeamActive; i++)
+        {
+            if (boss.Phase == Entities.CrabCore.State.Pursuit) boss.Position = aimedAt;
+            boss.Update(dt, player.Position);
+        }
+
+        if (!boss.BeamActive) return "boss never fired its beam in 30s of pursuit";
+
+        Vector3 firedAlong = boss.BeamDirection;
+
+        // First: it is aimed at the player it locked. This is what pins the bearing
+        // and elevation conventions together — get either of them mirrored and the
+        // beam still fires, still holds its line, and still misses every time.
+        if (!InBeam(boss, player.Position, firedAlong))
+            return "the beam did not point at the player it locked onto";
+
+        // Now break for cover: straight out to one side, well clear of the shaft.
+        player.Position = new Vector2(60f, 0f);
+
+        for (int i = 0; i < 60 * 4 && boss.BeamActive; i++)
+        {
+            boss.Update(dt, player.Position);
+            if (!boss.BeamActive) break;
+
+            if (Vector3.Distance(boss.BeamDirection, firedAlong) > 0.001f)
+                return "the beam turned to follow the player after firing";
+
+            // ...and the player who ran is genuinely out of it.
+            if (InBeam(boss, player.Position, firedAlong))
+                return "a player who ran clear was still inside the beam";
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether a craft standing at <paramref name="at"/> is inside the
+    /// boss's beam — the same point-to-ray test the world damages on.</summary>
+    private static bool InBeam(Entities.CrabCore boss, Vector2 at, Vector3 dir)
+    {
+        var p = new Vector3(at.X, 1f, at.Y);
+        Vector3 from = boss.BeamOrigin;
+        float along = Math.Clamp(Vector3.Dot(p - from, dir), 0f, Entities.CrabCore.BeamLength);
+        return Vector3.Distance(p, from + dir * along) <= Entities.CrabCore.BeamRadius;
     }
 
     /// <summary>

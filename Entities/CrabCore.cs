@@ -27,7 +27,11 @@ namespace VoidTanks.Entities;
 /// </summary>
 public sealed class CrabCore
 {
-    public enum State { Idle, ThreatDisplay, Clamping, Pursuit, Dying, Dead }
+    // Aiming and Firing are appended after Pursuit rather than slotted in beside it
+    // on purpose: the test screen scrubs phases by their raw ordinal (keys 1..4 →
+    // 0..3), so Idle/ThreatDisplay/Clamping/Pursuit have to keep the indices they
+    // have always had. The lance states are only ever reached from the live brain.
+    public enum State { Idle, ThreatDisplay, Clamping, Pursuit, Aiming, Firing, Dying, Dead }
 
     public Vector2 Position;
     public float Heading;               // radians; 0 faces +Z, matching the tanks
@@ -79,7 +83,8 @@ public sealed class CrabCore
     /// before it has taken a step toward you. Drives the pitch of the machinery hum;
     /// a dying crab spins back down.
     /// </summary>
-    public float Agitation => Phase is State.ThreatDisplay or State.Clamping or State.Pursuit ? 1f : 0f;
+    public float Agitation => Phase is State.ThreatDisplay or State.Clamping or State.Pursuit
+                                    or State.Aiming or State.Firing ? 1f : 0f;
 
     /// <summary>0 while alive, ramping 0→1 across the death glitch — the renderer
     /// reads this to fling the parts apart and tear the whole rig with static.</summary>
@@ -173,13 +178,18 @@ public sealed class CrabCore
             case State.ThreatDisplay: UpdateThreat(dt); break;
             case State.Clamping:    snapped = UpdateClamping(dt); break;
             case State.Pursuit:     UpdatePursuit(dt, playerPos); break;
+            case State.Aiming:      UpdateAiming(dt, playerPos); break;
+            case State.Firing:      UpdateFiring(dt); break;
             case State.Dying:       UpdateDying(dt); break;
             case State.Dead:        return false;   // gone; nothing left to do
         }
 
-        // Core always turns; flash always cools.
+        // Core always turns; flash always cools. Outside the lance the chassis
+        // settles back onto its legs, so a boss interrupted mid-charge (killed, or
+        // dropped back to idle) rights itself instead of walking away tipped over.
         _coreSpin += CoreSpinRate * dt;
         if (_flash > 0f) _flash = MathF.Max(0f, _flash - dt * 4f);
+        if (Phase is not (State.Aiming or State.Firing)) SettleTilt(0f, 0f, dt, TiltRelaxRate);
 
         DetectFootfalls();
         return snapped;
@@ -242,7 +252,15 @@ public sealed class CrabCore
         }
     }
 
-    private float CoreSpinRate => Phase == State.Idle ? IdleSpin : AgitatedSpin;
+    private float CoreSpinRate => Phase switch
+    {
+        State.Idle => IdleSpin,
+        // The crystal winds up hard as it charges and is still tearing round while
+        // the beam burns — the spin is the charge, visually and audibly.
+        State.Aiming => AgitatedSpin + (ChargeSpin - AgitatedSpin) * ChargeProgress,
+        State.Firing => FiringSpin,
+        _ => AgitatedSpin,
+    };
 
     // --- State 0: idle, until the player strays inside the detection radius ---
     private void UpdateIdle(float dt, Vector2 playerPos)
@@ -342,6 +360,229 @@ public sealed class CrabCore
 
         Heading = MathF.Atan2(dir.X, dir.Y);        // locked onto the coordinates
         Position += dir * RunSpeed * dt;            // rigid, direct, no easing
+
+        // ...and every so often it stops running and lines up the lance instead.
+        // Only from out here: inside BeamMinRange it already has the player within
+        // reach of its claws, and charging a beam at something it could simply grab
+        // would read as the boss forgetting what it was doing.
+        _beamCooldown -= dt;
+        if (_beamCooldown <= 0f && dist >= BeamMinRange && dist <= BeamMaxRange)
+            BeginCharge(playerPos);
+    }
+
+    // --- State 4/5: the lance — tilt onto the target, lock, and fire ----------
+    // The whole point of this attack is that it is escapable and that the escape is
+    // spatial rather than reactive. It telegraphs hard (a body visibly tipping onto
+    // you, a spinning charge, three climbing warnings), it commits to one direction
+    // at the moment the warnings stop, and then it holds that direction for a full
+    // five seconds without tracking. So the answer is never "dodge at the right
+    // instant" — it is "see where it is pointing and be somewhere else".
+
+    /// <summary>Nearest range the boss will bother charging from. Closer than this
+    /// it goes for the grab instead.</summary>
+    public const float BeamMinRange = 18f;
+
+    /// <summary>Past this it can't line the shot up at all and keeps running.</summary>
+    public const float BeamMaxRange = 70f;
+
+    /// <summary>Bounds on the wait between lance shots, re-rolled each time so the
+    /// player can never count the beats between them.</summary>
+    private const float BeamCooldownMin = 5f;
+    private const float BeamCooldownMax = 10f;
+
+    /// <summary>How long the charge runs — the window the player has to get out of
+    /// the line of fire. Three warnings are spaced across it.</summary>
+    public const float ChargeTime = 2.6f;
+
+    /// <summary>How long the beam burns, held on the direction locked at the end of
+    /// the charge. Long enough that walking back into it is entirely possible.</summary>
+    public const float BeamTime = 5f;
+
+    /// <summary>How far the beam reaches, and how wide it bites.</summary>
+    public const float BeamLength = 150f;
+    public const float BeamRadius = 2.4f;
+
+    /// <summary>The three warnings' moments inside the charge, as fractions of it.
+    /// Front-loaded so the last one lands with most of a second still to run: a
+    /// warning that fires as the shot does is not a warning.</summary>
+    private static readonly float[] WarnAt = { 0.16f, 0.42f, 0.68f };
+
+    // Core spin while it charges and while it burns — far past even the agitated
+    // rate, so the gem visibly winds up into the shot.
+    private const float ChargeSpin = 13f;
+    private const float FiringSpin = 20f;
+
+    /// <summary>How fast the chassis eases onto its aim, and how fast it rights
+    /// itself afterwards. Slow enough to read as mass being shifted rather than a
+    /// value being set — this is the one thing the boss does that isn't a hard snap,
+    /// because a body bracing to aim is the one thing it does that isn't a lurch.</summary>
+    private const float TiltAimRate = 2.6f;
+    private const float TiltRelaxRate = 1.8f;
+
+    /// <summary>Hard ceiling on how far it will tip. Past this the rig's legs stop
+    /// plausibly holding it up and it reads as the model falling over.</summary>
+    private const float MaxTiltPitch = 0.42f;
+    private const float MaxTiltRoll = 0.30f;
+
+    private float _beamCooldown = BeamCooldownMin;
+    private float _tiltPitch, _tiltRoll;    // live chassis lean, radians
+    private float _braceRoll;               // the side it braced onto, rolled per shot
+    private float _lockHeading;             // planar bearing frozen at the lock
+    private float _lockPitch;               // and the elevation with it
+    private int _warnStep;                  // how many of the three have sounded
+    private readonly Random _rng = new();
+
+    /// <summary>0..1 across the charge, 0 otherwise — the renderer swells the gem's
+    /// glare on this and the world can telegraph it however it likes.</summary>
+    public float ChargeProgress => Phase == State.Aiming
+        ? Math.Clamp(_stateTime / ChargeTime, 0f, 1f) : 0f;
+
+    /// <summary>True for the five seconds the beam is actually burning.</summary>
+    public bool BeamActive => Phase == State.Firing;
+
+    /// <summary>0..1 through the burn.</summary>
+    public float BeamProgress => Phase == State.Firing
+        ? Math.Clamp(_stateTime / BeamTime, 0f, 1f) : 0f;
+
+    /// <summary>The chassis's lean this frame — pitch (nosing down onto the target)
+    /// and roll (braced onto one side). Both zero unless it is working the lance.</summary>
+    public float TiltPitch => _tiltPitch;
+    public float TiltRoll => _tiltRoll;
+
+    /// <summary>Where the beam leaves the gem: the middle of the crystal, so the
+    /// bolt visibly comes out of the thing that spent three seconds spinning.</summary>
+    public Vector3 BeamOrigin => new(Position.X, CrabRig.CoreWorldY + 3.0f, Position.Y);
+
+    /// <summary>
+    /// The beam's unit direction — the bearing and elevation frozen at the lock, not
+    /// the player's current spot. This is the whole attack: once <see cref="State.Firing"/>
+    /// begins, nothing the player does moves this vector.
+    /// </summary>
+    public Vector3 BeamDirection
+    {
+        get
+        {
+            float cp = MathF.Cos(_lockPitch);
+            return new Vector3(MathF.Sin(_lockHeading) * cp, -MathF.Sin(_lockPitch),
+                               MathF.Cos(_lockHeading) * cp);
+        }
+    }
+
+    /// <summary>
+    /// Breaks off the chase and starts lining the lance up: it rolls which side it
+    /// braces onto, wakes the spinning charge, and hands the first warning over.
+    /// </summary>
+    private void BeginCharge(Vector2 playerPos)
+    {
+        // Which way it tips is rolled fresh every time, so two charges never look
+        // like the same canned animation — but the magnitude stays inside the rig's
+        // means, and the sign is what actually varies.
+        _braceRoll = (float)(_rng.NextDouble() * 2.0 - 1.0) * MaxTiltRoll;
+        _warnStep = 0;
+        SnapToFace(playerPos);
+        Enter(State.Aiming);
+        Audio.PlayBeamCharge();
+    }
+
+    /// <summary>
+    /// The charge. It stands still and tips its whole body onto the player — turning
+    /// to keep the bearing and nosing down to the elevation, so the crystal is
+    /// visibly pointed at them the entire time — while the gem spins up and the three
+    /// warnings climb. Everything here still tracks; nothing here is committed yet.
+    /// </summary>
+    private void UpdateAiming(float dt, Vector2 playerPos)
+    {
+        _legPhase += ShuffleLeg * 0.5f * dt;    // shuffling into a brace, not walking
+        _clawOpen = 0f;
+
+        Vector2 to = playerPos - Position;
+        float dist = to.Length();
+
+        // Bearing eases rather than snaps — this is the boss taking aim, and an
+        // instant turn would give the player nothing to read off the body.
+        if (dist > 0.0001f)
+            Heading = ApproachAngle(Heading, MathF.Atan2(to.X, to.Y), 2.2f * dt);
+
+        // Nose down by however far below the gem the player actually is. Taken off
+        // the rig's own geometry rather than picked: the crystal sits CoreWorldY up,
+        // the craft is on the grid, so this is the true angle between them — which is
+        // what makes the tilt read as aiming rather than as a posing animation.
+        float drop = MathF.Atan2(CrabRig.CoreWorldY + 3.0f, MathF.Max(dist, 1f));
+
+        // A slow organic sway on top, at two unrelated rates, so the hold never
+        // freezes into a still frame — something this heavy braced against its own
+        // recoil should be visibly fighting to keep the line.
+        float sway = MathF.Sin(_stateTime * 3.1f) * 0.035f;
+        float lean = MathF.Sin(_stateTime * 2.3f + 1.1f) * 0.045f;
+
+        float f = ChargeProgress;
+        SettleTilt(
+            Math.Clamp(drop * f + sway, -MaxTiltPitch, MaxTiltPitch),
+            Math.Clamp(_braceRoll * f + lean, -MaxTiltRoll, MaxTiltRoll),
+            dt, TiltAimRate);
+
+        // The three climbing warnings, each fired once as its moment passes.
+        if (_warnStep < WarnAt.Length && _stateTime >= WarnAt[_warnStep] * ChargeTime)
+            Audio.PlayBeamWarning(_warnStep++);
+
+        if (_stateTime >= ChargeTime)
+        {
+            // The lock. Bearing and elevation are frozen here, off the last position
+            // the player was seen in, and the beam rides them for its whole life.
+            _lockHeading = Heading;
+            _lockPitch = MathF.Atan2(CrabRig.CoreWorldY + 3.0f, MathF.Max(dist, 1f));
+            Enter(State.Firing);
+            Audio.PlayBeamFire();
+        }
+    }
+
+    /// <summary>
+    /// The burn. It is committed: the chassis holds exactly the attitude it locked,
+    /// the heading does not move, and it does not chase. All it does is hold the line
+    /// and let the beam sit there. Only the gem keeps turning.
+    /// </summary>
+    private void UpdateFiring(float dt)
+    {
+        _legPhase += ShuffleLeg * 0.15f * dt;   // planted, barely bracing
+        _clawOpen = 0f;
+        Heading = _lockHeading;                 // frozen: it shoots where you were
+
+        // Held on the locked attitude, with a fine tremor of recoil through it — the
+        // sway of the charge is gone, because it has stopped adjusting.
+        float shudder = MathF.Sin(_stateTime * 31f) * 0.012f;
+        SettleTilt(_lockPitch + shudder, _braceRoll + shudder * 0.5f, dt, TiltAimRate * 2f);
+
+        if (_stateTime >= BeamTime)
+        {
+            // Spent — back to running the player down, with a fresh wait before it
+            // can do this again.
+            _beamCooldown = BeamCooldownMin
+                + (float)_rng.NextDouble() * (BeamCooldownMax - BeamCooldownMin);
+            Enter(State.Pursuit);
+        }
+    }
+
+    /// <summary>Eases the chassis's lean toward a target attitude at the given rate,
+    /// without overshooting. Both axes move together so the body arrives on its aim
+    /// as one movement rather than pitching and rolling in sequence.</summary>
+    private void SettleTilt(float pitch, float roll, float dt, float rate)
+    {
+        float step = rate * dt;
+        _tiltPitch = Approach(_tiltPitch, pitch, step);
+        _tiltRoll = Approach(_tiltRoll, roll, step);
+    }
+
+    private static float Approach(float v, float target, float step)
+        => v < target ? MathF.Min(target, v + step) : MathF.Max(target, v - step);
+
+    /// <summary>Turns a heading toward a target the short way round, by at most
+    /// <paramref name="step"/> radians.</summary>
+    private static float ApproachAngle(float a, float b, float step)
+    {
+        float d = b - a;
+        while (d > MathF.PI) d -= MathF.Tau;
+        while (d < -MathF.PI) d += MathF.Tau;
+        return a + Math.Clamp(d, -step, step);
     }
 
     private void Enter(State next)
@@ -362,10 +603,24 @@ public sealed class CrabCore
     /// <summary>The live visual snapshot the renderer poses the parts from.</summary>
     public CrabPose Pose => new(
         _coreSpin, _clawOpen, _legPhase,
-        CoreColorFor(Hostility, MathF.Max(_flash, SeizureGlow)), Vector2.Zero,
-        GrabArm, StrikeArm);
+        CoreColorFor(Hostility, MathF.Max(MathF.Max(_flash, SeizureGlow), LanceGlare)),
+        Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll);
 
-    private float Hostility => Phase is State.Clamping or State.Pursuit ? 1f : 0f;
+    private float Hostility => Phase is State.Clamping or State.Pursuit
+                                     or State.Aiming or State.Firing ? 1f : 0f;
+
+    /// <summary>
+    /// How white-hot the gem is running for the lance: it swells across the charge —
+    /// the crystal filling with the shot — and then pins near white for the whole
+    /// burn. Squared on the way up so most of the brightening happens late, which is
+    /// what makes the last second before the lock the alarming one.
+    /// </summary>
+    private float LanceGlare => Phase switch
+    {
+        State.Aiming => ChargeProgress * ChargeProgress * 0.85f,
+        State.Firing => 0.9f,
+        _ => 0f,
+    };
 
     // --- Seizure: the boss has the player in its claw -------------------------
     // The cinematic itself lives in CrabSeizure, which owns the timing and drives
@@ -475,6 +730,28 @@ public sealed class CrabCore
                 return new CrabPose(t * AgitatedSpin, 0f, t * PursuitLeg,
                     CoreColorFor(1f, pulse * 0.25f), new Vector2(0f, surge));
             }
+            case State.Aiming:
+            {
+                // The charge on repeat, with a beat of flat rig between laps so the
+                // tilt is visibly something the body does rather than its rest pose.
+                float lt = t % (ChargeTime + 0.6f);
+                float f = Math.Clamp(lt / ChargeTime, 0f, 1f);
+                // Rolls to one side and back over the loop rather than picking a
+                // random side — the turntable should show the range of the lean.
+                float roll = MathF.Sin(t * 0.7f) * MaxTiltRoll;
+                return new CrabPose(t * ChargeSpin, 0f, t * ShuffleLeg * 0.5f,
+                    CoreColorFor(1f, f * f * 0.85f), Vector2.Zero, 0f, 0f,
+                    MaxTiltPitch * f + MathF.Sin(t * 3.1f) * 0.035f, roll * f);
+            }
+            case State.Firing:
+            {
+                // Committed: the attitude is held dead still bar the recoil tremor,
+                // which is the whole difference between this and the charge above.
+                float shudder = MathF.Sin(t * 31f) * 0.012f;
+                return new CrabPose(t * FiringSpin, 0f, t * ShuffleLeg * 0.15f,
+                    CoreColorFor(1f, 0.9f), Vector2.Zero, 0f, 0f,
+                    MaxTiltPitch + shudder, MaxTiltRoll * 0.6f + shudder * 0.5f);
+            }
             default: // Idle
                 return new CrabPose(t * IdleSpin, 0f, t * IdleLeg,
                     CoreColorFor(0f, 0f), Vector2.Zero);
@@ -532,4 +809,9 @@ public readonly record struct CrabPose(
     // 1 (fully committed), and both are zero for every other phase — so the rig
     // draws exactly as it always has unless it has actually got hold of someone.
     float GrabArm = 0f,   // front-right limb extended into the grip
-    float StrikeArm = 0f);// front-left limb: 0 wound back, 1 swung through
+    float StrikeArm = 0f, // front-left limb: 0 wound back, 1 swung through
+    // The chassis's lean while it lines up its lance: nosed down onto the target and
+    // braced onto one side. Zero for every other phase, so the rig sits flat on its
+    // legs exactly as it always has unless it is actually aiming.
+    float BodyPitch = 0f,
+    float BodyRoll = 0f);

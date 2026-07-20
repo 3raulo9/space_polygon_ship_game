@@ -39,12 +39,17 @@ public sealed class CrabRenderer
         float baseY = CrabRig.BodyHeight;
         float fling = death * death;    // ease-in: a beat of shudder, then it lets go
 
+        // The chassis's lean while it lines up its lance. Zero in every other phase,
+        // so all of this collapses back to the flat rig it has always drawn as.
+        float pitch = pose.BodyPitch, roll = pose.BodyRoll;
+
         // Lower base: grinds down into the grid as it tears.
         if (!Flicker(death))
         {
             Vector3 j = Jitter(death, 1.2f) + new Vector3(0f, -fling * 3f, 0f);
             _bodyLower.Draw(new Vector2(bodyPos.X + j.X, bodyPos.Y + j.Z), heading,
-                baseY * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death));
+                baseY * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death),
+                pitch, roll);
         }
 
         // Upper carapace lid: rises by the clamp amount in life; on death it blows
@@ -55,7 +60,8 @@ public sealed class CrabRenderer
             Vector3 j = Jitter(death, 1.6f) + new Vector3(0f, fling * 12f, 0f);
             float spin = heading + fling * 6f;
             _bodyUpper.Draw(new Vector2(bodyPos.X + j.X, bodyPos.Y + j.Z), spin,
-                (baseY + lift) * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death));
+                (baseY + lift) * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death),
+                pitch, roll);
         }
 
         // Neon gem in the well, spinning and tinted this frame's colour — on death it
@@ -64,8 +70,10 @@ public sealed class CrabRenderer
         {
             Vector3 j = Jitter(death, 2.2f) + new Vector3(0f, fling * 8f, 0f);
             Color coreTint = death > 0f ? DeathTint(Palette.NeonRed, death) : pose.CoreColor;
+            // The gem is the emitter, so it takes the full lean: when the body tips
+            // onto the player, the crystal is what ends up pointed at them.
             DrawPart(_core, new Vector3(0f, baseY + CoreY, 0f), pose.CoreSpin + fling * 20f,
-                bodyPos, heading, cameraPos, coreTint, j);
+                bodyPos, heading, cameraPos, coreTint, j, pitch, roll, tiltPart: true);
         }
 
         // Six legs, bobbing out of phase for the skitter; on death each snaps off and
@@ -97,9 +105,84 @@ public sealed class CrabRenderer
                 Vector2 outward = LegOutward(leg, heading);
                 offset += new Vector3(outward.X * fling * 16f, fling * 6f, outward.Y * fling * 16f);
             }
+            // The legs' shoulders ride the leaning chassis — that is what makes the
+            // tilt read as the body shifting its weight — but each limb itself stays
+            // upright, because its foot is on the grid holding the thing up. Tipping
+            // the legs too would swing the feet through the floor.
             DrawPart(_leg, mount, yaw + fling * 4f, bodyPos, heading, cameraPos,
-                DeathTint(Palette.CrabChassis, death), offset);
+                DeathTint(Palette.CrabChassis, death), offset, pitch, roll, tiltPart: false);
         }
+    }
+
+    // --- The lance ------------------------------------------------------------
+
+    /// <summary>
+    /// Draws whatever the boss's beam attack is doing this frame: a gathering flare
+    /// in the crystal across the charge, then the beam itself.
+    ///
+    /// The beam is white cored inside red, and the layering is what makes that read
+    /// rather than the colours: an opaque white shaft is drawn first and a wide
+    /// translucent red sheath over it, so the edges bleed red into the dark while the
+    /// centre stays blown-out white — a beam too bright to have a colour in the
+    /// middle. Drawn as round cylinders rather than the game's flat-shaded facets on
+    /// purpose: light is the one thing out here that isn't built out of polygons.
+    /// </summary>
+    public void DrawLance(Entities.CrabCore boss)
+        => DrawLance(boss.BeamOrigin, boss.BeamDirection, boss.ChargeProgress,
+            boss.BeamActive ? boss.BeamProgress : -1f);
+
+    /// <summary>
+    /// The lance from plain values rather than a live boss, so the test screen can
+    /// show the charge and the beam with no brain behind them. A negative
+    /// <paramref name="beam"/> means the shaft isn't firing at all.
+    /// </summary>
+    public void DrawLance(Vector3 origin, Vector3 direction, float charge, float beam)
+    {
+        float t = (float)Raylib.GetTime();
+
+        // The charge: a ball of light swelling in the gem, pulsing faster as it
+        // fills, so the crystal is visibly loading before anything comes out of it.
+        if (charge > 0f)
+        {
+            float pulse = 0.75f + 0.25f * MathF.Sin(t * (14f + 26f * charge));
+            float r = (0.8f + 3.2f * charge * charge) * pulse;
+            Color hot = GridRenderer.LerpColor(Palette.NeonRed, Color.White, charge * charge);
+            Raylib.DrawSphereEx(origin, r * 1.7f, 8, 8,
+                new Color(Palette.NeonRed.R, Palette.NeonRed.G, Palette.NeonRed.B, (int)(120 * charge)));
+            Raylib.DrawSphereEx(origin, r, 8, 8, hot);
+        }
+
+        if (beam < 0f) return;
+
+        float f = beam;
+        // Snaps on and cuts out, holding full width almost the whole way between —
+        // the beam is either firing or it isn't, and the taper at each end only
+        // exists so neither edge lands as a hard pop.
+        float env = Math.Clamp(MathF.Min(f / 0.06f, (1f - f) / 0.12f), 0f, 1f);
+        if (env <= 0f) return;
+
+        Vector3 from = origin;
+        Vector3 to = from + direction * Entities.CrabCore.BeamLength;
+
+        // A fast flutter on the width, so the shaft boils rather than sitting there
+        // as a static cone — a still beam reads as geometry, not as energy.
+        float flutter = 0.9f + 0.1f * MathF.Sin(t * 37f);
+        float core = Entities.CrabCore.BeamRadius * 0.42f * env * flutter;
+        float sheath = Entities.CrabCore.BeamRadius * env * flutter;
+
+        // White core first, red sheath over it: the sheath's near face then blends
+        // across the white instead of the depth buffer hiding it.
+        Raylib.DrawCylinderEx(from, to, core * 1.35f, core, 10, Color.White);
+        Raylib.DrawCylinderEx(from, to, sheath * 1.4f, sheath, 10,
+            new Color(Palette.NeonRed.R, Palette.NeonRed.G, Palette.NeonRed.B, (byte)130));
+
+        // The muzzle: a small blown-out flare where it leaves the crystal, so the beam
+        // has an obvious source and doesn't read as having simply appeared in the air.
+        // Kept barely wider than the shaft itself — sized off the beam and not off the
+        // rig, because a flare big enough to be seen from across the arena is also big
+        // enough to swallow the boss that fired it.
+        Raylib.DrawSphereEx(from, sheath * 0.95f, 8, 8, new Color((int)255, 120, 120, 150));
+        Raylib.DrawSphereEx(from, core * 1.1f, 8, 8, Color.White);
     }
 
     // --- The seizure's two hands ---------------------------------------------
@@ -193,14 +276,38 @@ public sealed class CrabRenderer
     /// <paramref name="offset"/> (used by the death glitch) shoves the part off its rig.
     /// </summary>
     private void DrawPart(PolyMesh mesh, Vector3 localMount, float localYaw,
-        Vector2 bodyPos, float heading, Vector3 cameraPos, Color? tint = null, Vector3 offset = default)
+        Vector2 bodyPos, float heading, Vector3 cameraPos, Color? tint = null, Vector3 offset = default,
+        float pitch = 0f, float roll = 0f, bool tiltPart = false)
     {
         Vector3 o = localMount * Scale;
+        // The mount point always rides the lean, so every part stays bolted to the
+        // chassis wherever it has tipped to; whether the part itself turns with it is
+        // the caller's call (the gem does, the legs don't).
+        o = Tilt(o, pitch, roll);
         float cos = MathF.Cos(heading), sin = MathF.Sin(heading);
         float rx = o.X * cos + o.Z * sin;
         float rz = -o.X * sin + o.Z * cos;
         var worldXZ = new Vector2(bodyPos.X + rx + offset.X, bodyPos.Y + rz + offset.Z);
-        mesh.Draw(worldXZ, heading + localYaw, o.Y + offset.Y, cameraPos, Scale, tint);
+        mesh.Draw(worldXZ, heading + localYaw, o.Y + offset.Y, cameraPos, Scale, tint,
+            tiltPart ? pitch : 0f, tiltPart ? roll : 0f);
+    }
+
+    /// <summary>Rolls then pitches a vector in the body's own frame — the same order
+    /// <see cref="PolyMesh"/> applies to a tilted mesh, so a mount point and the part
+    /// standing on it never disagree about where the chassis is leaning.</summary>
+    private static Vector3 Tilt(Vector3 v, float pitch, float roll)
+    {
+        if (roll != 0f)
+        {
+            float c = MathF.Cos(roll), s = MathF.Sin(roll);
+            v = new Vector3(v.X * c - v.Y * s, v.X * s + v.Y * c, v.Z);
+        }
+        if (pitch != 0f)
+        {
+            float c = MathF.Cos(pitch), s = MathF.Sin(pitch);
+            v = new Vector3(v.X, v.Y * c - v.Z * s, v.Y * s + v.Z * c);
+        }
+        return v;
     }
 
     // --- Death-glitch helpers -------------------------------------------------

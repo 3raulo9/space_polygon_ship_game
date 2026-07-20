@@ -37,9 +37,10 @@ public sealed class TestScreen
             Selected = i;
 
         // Capture harness: VOIDTANKS_TEST_PHASE opens the boss on a chosen phase
-        // (0..3) so each of its animations can be screenshotted without keypresses.
+        // (0..5 — the four protocol phases plus the lance's charge and burn) so each
+        // of its animations can be screenshotted without keypresses.
         if (int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_TEST_PHASE"), out int ph)
-            && ph >= 0 && ph <= 3)
+            && ph >= 0 && ph <= (int)Entities.CrabCore.State.Firing)
             CrabPhase = (Entities.CrabCore.State)ph;
     }
 
@@ -56,11 +57,12 @@ public sealed class TestScreen
         if (InputMap.MenuUp) Step(-1);
         if (InputMap.MenuDown) Step(+1);
 
-        // On the animated boss, number keys 1..4 scrub between its protocol phases.
+        // On the animated boss, number keys 1..6 scrub between its phases: the four
+        // protocol states, then the lance charging and the lance firing.
         if (ShowingBoss)
         {
             int digit = InputMap.MenuDigitPressed();
-            if (digit != 0)
+            if (digit != 0 && digit - 1 <= (int)Entities.CrabCore.State.Firing)
             {
                 CrabPhase = (Entities.CrabCore.State)(digit - 1);
                 Audio.PlayBlip();

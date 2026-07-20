@@ -151,6 +151,14 @@ public sealed class Game : IDisposable
             if (InputMap.DebugSpawnPressed)
                 _world!.SpawnRandomEnemy();
 
+            // 'N' silences the spawn director so the field stops refilling itself;
+            // 'K' parks a dormant Crab-Core straight ahead. Both are testing hatches.
+            if (InputMap.DebugNoSpawnPressed)
+                _world!.DynamicSpawning = !_world.DynamicSpawning;
+
+            if (InputMap.DebugSpawnCrabPressed)
+                _world!.SpawnCrabAhead();
+
             // Accumulate real elapsed time and step the sim in fixed increments,
             // so a fast or slow display never changes the physics.
             _accumulator += Raylib.GetFrameTime();

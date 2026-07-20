@@ -30,7 +30,7 @@ internal static class TestRenderer
         if (screen.ShowingBoss)
         {
             DrawPhasePicker(font, screen, elapsed);
-            DrawFooter(font, "< > CYCLE · 1-4 ANIM · ESC BACK");
+            DrawFooter(font, "< > CYCLE · 1-6 ANIM · ESC BACK");
         }
         else
         {
@@ -40,7 +40,8 @@ internal static class TestRenderer
 
     // --- Animation phase picker for the boss rig (bottom-left of the panel) ---
     private static readonly string[] PhaseNames =
-        { "0 IDLE", "1 THREAT DISPLAY", "2 CLAMPING", "3 PURSUIT" };
+        { "0 IDLE", "1 THREAT DISPLAY", "2 CLAMPING", "3 PURSUIT",
+          "4 LANCE CHARGE", "5 LANCE FIRE" };
 
     private static void DrawPhasePicker(Font font, TestScreen screen, float elapsed)
     {

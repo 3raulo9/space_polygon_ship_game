@@ -829,6 +829,199 @@ public static class SfxSynth
         };
     }
 
+    // --- The lance: charge, warn, fire ---------------------------------------
+
+    /// <summary>
+    /// The crystal spinning up to fire — the sound of the charge, voiced once at the
+    /// start and shaped by its own envelope across the whole wind-up.
+    ///
+    /// A laser charging and a thing <em>spinning</em> are two different sounds, and
+    /// this has to be both. The charge is the pitch glide: a saw climbing better than
+    /// two octaves, never once sagging. The spin is the tremolo — the level chopped
+    /// dozens of times a second, which is what a rotating emitter does to a tone and
+    /// is the same trick the leg servos are built on. Under it a near-unison detune
+    /// beats against the fundamental so the climb sounds like it is being forced
+    /// rather than played, and the filter opens the whole way up so the top of the
+    /// charge is the brightest, nastiest moment in it.
+    /// </summary>
+    public static Params BeamCharge(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(85f, 130f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = Range(2.5f, 2.75f),            // spans the charge window
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(7f, 11f),       // a long, unbroken climb
+
+            Attack = Range(0.15f, 0.25f),           // spools up; no percussive front
+            Sustain = Range(0.55f, 0.7f),
+            Decay = Range(0.12f, 0.22f),            // still going when the shot lands
+
+            // The rotation. Fast enough to read as a rotor rather than a wobble, and
+            // deep enough that you hear each pass of the emitter.
+            TremoloDepth = Range(0.45f, 0.7f),
+            TremoloSpeed = Range(22f, 34f),
+
+            Duty = Range(0.2f, 0.45f),
+            DutySweep = Range(-0.6f, 0.6f),
+
+            VibratoDepth = Range(0.01f, 0.03f),     // a machine holds its pitch
+            VibratoSpeed = Range(16f, 30f),
+
+            Detune = Range(1.008f, 1.028f),         // near-unison: the forced grind
+            DetuneGain = Range(0.55f, 0.8f),
+
+            LpCutoff = Range(0.35f, 0.55f),
+            LpResonance = Range(0.35f, 0.65f),
+            LpSweep = 1f + Range(0.000006f, 0.000014f),  // opens as it fills
+            HpCutoff = Range(0.005f, 0.02f),
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(1, 4),
+            Volume = 0.6f,                          // a bed under the warnings
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// One of the three warnings that punctuate the charge — the synth layer voiced
+    /// alongside the bank's alarm clip. <paramref name="step"/> is which of the three
+    /// this is (0, 1, 2), and it lifts the whole beep a clear interval each time.
+    ///
+    /// That climb is doing the actual work: three identical beeps read as a repeating
+    /// alert, which the player learns to ignore, while three that step upward read as
+    /// a countdown running out — you know without being told that there is a fourth
+    /// thing coming and that it is not a beep. Short, hard-edged and unfiltered so
+    /// each one cuts through the charge droning underneath it.
+    /// </summary>
+    public static Params WarningBeep(Random rng, int step)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        // Roughly a fourth per step: far enough apart to hear as a climb rather than
+        // as the same note drifting.
+        float baseF = Range(620f, 720f) * MathF.Pow(1.34f, step);
+
+        return new Params
+        {
+            Wave = Osc.Square,                      // flat and synthetic: an instrument panel
+            Length = Range(0.16f, 0.22f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.0f, 1.06f),   // near-flat: a tone, not a chirp
+
+            Attack = 0.01f,                         // instantaneous
+            Sustain = Range(0.55f, 0.7f),
+            Decay = Range(0.25f, 0.4f),
+
+            Duty = Range(0.2f, 0.35f),              // thin and piercing
+
+            Detune = Range(1.49f, 1.51f),           // a fifth: harmonically "correct"
+            DetuneGain = Range(0.4f, 0.6f),         // and therefore clearly an alarm
+
+            LpCutoff = Range(0.8f, 1f),             // nothing softens it
+            HpCutoff = Range(0.03f, 0.07f),
+
+            CrushBits = rng.Next(5, 9),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.62f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The beam itself: a five-second choral tone, and deliberately the only
+    /// <em>beautiful</em> sound in the entire bank. Everything else the Crab-Core
+    /// makes is crushed, detuned and sick; the thing that actually kills you sings.
+    /// That inversion is the point — the attack should feel like a judgement rather
+    /// than an attack.
+    ///
+    /// Built as pure sine with no bit-crush at all (nothing else here is), a very
+    /// slow swell in and out, and a detune only a few cents off unison so the two
+    /// voices drift in and out of phase across the burn like a held choir. The slow
+    /// shallow tremolo is the shimmer. Voiced together with
+    /// <see cref="BeamChoir"/> a fifth above it.
+    /// </summary>
+    public static Params BeamAngelic(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(300f, 360f);
+        return new Params
+        {
+            Wave = Osc.Sine,                        // pure: no harmonics to sound harsh
+            Length = 5f,                            // exactly the length of the burn
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.0f, 1.04f),   // barely moves: a held note
+
+            Attack = Range(0.06f, 0.1f),            // arrives with the beam
+            Sustain = Range(0.7f, 0.8f),
+            Decay = Range(0.12f, 0.22f),            // and fades as it cuts out
+
+            TremoloDepth = Range(0.12f, 0.22f),     // the shimmer
+            TremoloSpeed = Range(5f, 8f),
+
+            VibratoDepth = Range(0.004f, 0.01f),    // a voice, not a siren
+            VibratoSpeed = Range(4.5f, 6.5f),
+
+            Detune = Range(1.002f, 1.006f),         // cents apart: a chorus, not an interval
+            DetuneGain = Range(0.7f, 0.9f),
+
+            LpCutoff = 1f,                          // wide open; a sine needs no filtering
+            HpCutoff = 0f,
+
+            CrushBits = 0,                          // the one clean sound in the game
+            CrushRate = 0,
+            Volume = 0.55f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The upper voice of the beam, a fifth above <see cref="BeamAngelic"/> and
+    /// quieter. A single held sine is a test tone; two in a consonant interval is a
+    /// chord, and that is the whole difference between "a beam is on" and something
+    /// that sounds like it is being sung at you. Kept under the root so the pair
+    /// reads as one voice with an overtone rather than as two notes.
+    /// </summary>
+    public static Params BeamChoir(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(300f, 360f) * 1.5f;     // the fifth
+        return new Params
+        {
+            Wave = Osc.Sine,
+            Length = 5f,
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.0f, 1.03f),
+
+            Attack = Range(0.2f, 0.32f),            // swells in behind the root
+            Sustain = Range(0.55f, 0.65f),
+            Decay = Range(0.15f, 0.25f),
+
+            TremoloDepth = Range(0.2f, 0.35f),
+            TremoloSpeed = Range(3f, 5f),           // slower than the root: they drift
+
+            Detune = Range(2.0f, 2.005f),           // an octave over the fifth
+            DetuneGain = Range(0.3f, 0.45f),
+
+            LpCutoff = 1f,
+            HpCutoff = Range(0.01f, 0.03f),
+
+            CrushBits = 0,
+            CrushRate = 0,
+            Volume = 0.34f,                         // clearly the upper voice
+            Seed = rng.Next(),
+        };
+    }
+
     // --- .wav header helpers --------------------------------------------------
 
     private static void WriteTag(byte[] b, int at, string tag)

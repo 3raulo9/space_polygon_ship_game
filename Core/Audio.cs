@@ -55,6 +55,8 @@ public static class Audio
             _stompVoices[i] = Raylib.LoadSoundAlias(_stomp);
         for (int i = 0; i < CoreHitVoices; i++)
             _coreHits[i] = Raylib.LoadSoundAlias(_hit);
+        for (int i = 0; i < BeamWarnVoices; i++)
+            _beamWarns[i] = Raylib.LoadSoundAlias(_warning);
 
         // The rotor bed, synthesised once per session so each run's crab hums at a
         // slightly different pitch and throb. Rolled here rather than per boss: it
@@ -113,6 +115,63 @@ public static class Audio
     public static void PlayWarning()
     {
         if (_enabled) Raylib.PlaySound(_warning);
+    }
+
+    // --- The Crab-Core's lance: charge, three warnings, then the beam ---------
+
+    /// <summary>
+    /// The boss's crystal spinning up to fire. One shot, fired as the charge begins —
+    /// <see cref="SfxSynth.BeamCharge"/>'s own envelope carries it across the whole
+    /// wind-up, so nothing has to drive it per-frame.
+    /// </summary>
+    public static void PlayBeamCharge()
+    {
+        if (_enabled) PlaySynth(SfxSynth.BeamCharge(_sfxRng));
+    }
+
+    /// <summary>Voices for the beam's warnings. Aliases of warning.wav so the three
+    /// can overlap each other and, more importantly, so re-pitching them never
+    /// touches the pitch of the low-shield alarm, which shares the source clip and
+    /// must always sound the same.</summary>
+    private const int BeamWarnVoices = 3;
+    private static readonly Sound[] _beamWarns = new Sound[BeamWarnVoices];
+
+    /// <summary>
+    /// One of the three warnings that count the charge down. <paramref name="step"/>
+    /// is which it is (0, 1, 2), and both layers climb with it: the bank's alarm clip
+    /// is re-pitched a clear step higher each time — the slide up — under a
+    /// synthesised beep (<see cref="SfxSynth.WarningBeep"/>) that steps with it.
+    ///
+    /// The pairing is what makes it land: the clip alone is a sound the player has
+    /// heard all game meaning "your shield is low", and hearing it here would read as
+    /// the wrong alarm. Sliding it upward and welding a synthetic tone to it turns it
+    /// into something the boss is doing rather than something the craft is reporting.
+    /// </summary>
+    public static void PlayBeamWarning(int step)
+    {
+        if (!_enabled) return;
+        int i = Math.Clamp(step, 0, BeamWarnVoices - 1);
+
+        Sound voice = _beamWarns[i];
+        Raylib.SetSoundPitch(voice, 1f + i * 0.32f);   // the slide up
+        Raylib.SetSoundVolume(voice, 0.85f);
+        Raylib.PlaySound(voice);
+
+        PlaySynth(SfxSynth.WarningBeep(_sfxRng, i));
+    }
+
+    /// <summary>
+    /// The beam firing: two clean synthesised voices a fifth apart
+    /// (<see cref="SfxSynth.BeamAngelic"/> and <see cref="SfxSynth.BeamChoir"/>),
+    /// both exactly as long as the burn, so the sound ends when the light does. The
+    /// only consonant, un-crushed thing in the bank — see the recipes for why the
+    /// lethal attack is the pretty one.
+    /// </summary>
+    public static void PlayBeamFire()
+    {
+        if (!_enabled) return;
+        PlaySynth(SfxSynth.BeamAngelic(_sfxRng));
+        PlaySynth(SfxSynth.BeamChoir(_sfxRng));
     }
 
     // --- Synthesised cues: built from nothing, fresh on every trigger ---------
@@ -566,6 +625,7 @@ public static class Audio
         for (int i = 0; i < BossBoomCount; i++) Raylib.UnloadSoundAlias(_bossBooms[i]);
         for (int i = 0; i < _stompVoices.Length; i++) Raylib.UnloadSoundAlias(_stompVoices[i]);
         for (int i = 0; i < CoreHitVoices; i++) Raylib.UnloadSoundAlias(_coreHits[i]);
+        for (int i = 0; i < BeamWarnVoices; i++) Raylib.UnloadSoundAlias(_beamWarns[i]);
         Raylib.UnloadSound(_blip);
         Raylib.UnloadSound(_detonation);
         Raylib.UnloadSound(_explosion);
