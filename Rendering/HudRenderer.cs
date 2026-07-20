@@ -47,6 +47,37 @@ internal static class HudRenderer
 
         DrawBars(p);
         DrawRadar(world, p);
+        DrawAimGuide(p);
+    }
+
+    // --- Aim guide: a small firing scope at the bottom-centre ---
+
+    // A low, flat aim guide near the bottom of the screen: a short horizontal
+    // baseline with two shallow lines slanting inward to the centre — the line of
+    // fire, drawn wide and low so it never fights the top HUD strip and reads as
+    // "shots go straight ahead". Kept deliberately short in height.
+    private const int AimY = H - 12;     // the flat baseline's height
+    private const int AimHalf = 34;      // half-width of the baseline
+    private const int AimRise = 7;       // how far the inner slants climb (kept low)
+    private const int AimGap = 5;        // half-gap left open at the centre
+
+    private static void DrawAimGuide(PlayerTank p)
+    {
+        int cx = W / 2;
+
+        // Rounds run dry — dim the guide so it reads as "can't fire" rather than
+        // lying about a shot that won't happen.
+        Color line = p.Ammo > 0 ? new Color(235, 245, 255, 210)
+                                 : new Color(235, 245, 255, 70);
+
+        // The flat baseline, split by a small gap at the centre.
+        Raylib.DrawLine(cx - AimHalf, AimY, cx - AimGap, AimY, line);
+        Raylib.DrawLine(cx + AimGap, AimY, cx + AimHalf, AimY, line);
+
+        // Two shallow slants rising from the baseline's inner ends toward the
+        // centre — pointing the eye at the line of fire without standing tall.
+        Raylib.DrawLine(cx - AimGap, AimY, cx, AimY - AimRise, line);
+        Raylib.DrawLine(cx + AimGap, AimY, cx, AimY - AimRise, line);
     }
 
     // --- Vital bars: three vertical gauges, letter-labelled S / A / H ---
