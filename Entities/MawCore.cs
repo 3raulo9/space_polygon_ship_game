@@ -262,6 +262,11 @@ public sealed class MawCore
         _stateTime += dt;
         JustCaught = false;
 
+        // Drift onto the player across the seam the short way: reason about their
+        // nearest image on the torus so a mouth by the world's edge hunts a player just
+        // over it. Its own position is folded back into the wrap window below.
+        playerPos = Torus.NearestImage(playerPos, Position);
+
         // The crystal and the teeth turn no matter what the brain is doing — right
         // through the death glitch, where the rig is coming apart around them.
         _crystalSpin += CrystalSpinRate * dt;
@@ -284,6 +289,10 @@ public sealed class MawCore
             case State.Dying: UpdateDying(dt); break;
             case State.Dead: return false;
         }
+
+        // Fold its drift back into the wrap window; the renderer re-images it near the
+        // player, and everything hanging off it is placed from this same Position.
+        Position = Torus.Wrap(Position);
         return spat;
     }
 
@@ -505,7 +514,7 @@ public sealed class MawCore
         if (!Alive) return false;
         float band = BodyY + MawRig.CrystalLocalY * MawRig.Scale;
         if (MathF.Abs(shotHeight - band) > MawRig.HitVertical) return false;
-        return Vector2.DistanceSquared(shotXZ, Position) <= MawRig.HitRadius * MawRig.HitRadius;
+        return Torus.DistanceSquared(shotXZ, Position) <= MawRig.HitRadius * MawRig.HitRadius;
     }
 
     /// <summary>

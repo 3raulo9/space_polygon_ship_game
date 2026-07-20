@@ -115,7 +115,9 @@ internal static class HudRenderer
         foreach (var e in world.Enemies)
         {
             if (!e.Alive) continue;
-            Vector2 rel = e.Position - p.Position;
+            // Shortest offset across the torus, so a contact just over the world's seam
+            // reads as close on the radar rather than clamped to the far rim.
+            Vector2 rel = Torus.Delta(p.Position, e.Position);
             // World is (X east, Y=Z north). Rotate so heading points up (-screenY).
             float rx = rel.X * c - rel.Y * s;
             float ry = rel.X * s + rel.Y * c;
@@ -137,7 +139,7 @@ internal static class HudRenderer
         // resupply: charged green for batteries, flag-yellow for stray rounds.
         foreach (var pk in world.Pickups)
         {
-            Vector2 rel = pk.Position - p.Position;
+            Vector2 rel = Torus.Delta(p.Position, pk.Position);
             float rx = rel.X * c - rel.Y * s;
             float ry = rel.X * s + rel.Y * c;
 

@@ -127,8 +127,9 @@ public sealed class CrabRenderer
     /// middle. Drawn as round cylinders rather than the game's flat-shaded facets on
     /// purpose: light is the one thing out here that isn't built out of polygons.
     /// </summary>
-    public void DrawLance(Entities.CrabCore boss)
-        => DrawLance(boss.BeamOrigin, boss.BeamDirection, boss.ChargeProgress,
+    public void DrawLance(Entities.CrabCore boss, Vector2 wrapShift = default)
+        => DrawLance(boss.BeamOrigin + new Vector3(wrapShift.X, 0f, wrapShift.Y),
+            boss.BeamDirection, boss.ChargeProgress,
             boss.BeamActive ? boss.BeamProgress : -1f);
 
     /// <summary>

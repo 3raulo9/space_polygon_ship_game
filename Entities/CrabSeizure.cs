@@ -65,7 +65,7 @@ public sealed class CrabSeizure : ICinematicView
         => boss.Alive
         && boss.Phase == CrabCore.State.Pursuit
         && !player.IsAirborne
-        && Vector2.DistanceSquared(player.Position, boss.Position) <= GrabRadius * GrabRadius;
+        && Torus.DistanceSquared(player.Position, boss.Position) <= GrabRadius * GrabRadius;
 
     // --- Geometry of the hold -------------------------------------------------
 
@@ -210,7 +210,12 @@ public sealed class CrabSeizure : ICinematicView
         _boss = boss;
         _player = player;
 
-        _fromPos = player.Position;
+        // The whole cinematic is played out around the boss in absolute coordinates —
+        // the craft is dragged from where it stood into the grip. If the grab happened
+        // across the world's seam, the craft's raw coordinates sit a world-width from
+        // the boss, so take its nearest image on the torus as the start point; the drag
+        // and every framing decision below then stay local to the boss.
+        _fromPos = Torus.NearestImage(player.Position, boss.Position);
         _fromHeight = player.Height;
         _fromHeading = player.Heading;
 

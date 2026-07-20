@@ -138,14 +138,16 @@ public sealed class MawRenderer
     /// lengthening dark blob and a genuinely stretched droplet are the same handful
     /// of pixels, and one of them costs nothing.
     /// </summary>
-    public void DrawDrips(MawCore maw, Vector3 cameraPos)
+    public void DrawDrips(MawCore maw, Vector3 cameraPos, Vector2 wrapShift = default)
     {
         foreach (var d in maw.Drips)
         {
             if (!d.Active) continue;
             // Older beads are further into their fall and therefore longer and thinner.
             float stretch = 0.75f + (1f - d.LifeFrac) * 0.9f;
-            var xz = new Vector2(d.Position.X, d.Position.Z);
+            // Shifted by the same wrap offset the body was, so the drool stays under the
+            // re-imaged mouth when it is being drawn across the world's seam.
+            var xz = new Vector2(d.Position.X + wrapShift.X, d.Position.Z + wrapShift.Y);
             _ichor.Draw(xz, d.Spin * d.LifeFrac, d.Position.Y, cameraPos, stretch,
                 Palette.MawIchor);
         }
@@ -157,19 +159,21 @@ public sealed class MawRenderer
     /// light is the one thing out here that is not built out of polygons, so anything
     /// glowing should visibly break the model's own rules.
     /// </summary>
-    public void DrawLasers(MawCore maw, Vector3 cameraPos)
+    public void DrawLasers(MawCore maw, Vector3 cameraPos, Vector2 wrapShift = default)
     {
         foreach (var l in maw.Lasers)
         {
             if (!l.Active) continue;
-            var xz = new Vector2(l.Position.X, l.Position.Z);
+            // Re-imaged by the same wrap offset as the mouth that spat them.
+            Vector3 pos = l.Position + new Vector3(wrapShift.X, 0f, wrapShift.Y);
+            var xz = new Vector2(pos.X, pos.Z);
             // Both kept small on purpose. These are meant to read as spat sparks, not
             // as cannon rounds: a halo wide enough to be impressive also reads as a
             // projectile worth respecting, and the whole design of the lasers is that
             // they are a nuisance keeping you moving while the mouth does the killing.
-            Raylib.DrawSphereEx(l.Position, 0.22f, 6, 6,
+            Raylib.DrawSphereEx(pos, 0.22f, 6, 6,
                 new Color(Palette.MawLaser.R, Palette.MawLaser.G, Palette.MawLaser.B, (byte)70));
-            _laser.Draw(xz, 0f, l.Position.Y, cameraPos, 0.65f, Palette.MawLaser);
+            _laser.Draw(xz, 0f, pos.Y, cameraPos, 0.65f, Palette.MawLaser);
         }
     }
 

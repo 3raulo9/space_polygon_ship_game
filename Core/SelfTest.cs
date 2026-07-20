@@ -14,6 +14,7 @@ public static class SelfTest
     public static int Run()
     {
         int failures = 0;
+        failures += Check("the world is a finite wrap-around torus", WorldIsAFiniteTorus);
         failures += Check("player can destroy an enemy", PlayerKillsEnemy);
         failures += Check("enemy can damage the player", EnemyDamagesPlayer);
         failures += Check("ammo is finite", AmmoDepletes);
@@ -50,6 +51,35 @@ public static class SelfTest
         }
         Console.WriteLine($"  FAIL  {name}: {err}");
         return 1;
+    }
+
+    private static string? WorldIsAFiniteTorus()
+    {
+        // Drive off one edge and you come back on the opposite one — the map is not
+        // infinite. A point a full world-width along any axis is literally the same
+        // point, so its wrapped distance is zero.
+        if (Torus.Distance(new Vector2(12f, -30f), new Vector2(12f + Torus.Size, -30f)) > 0.001f)
+            return "a full world-width apart isn't the same place";
+
+        // Wrapping always folds a coordinate back into the [-Half, Half) play window,
+        // so positions can never run off to infinity.
+        float w = Torus.WrapCoord(Torus.Half + 5f);
+        if (w < -Torus.Half || w >= Torus.Half)
+            return $"a wrapped coordinate ({w:F1}) fell outside the world window";
+
+        // The opposite edges are stitched together: just over the top edge is a couple
+        // of units below the bottom edge, not a whole arena away.
+        float seam = Torus.Distance(new Vector2(0f, Torus.Half - 1f),
+                                    new Vector2(0f, -Torus.Half + 1f));
+        if (seam > 3f) return $"the seam isn't stitched — edge to edge measured {seam:F1}";
+
+        // And a craft driven straight past the world's edge reappears wrapped, still
+        // in the window, rather than sailing off forever.
+        var player = new Entities.PlayerTank(new Vector2(Torus.Half - 2f, 0f));
+        player.Position = Torus.Wrap(player.Position + new Vector2(6f, 0f));
+        if (player.Position.X > 0f)
+            return "crossing the +X edge didn't wrap the craft to the far side";
+        return null;
     }
 
     private static string? PlayerKillsEnemy()

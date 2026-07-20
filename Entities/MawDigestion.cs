@@ -154,7 +154,11 @@ public sealed class MawDigestion : ICinematicView
         _maw = maw;
         _player = player;
 
-        _fromPos = player.Position;
+        // Swallowed across the world's seam, the craft's raw coordinates would sit a
+        // world-width from the mouth and the haul-up would drag it clear across the
+        // arena. Start the swallow from its nearest image on the torus instead, so the
+        // pull into the throat stays local to the body doing the pulling.
+        _fromPos = Torus.NearestImage(player.Position, maw.Position);
         _fromHeight = player.Height;
 
         player.Captured = true;

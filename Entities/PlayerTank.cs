@@ -1,4 +1,5 @@
 using System.Numerics;
+using VoidTanks.Core;
 using VoidTanks.Input;
 
 namespace VoidTanks.Entities;
@@ -143,6 +144,13 @@ public sealed class PlayerTank
         // always along the facing axis).
         var dir = new Vector2(MathF.Sin(Heading), MathF.Cos(Heading));
         Position += dir * _speed * dt;
+
+        // The world is a torus: drive off one edge and you come back on the opposite
+        // one. Fold the craft back into the wrap window every tick — the jump drift
+        // above has already been applied, so this catches all planar motion. Skipped
+        // while a cinematic has the wheel (it returns early above), so a set piece can
+        // write positions off the grid without this fighting it.
+        Position = Torus.Wrap(Position);
     }
 
     /// <summary>
@@ -197,7 +205,7 @@ public sealed class PlayerTank
         // Random bearing and distance — a genuine gamble, not a controlled blink.
         float angle = Random.Shared.NextSingle() * MathF.Tau;
         float dist = TeleportRange * (0.4f + 0.6f * Random.Shared.NextSingle());
-        Position += new Vector2(MathF.Sin(angle), MathF.Cos(angle)) * dist;
+        Position = Torus.Wrap(Position + new Vector2(MathF.Sin(angle), MathF.Cos(angle)) * dist);
 
         Hyper -= HyperspaceCost;
         _speed = 0f;        // the warp kills momentum — you arrive dead-stopped

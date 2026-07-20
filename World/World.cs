@@ -247,12 +247,12 @@ public sealed class World
             foreach (var f in boss.Footfalls)
             {
                 Debris.FootPuff(new Vector3(f.Pos.X, 0f, f.Pos.Y));
-                Audio.PlayFootstep(f.Leg, Vector2.Distance(f.Pos, Player.Position));
+                Audio.PlayFootstep(f.Leg, Torus.Distance(f.Pos, Player.Position));
             }
 
             // Its machinery hums the whole time it exists, spooling up the moment it
             // notices the player. Fed every tick; Audio eases the rate and level.
-            Audio.SetBossHum(true, Vector2.Distance(boss.Position, Player.Position), boss.Agitation);
+            Audio.SetBossHum(true, Torus.Distance(boss.Position, Player.Position), boss.Agitation);
 
             UpdateBeam(boss, dt);
 
@@ -312,7 +312,10 @@ public sealed class World
             return;
         }
 
-        var target = new Vector3(Player.Position.X, Player.Height + 1f, Player.Position.Y);
+        // Measure the player against the boss's nearest image across the torus, so a
+        // beam fired near the world's edge still burns the craft standing just over it.
+        Vector2 nearPlayer = Torus.NearestImage(Player.Position, boss.Position);
+        var target = new Vector3(nearPlayer.X, Player.Height + 1f, nearPlayer.Y);
         Vector3 from = boss.BeamOrigin;
         Vector3 dir = boss.BeamDirection;
 
@@ -394,9 +397,9 @@ public sealed class World
         }
 
         if (maw.Update(dt, Player.Position, Player.Height))
-            Audio.PlayMawSpit(Vector2.Distance(maw.Position, Player.Position));
+            Audio.PlayMawSpit(Torus.Distance(maw.Position, Player.Position));
 
-        float dist = Vector2.Distance(maw.Position, Player.Position);
+        float dist = Torus.Distance(maw.Position, Player.Position);
         Audio.SetMawHover(true, dist, maw.Agitation);
 
         // The teeth and the crystal, each on their own unrelated clock so the two
@@ -438,7 +441,11 @@ public sealed class World
         // must not be shot at by anything else either.
         if (Player.Captured) return;
 
-        var craft = new Vector3(Player.Position.X, Player.Height + 1f, Player.Position.Y);
+        // The lasers live in absolute coordinates around the maw; measure the craft
+        // against the maw's nearest image so a bolt still bites a player just over the
+        // seam from it.
+        Vector2 nearPlayer = Torus.NearestImage(Player.Position, maw.Position);
+        var craft = new Vector3(nearPlayer.X, Player.Height + 1f, nearPlayer.Y);
         float reach = MawCore.LaserRadius + PlayerTank.Radius;
 
         var lasers = maw.Lasers;
@@ -585,7 +592,7 @@ public sealed class World
         foreach (var pk in Pickups)
         {
             pk.Update(dt);
-            if (Vector2.DistanceSquared(pk.Position, Player.Position) <= reachSq)
+            if (Torus.DistanceSquared(pk.Position, Player.Position) <= reachSq)
                 Collect(pk);
         }
     }
@@ -641,10 +648,10 @@ public sealed class World
     {
         if (list.Count == 0) return;
         int farthest = 0;
-        float best = Vector2.DistanceSquared(posOf(list[0]), Player.Position);
+        float best = Torus.DistanceSquared(posOf(list[0]), Player.Position);
         for (int i = 1; i < list.Count; i++)
         {
-            float d = Vector2.DistanceSquared(posOf(list[i]), Player.Position);
+            float d = Torus.DistanceSquared(posOf(list[i]), Player.Position);
             if (d > best) { best = d; farthest = i; }
         }
         list.RemoveAt(farthest);
@@ -654,7 +661,9 @@ public sealed class World
     {
         float angle = Random.Shared.NextSingle() * MathF.Tau;
         float dist = minDist + Random.Shared.NextSingle() * (maxDist - minDist);
-        return origin + new Vector2(MathF.Sin(angle), MathF.Cos(angle)) * dist;
+        // Fold back into the wrap window: a bearing past the world's edge lands on the
+        // opposite side of the torus, which the renderer re-images near the player.
+        return Torus.Wrap(origin + new Vector2(MathF.Sin(angle), MathF.Cos(angle)) * dist);
     }
 
     /// <summary>
@@ -875,7 +884,7 @@ public sealed class World
     {
         var origin = new Vector3(p.Position.X, MathF.Max(0.4f, p.Height), p.Position.Y);
         Debris.Burst(origin, Palette.Flag, elite: false);
-        Audio.PlayExplosionAt(Vector2.Distance(p.Position, Player.Position));
+        Audio.PlayExplosionAt(Torus.Distance(p.Position, Player.Position));
     }
 
     /// <summary>
@@ -922,5 +931,5 @@ public sealed class World
     }
 
     private static bool WithinHit(Vector2 a, Vector2 b, float radius)
-        => Vector2.DistanceSquared(a, b) <= radius * radius;
+        => Torus.DistanceSquared(a, b) <= radius * radius;
 }
