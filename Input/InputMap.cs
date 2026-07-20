@@ -40,6 +40,24 @@ public static class InputMap
 
     public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
 
+    // 'E' opens and closes the inventory / crafting panel. A just-pressed edge so a
+    // held key doesn't flap the panel open and shut every frame.
+    public static bool InventoryToggle => Raylib.IsKeyPressed(KeyboardKey.E);
+
+    /// <summary>
+    /// The four equip slots, wired to the physical R / T / Y / U row above the
+    /// movement keys. Returns which one was just pressed (0..3) or -1 for none — the
+    /// world throws whatever that slot holds. Just-pressed so a held key throws once.
+    /// </summary>
+    public static int WeaponSlotPressed()
+    {
+        if (Raylib.IsKeyPressed(KeyboardKey.R)) return 0;
+        if (Raylib.IsKeyPressed(KeyboardKey.T)) return 1;
+        if (Raylib.IsKeyPressed(KeyboardKey.Y)) return 2;
+        if (Raylib.IsKeyPressed(KeyboardKey.U)) return 3;
+        return -1;
+    }
+
     // F11 toggles borderless fullscreen. Fixed (never rebindable) and read from
     // every screen, so it works on the menu just as well as mid-run.
     public static bool FullscreenPressed => Raylib.IsKeyPressed(KeyboardKey.F11);

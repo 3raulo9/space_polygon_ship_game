@@ -1022,6 +1022,95 @@ public static class SfxSynth
         };
     }
 
+    // --- The thrown CRAB CORE's blast ----------------------------------------
+    // The boss's beam is the one clean, sung sound in the game. A *thrown* core is that
+    // sound gone wrong: the same held voices, but dragged down, detuned into a dissonant
+    // interval and welded to two crushed, mechanical layers — a low grinding drone and a
+    // metallic clatter — so the star reads as the crab's attack ripped out of the crab
+    // and misfiring in every direction at once. Creepier and more machined, on purpose.
+
+    /// <summary>
+    /// The low grind under the blast: a bit-crushed, detuned saw dragged downward over
+    /// the burn. Dissonant and mechanical where the boss's beam is consonant and pure —
+    /// this is the layer that makes the star sound broken.
+    /// </summary>
+    public static Params CrabBlastGrind(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(70f, 95f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = 1.3f,                          // the length of the star's burn
+
+            StartFreq = baseF * Range(1.1f, 1.3f),
+            EndFreq = baseF * Range(0.6f, 0.8f),    // sags downward as it fires
+
+            Attack = 0.02f,
+            Sustain = 0.6f,
+            Decay = 0.38f,
+
+            Duty = 0.5f,
+            DutySweep = Range(-0.3f, -0.1f),        // hollows out as it goes
+
+            TremoloDepth = Range(0.35f, 0.55f),     // a heavy mechanical chop
+            TremoloSpeed = Range(14f, 22f),
+
+            Detune = Range(1.45f, 1.52f),           // a queasy, dissonant second voice
+            DetuneGain = Range(0.6f, 0.8f),
+
+            LpCutoff = Range(0.5f, 0.7f),
+            LpResonance = Range(0.2f, 0.4f),
+            LpSweep = 0.9999f,                       // closes slowly, darkening the tail
+
+            CrushBits = 5,                           // machined, degraded
+            CrushRate = 3,
+            Volume = 0.6f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The metallic clatter riding on top: crushed noise-and-square, high and fast, like
+    /// the core's housing rattling itself apart as it discharges. Short — a burst at the
+    /// front of the blast rather than a held layer.
+    /// </summary>
+    public static Params CrabBlastMetal(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Square,
+            Length = Range(0.7f, 0.95f),
+
+            StartFreq = Range(520f, 700f),
+            EndFreq = Range(180f, 260f),             // clatters downward
+
+            Attack = 0.01f,
+            Sustain = 0.3f,
+            Decay = 0.5f,
+
+            Duty = Range(0.15f, 0.3f),               // thin, nasal
+            DutySweep = Range(0.2f, 0.5f),
+
+            TremoloDepth = Range(0.5f, 0.75f),       // a fast metallic stutter
+            TremoloSpeed = Range(28f, 44f),
+
+            Detune = Range(1.33f, 1.42f),            // dissonant again
+            DetuneGain = Range(0.4f, 0.6f),
+
+            LpCutoff = Range(0.7f, 0.9f),
+            HpCutoff = Range(0.05f, 0.12f),          // thinned so it sits over the grind
+
+            CrushBits = 4,                           // hard degradation — the wrongest layer
+            CrushRate = 4,
+            Volume = 0.4f,
+            Seed = rng.Next(),
+        };
+    }
+
     // --- The Maw-Core: a hovering mouth --------------------------------------
     // The Crab-Core is a machine and every sound it makes is machined: crushed,
     // geared, mechanical. The Maw-Core is built from the same parts but the half that

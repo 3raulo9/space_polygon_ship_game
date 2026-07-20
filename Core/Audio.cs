@@ -174,6 +174,25 @@ public static class Audio
         PlaySynth(SfxSynth.BeamChoir(_sfxRng));
     }
 
+    /// <summary>
+    /// A thrown CRAB CORE going off: the boss's own sung beam voices, layered under two
+    /// crushed mechanical layers — a low dissonant grind and a metallic clatter — plus a
+    /// clamp snap at the front, so the radial star reads as the crab's attack torn loose
+    /// and misfiring. Creepier and more machined than the clean lance it echoes.
+    /// </summary>
+    public static void PlayCrabCoreBlast()
+    {
+        if (!_enabled) return;
+        // The sung pair, still present but now buried under the wrongness.
+        PlaySynth(SfxSynth.BeamAngelic(_sfxRng), 0.7f);
+        PlaySynth(SfxSynth.BeamChoir(_sfxRng), 0.6f);
+        // The two degraded layers that make it sound broken.
+        PlaySynth(SfxSynth.CrabBlastGrind(_sfxRng));
+        PlaySynth(SfxSynth.CrabBlastMetal(_sfxRng));
+        // A mechanical snap of the housing as it discharges.
+        PlayClamp();
+    }
+
     // --- Synthesised cues: built from nothing, fresh on every trigger ---------
     // These load no asset. SfxSynth rolls a new recipe each time and renders it to
     // .wav bytes in memory, so the sounds below never repeat themselves.

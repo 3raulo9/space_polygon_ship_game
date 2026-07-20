@@ -2,13 +2,16 @@ using System.Numerics;
 
 namespace VoidTanks.Entities;
 
-/// <summary>What a floating pickup does when the craft drives over it.</summary>
+/// <summary>What a floating pickup is when the craft drives over it — now stowed into
+/// the inventory rather than applied on the spot.</summary>
 public enum PickupKind
 {
-    /// <summary>A polygon battery cell — recharges shield and the Hyper reserve.</summary>
+    /// <summary>A polygon battery cell — one battery item for the pack.</summary>
     Battery,
-    /// <summary>A stray round — restocks ammo.</summary>
+    /// <summary>A stray round — a random handful of bullets for the pack.</summary>
     Ammo,
+    /// <summary>A shard of a slain Crab-Core — three craft a CRAB CORE.</summary>
+    CrabFragment,
 }
 
 /// <summary>
@@ -32,11 +35,17 @@ public sealed class Pickup
     public float Age;
     private readonly float _phase;
 
+    /// <summary>How many items this pickup yields when collected. Batteries and
+    /// fragments carry one; a stray round carries a random 5–20 bullets, rolled once
+    /// at spawn so the reward is fixed for the life of that particular pickup.</summary>
+    public readonly int Amount;
+
     public Pickup(Vector2 position, PickupKind kind)
     {
         Position = position;
         Kind = kind;
         _phase = Random.Shared.NextSingle() * MathF.Tau;
+        Amount = kind == PickupKind.Ammo ? Random.Shared.Next(5, 21) : 1;
     }
 
     public void Update(float dt) => Age += dt;

@@ -21,6 +21,15 @@ public sealed class World
     /// <summary>Floating salvage scattered on the grid — batteries and stray rounds.</summary>
     public readonly List<Pickup> Pickups = new();
 
+    /// <summary>The player's carried goods — filled by driving over salvage, spent from
+    /// the inventory panel (E). Salvage no longer charges the craft on contact; it is
+    /// stowed here and applied by hand.</summary>
+    public readonly Inventory Inventory = new();
+
+    /// <summary>Live CRAB CORE detonations — each a brief ring of lances raking the
+    /// grid. Rare and short-lived, so a plain list rather than a pool.</summary>
+    public readonly List<CrabCoreBlast> Blasts = new();
+
     /// <summary>The lone Crab-Core boss seeded into the stage, or null. Runs its
     /// own Stalker Protocol against the player independent of the tank combat.</summary>
     public CrabCore? Boss { get; private set; }
@@ -61,10 +70,10 @@ public sealed class World
     // through this line fires warning.wav once — not once per frame below it.
     private const float LowShieldWarning = 0.45f;
 
-    // Floating pickups keep the field stocked: a handful of battery cells and stray
-    // rounds drift on the grid at all times. Each restores 30% of its resource, and
-    // a collected one respawns out in the fog so the supply never runs dry.
-    private const float PickupRefill = 0.30f;
+    // What one battery is worth when spent from the pack: 30% of the shield *and* 30%
+    // of the Hyper reserve. Public so the inventory panel's right-click charge reads
+    // the same figure the salvage used to apply on contact.
+    public const float BatteryChargeFraction = 0.30f;
 
     // --- Dynamic horizon spawning -------------------------------------------------
     // Nothing is pinned to a fixed spot. Hunters, salvage and the rare Crab-Core all
@@ -273,6 +282,7 @@ public sealed class World
         UpdateMaw(dt);
 
         UpdateProjectiles(dt);
+        UpdateCrabBlasts(dt);
         UpdatePickups(dt);
         if (DynamicSpawning) UpdateSpawning(dt);
         Debris.Update(dt);
@@ -589,40 +599,63 @@ public sealed class World
     {
         float reach = PlayerTank.Radius + Pickup.Radius;
         float reachSq = reach * reach;
+        _fragmentToRemove = null;
         foreach (var pk in Pickups)
         {
             pk.Update(dt);
             if (Torus.DistanceSquared(pk.Position, Player.Position) <= reachSq)
                 Collect(pk);
         }
+        // A spent fragment is pulled off the field after the walk so the list isn't
+        // mutated mid-iteration.
+        if (_fragmentToRemove != null) Pickups.Remove(_fragmentToRemove);
     }
 
-    /// <summary>Applies a pickup's charge, sounds the collect, and relocates it.</summary>
+    /// <summary>
+    /// Stows a driven-over pickup into the inventory, sounds the collect, and relocates
+    /// it. Salvage no longer charges the craft on contact — a battery becomes one
+    /// battery item, a stray round a random handful of bullets, a shard one fragment;
+    /// the player spends them from the panel (E). Overflow that won't fit the pack is
+    /// simply lost as the pickup drifts back out to the fog.
+    /// </summary>
     private void Collect(Pickup pk)
     {
-        switch (pk.Kind)
+        ItemKind kind = pk.Kind switch
         {
-            case PickupKind.Battery:
-                // A battery repairs the shield *and* recharges the Hyper reserve.
-                Player.RefillShield(PickupRefill);
-                Player.RefillHyper(PickupRefill);
-                break;
-            case PickupKind.Ammo:
-                Player.RefillAmmo(PickupRefill);
-                break;
-        }
+            PickupKind.Battery      => ItemKind.Battery,
+            PickupKind.CrabFragment => ItemKind.CrabFragment,
+            _                       => ItemKind.Bullet,
+        };
+        Inventory.Add(kind, pk.Amount);
 
         Audio.PlayPickup();
 
         // A small sparkle in the pickup's colour marks the grab, reusing the debris
         // system (cosmetic only — it never touches damage or collision).
-        Color spark = pk.Kind == PickupKind.Battery ? Palette.BatteryCore : Palette.Flag;
+        Color spark = pk.Kind switch
+        {
+            PickupKind.Battery      => Palette.BatteryCore,
+            PickupKind.CrabFragment => Palette.NeonRed,
+            _                       => Palette.Flag,
+        };
         Debris.Burst(new Vector3(pk.Position.X, pk.BobHeight, pk.Position.Y), spark, elite: false);
+
+        // A collected fragment is spent, not endless salvage: drop it from the field
+        // rather than respawning it in the fog. Batteries and rounds keep drifting back.
+        if (pk.Kind == PickupKind.CrabFragment)
+        {
+            _fragmentToRemove = pk;
+            return;
+        }
 
         // Respawn out in the fog around the craft so it drifts back into view later.
         pk.Position = RandomPointAroundPlayer(45f, 100f);
         pk.Age = 0f;
     }
+
+    // A fragment collected this tick, queued for removal after the pickup loop so the
+    // list isn't mutated while it's being walked. Cleared each pass.
+    private Pickup? _fragmentToRemove;
 
     /// <summary>A random point on the plane at [min,max] from the player.</summary>
     /// <summary>
@@ -638,6 +671,27 @@ public sealed class World
         const float Ahead = CrabCore.DetectRadius + 15f;
         Boss = new CrabCore(Player.Position + Player.Forward * Ahead);
     }
+
+    /// <summary>
+    /// Test hatch: hands the player a ready-made CRAB CORE weapon — equipped straight
+    /// into the first empty R/T/Y/U slot so it can be thrown at once, or dropped in the
+    /// pack if all four are taken. Wired to the same 'K' key that plants a Crab-Core, so
+    /// one press both raises the enemy and arms you against it.
+    /// </summary>
+    public void GiveCrabCore()
+    {
+        for (int i = 0; i < Inventory.Weapons.Length; i++)
+        {
+            if (!Inventory.Weapons[i].IsEmpty) continue;
+            Inventory.Weapons[i] = new ItemStack(ItemKind.CrabCore, 1);
+            return;
+        }
+        Inventory.Add(ItemKind.CrabCore, 1);
+    }
+
+    /// <summary>Test hatch: stages a CRAB CORE blast a fixed distance ahead of the
+    /// player, so the capture harness can photograph the cinematic without timing a throw.</summary>
+    public void StageCrabBlastAheadForTest() => StageCrabBlast(Player.Position + Player.Forward * 20f);
 
     private Vector2 RandomPointAroundPlayer(float minDist, float maxDist)
         => PointAround(Player.Position, minDist, maxDist);
@@ -744,17 +798,43 @@ public sealed class World
             SpawnProjectile(origin, dir, fromPlayer: true, grenade: true);
     }
 
+    /// <summary>
+    /// Throws whatever the given equip slot (R/T/Y/U → 0..3) holds. Only the crafted
+    /// CRAB CORE is throwable: it lobs out in front like a grenade and detonates into a
+    /// ring of lances. Spends the item — the slot empties. A no-op for an empty slot or
+    /// a non-throwable item, and never while a set piece owns the craft.
+    /// </summary>
+    public void UseWeaponSlot(int slot)
+    {
+        if (Player.Captured) return;
+        if (slot < 0 || slot >= Inventory.Weapons.Length) return;
+        ref ItemStack w = ref Inventory.Weapons[slot];
+        if (w.IsEmpty || w.Kind != ItemKind.CrabCore) return;
+
+        // Consume one core and lob it from the muzzle along the craft's heading.
+        w.Count--;
+        if (w.Count <= 0) w = ItemStack.Empty;
+
+        Vector2 dir = Player.Forward;
+        Vector2 origin = Player.Position + dir * (PlayerTank.Radius + 0.6f);
+        SpawnProjectile(origin, dir, fromPlayer: true, crabBomb: true);
+    }
+
     private void SpawnProjectile(Vector2 origin, Vector2 dir, bool fromPlayer,
-        bool grenade = false, float launchHeight = Projectile.BoltHeight)
+        bool grenade = false, bool crabBomb = false,
+        float launchHeight = Projectile.BoltHeight)
     {
         foreach (var p in _projectiles)
         {
             if (p.Active) continue;
-            if (grenade) p.FireGrenade(origin, dir, fromPlayer);
+            if (crabBomb) p.FireCrabBomb(origin, dir);
+            else if (grenade) p.FireGrenade(origin, dir, fromPlayer);
             else p.Fire(origin, dir, fromPlayer, launchHeight);
             // The report of a barrel firing — same clip for player and enemy
-            // shots, since both spawn through here.
-            Audio.PlayDetonation();
+            // shots, since both spawn through here. The thrown core gets a heavier
+            // launch thud instead of the light bolt report.
+            if (crabBomb) Audio.PlayThrowWhoosh();
+            else Audio.PlayDetonation();
             return;
         }
         // Pool full: silently drop the shot rather than allocate. Rare.
@@ -772,6 +852,11 @@ public sealed class World
             // fell, the explosion fading with distance.
             if (p.JustExpired && p.IsAirShot && p.FromPlayer)
                 ExplodeAirShot(p);
+
+            // A thrown CRAB CORE that reached the end of its short lob without striking
+            // anything goes off where it landed — the ring of lances erupts there.
+            if (p.JustExpired && p.IsCrabBomb)
+                StageCrabBlast(p.Position);
 
             if (!p.Active) continue;
 
@@ -811,7 +896,9 @@ public sealed class World
                     if (!e.Alive) continue;
                     if (WithinHit(p.Position, e.Position, EnemyTank.Radius))
                     {
-                        if (p.IsGrenade)
+                        if (p.IsCrabBomb)
+                            StageCrabBlast(p.Position); // erupts into the lance ring here
+                        else if (p.IsGrenade)
                             Detonate(p);           // area burst, damages the whole cluster
                         else
                             DamageEnemy(e, PlayerShotDamage);
@@ -913,6 +1000,10 @@ public sealed class World
             Vector2 foot = CrabRig.FootWorldXZ(leg, c, boss.Heading);
             Debris.Burst(new Vector3(foot.X, 1.0f, foot.Y), Palette.CrabChassis, elite: false);
         }
+
+        // The kill leaves a shard of the core behind — a CRAB CORE fragment to collect.
+        // Three of them craft a thrown CRAB CORE of the player's own.
+        Pickups.Add(new Pickup(boss.Position, PickupKind.CrabFragment));
     }
 
     /// <summary>
@@ -932,4 +1023,96 @@ public sealed class World
 
     private static bool WithinHit(Vector2 a, Vector2 b, float radius)
         => Torus.DistanceSquared(a, b) <= radius * radius;
+
+    // --- The thrown CRAB CORE's radial blast -----------------------------------
+
+    /// <summary>Crab-beam-tier damage each lance of the blast deals per tick — enough
+    /// to erase a hunter over the burn and badly hurt an elite.</summary>
+    private const float CrabBlastDamage = BeamDamage;
+
+    /// <summary>How often each lance bites while the star burns — the same cadence the
+    /// boss's own beam uses, so a caught enemy is chewed a few times over the short life
+    /// rather than instantly or once.</summary>
+    private const float CrabBlastTickInterval = BeamTickInterval;
+
+    private float _crabBlastTick;
+
+    /// <summary>
+    /// Stages a CRAB CORE detonation at <paramref name="at"/>: raises the lance ring,
+    /// sounds its creepier, layered echo of the boss's beam, and throws a hot neon
+    /// burst of debris at the centre.
+    /// </summary>
+    private void StageCrabBlast(Vector2 at)
+    {
+        Blasts.Add(new CrabCoreBlast(at));
+        Audio.PlayCrabCoreBlast();
+        Debris.Burst(new Vector3(at.X, CrabCoreBlast.CoreHeight, at.Y), Palette.NeonRed, elite: true);
+        Debris.Burst(new Vector3(at.X, 0.4f, at.Y), Palette.CrabChassis, elite: false);
+    }
+
+    /// <summary>
+    /// Ages the live blasts and bites anything inside their energy field. Now that the
+    /// burst fires in every direction and churns, the damage is a swelling-then-shrinking
+    /// sphere around the core rather than a per-lance ray test: any enemy within the
+    /// blast's current planar reach (which grows with the swell and retracts as it dies)
+    /// takes a bite. Ticked so the damage doesn't scale with the frame rate and a caught
+    /// enemy is worn down across the three seconds.
+    /// </summary>
+    private void UpdateCrabBlasts(float dt)
+    {
+        if (Blasts.Count == 0) return;
+
+        _crabBlastTick -= dt;
+        bool bite = _crabBlastTick <= 0f;
+        if (bite) _crabBlastTick = CrabBlastTickInterval;
+
+        foreach (var blast in Blasts)
+        {
+            blast.Update(dt);
+            if (!bite) continue;
+
+            float field = blast.CurrentDamageRadius;
+            if (field <= 0f) continue;
+
+            float reach = field + EnemyTank.Radius;
+            float reachSq = reach * reach;
+            foreach (var e in Enemies)
+            {
+                if (!e.Alive) continue;
+                // Measured across the torus so a burst near the seam still catches bodies
+                // just over it.
+                if (Torus.DistanceSquared(e.Position, blast.Position) <= reachSq)
+                    DamageEnemy(e, CrabBlastDamage);
+            }
+
+            // The big monsters are fair game too — a thrown core is powerful enough to
+            // bite the Crab-Core's own gem and the Maw-Core's crystal. Both are only
+            // damageable through those weak points normally, but a detonation this close
+            // simply strikes them directly; a killing bite stages the usual death (which,
+            // for the crab, also drops the fragment its own kill would).
+            float bossReach = field + BlastBossMargin;
+            float bossReachSq = bossReach * bossReach;
+
+            if (Boss is { Alive: true } boss
+                && Torus.DistanceSquared(boss.Position, blast.Position) <= bossReachSq)
+            {
+                if (boss.DamageCore(CrabBlastDamage)) DestroyBoss(boss);
+                else Audio.PlayCoreHit(1f - boss.CoreFraction);
+            }
+
+            if (Maw is { Alive: true } maw
+                && Torus.DistanceSquared(maw.Position, blast.Position) <= bossReachSq)
+            {
+                if (maw.DamageCrystal(CrabBlastDamage)) DestroyMaw(maw);
+                else Audio.PlayMawHurt(1f - maw.CrystalFraction);
+            }
+        }
+
+        Blasts.RemoveAll(b => !b.Active);
+    }
+
+    /// <summary>Extra planar slack added to a blast's field when checking the two big
+    /// monsters, whose bodies are far larger than a tank's — so a burst that clearly
+    /// engulfs one connects even when its centre is a few units off the monster's.</summary>
+    private const float BlastBossMargin = 6f;
 }

@@ -19,6 +19,11 @@ public sealed class Game : IDisposable
     private readonly Settings _settings;
     private readonly Menu _menu = new();
     private readonly PauseMenu _pauseMenu = new();
+    private readonly InventoryScreen _inventory = new();
+    // The inventory / crafting panel is a live overlay, not a state: while it's open the
+    // sim keeps running behind it (enemies still hunt, salvage still drifts) — it just
+    // adds mouse-driven item management on top of an ordinary Playing frame.
+    private bool _inventoryOpen;
     private readonly SettingsScreen _settingsScreen;
     private readonly TestScreen _testScreen = new();
     private World.World? _world;
@@ -144,31 +149,58 @@ public sealed class Game : IDisposable
                 continue;
             }
 
-            // In-world Escape no longer bails to the menu — it opens the pause
-            // panel (only Playing reaches here; Menu/Settings/Test handled above).
-            if (InputMap.QuitPressed)
+            // 'E' toggles the inventory overlay. Escape closes it too if it's open;
+            // otherwise Escape opens the pause panel (the world only pauses when the
+            // inventory is *not* up — the panel itself never freezes the sim).
+            if (InputMap.InventoryToggle)
+                SetInventory(!_inventoryOpen);
+            else if (InputMap.QuitPressed)
             {
-                EnterPause();
-                DrawPaused();
-                continue;
+                if (_inventoryOpen)
+                    SetInventory(false);
+                else
+                {
+                    EnterPause();
+                    DrawPaused();
+                    continue;
+                }
             }
 
-            // Debug hatch: 'L' drops one random enemy on the horizon each press.
-            // Polled once per frame (a just-pressed edge), not per fixed step.
-            if (InputMap.DebugSpawnPressed)
-                _world!.SpawnRandomEnemy();
+            // While the panel is up the mouse drives item management and the combat
+            // hotkeys (throw / debug spawns) are held back so a drag can't also lob a
+            // weapon. The sim itself still steps below regardless.
+            if (_inventoryOpen)
+            {
+                _inventory.Update(_world!);
+            }
+            else
+            {
+                // R/T/Y/U throw whatever the matching equip slot holds (the crafted CRAB
+                // CORE). Polled once per frame as a just-pressed edge, like the debug keys.
+                int weaponSlot = InputMap.WeaponSlotPressed();
+                if (weaponSlot >= 0)
+                    _world!.UseWeaponSlot(weaponSlot);
 
-            // 'N' silences the spawn director so the field stops refilling itself;
-            // 'K' parks a dormant Crab-Core straight ahead. Both are testing hatches.
-            if (InputMap.DebugNoSpawnPressed)
-                _world!.DynamicSpawning = !_world.DynamicSpawning;
+                // Debug hatch: 'L' drops one random enemy on the horizon each press.
+                // Polled once per frame (a just-pressed edge), not per fixed step.
+                if (InputMap.DebugSpawnPressed)
+                    _world!.SpawnRandomEnemy();
 
-            if (InputMap.DebugSpawnCrabPressed)
-                _world!.SpawnCrabAhead();
+                // 'N' silences the spawn director so the field stops refilling itself;
+                // 'K' parks a dormant Crab-Core straight ahead. Both are testing hatches.
+                if (InputMap.DebugNoSpawnPressed)
+                    _world!.DynamicSpawning = !_world.DynamicSpawning;
 
-            // 'J' does the same for the hanging mouth.
-            if (InputMap.DebugSpawnMawPressed)
-                _world!.SpawnMawAhead();
+                if (InputMap.DebugSpawnCrabPressed)
+                {
+                    _world!.SpawnCrabAhead();
+                    _world!.GiveCrabCore();   // arm the tester against the thing they just raised
+                }
+
+                // 'J' does the same for the hanging mouth.
+                if (InputMap.DebugSpawnMawPressed)
+                    _world!.SpawnMawAhead();
+            }
 
             // Accumulate real elapsed time and step the sim in fixed increments,
             // so a fast or slow display never changes the physics.
@@ -182,7 +214,9 @@ public sealed class Game : IDisposable
                 _accumulator -= Config.FixedDt;
             }
 
-            Draw();
+            // The live world, with the crafting panel laid over it when it's open.
+            if (_inventoryOpen) DrawInventory();
+            else Draw();
         }
     }
 
@@ -293,6 +327,20 @@ public sealed class Game : IDisposable
     }
 
     /// <summary>
+    /// Opens or closes the live inventory overlay. Opening resets the drag state; closing
+    /// returns any half-held stack to where it came from so nothing is stranded on the
+    /// cursor. The sim is untouched either way — the panel never pauses the world.
+    /// </summary>
+    private void SetInventory(bool open)
+    {
+        if (open == _inventoryOpen) return;
+        if (open) _inventory.Reset();
+        else _inventory.Cancel(_world!);
+        _inventoryOpen = open;
+        Audio.PlayBlip();
+    }
+
+    /// <summary>
     /// Kicks off a screen-to-screen pixel fade. <paramref name="onCrossover"/> runs
     /// once the out phase has fully dissolved (swap state / build or tear down the
     /// world there); <paramref name="from"/> seeds the starting dissolve amount, so
@@ -383,6 +431,7 @@ public sealed class Game : IDisposable
     {
         _world = new World.World();
         _state = GameState.Playing;
+        _inventoryOpen = false;
     }
 
     private void ReturnToMenu()
@@ -392,6 +441,7 @@ public sealed class Game : IDisposable
         _accumulator = 0;
         _pauseBlur = 0f;
         _resuming = false;
+        _inventoryOpen = false;
     }
 
     /// <summary>
@@ -427,6 +477,33 @@ public sealed class Game : IDisposable
             Raylib.TakeScreenshot(_capturePath!);
             return true;
         }
+
+        // Inventory variant: seed a representative pack (a bit of every item, three
+        // fragments loaded in the triangle so the CRAB CORE preview shows, one equipped)
+        // and grab the crafting panel — lets the layout and font be verified headlessly.
+        if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_INV") != null)
+        {
+            var inv = _world!.Inventory;
+            inv.Add(ItemKind.Battery, 4);
+            inv.Add(ItemKind.Bullet, 17);
+            inv.Add(ItemKind.CrabFragment, 2);
+            for (int i = 0; i < Inventory.CraftCount; i++)
+                inv.Craft[i] = new ItemStack(ItemKind.CrabFragment, 1);
+            inv.Weapons[0] = new ItemStack(ItemKind.CrabCore, 1);
+            _menuTime += (float)Config.FixedDt;
+            for (int i = 0; i < 2; i++) { _renderer.DrawInventory(_world!, _inventory, _menuTime); _renderer.Present(); }
+            Raylib.TakeScreenshot(_capturePath!);
+            return true;
+        }
+
+        // Blast cinematic capture: stage a CRAB CORE detonation dead ahead on the first
+        // frame, then grab it mid-swell (pair with VOIDTANKS_CAPTURE_FRAME≈40).
+        if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_BLAST") != null && _frame == 1)
+            _world!.StageCrabBlastAheadForTest();
+
+        // HUD capture: equip a CRAB CORE so the R/T/Y/U slots show their 3D icon.
+        if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_HUD") != null && _frame == 1)
+            _world!.GiveCrabCore();
 
         // Let the world run so the enemy advances out of the fog toward the
         // player before we grab the frame.
@@ -518,6 +595,14 @@ public sealed class Game : IDisposable
     private void DrawPaused()
     {
         _renderer.DrawPaused(_world!, _pauseMenu, _menuTime, _pauseBlur);
+        _renderer.Present();
+    }
+
+    private void DrawInventory()
+    {
+        // Wall-clock time (not _menuTime, which is frozen during play) so the craftable
+        // core's pulse animates while the live world runs behind the panel.
+        _renderer.DrawInventory(_world!, _inventory, (float)Raylib.GetTime());
         _renderer.Present();
     }
 

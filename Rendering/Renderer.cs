@@ -25,6 +25,8 @@ public sealed class Renderer : IDisposable
     private const int PauseBlock = 8; // world px per mosaic block at full pause
     private Camera3D _camera;
     private readonly EntityRenderer _entities = new();
+    // Renders the inventory's items as small rotating 3D models (see DrawInventory).
+    private readonly ItemIconRenderer _itemIcons = new();
 
     public Renderer()
     {
@@ -124,6 +126,11 @@ public sealed class Renderer : IDisposable
             ? new Vector3(fwd.Y * MathF.Sin(roll), MathF.Cos(roll), -fwd.X * MathF.Sin(roll))
             : new Vector3(0f, 1f, 0f);
 
+        // Render the rotating 3D item icons into their own textures before the world's
+        // texture pass opens (a 3D pass can't nest inside it) — the HUD's equip slots
+        // blit them the same way the inventory panel does.
+        _itemIcons.Render((float)Raylib.GetTime());
+
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void); // never pure black
         SkyRenderer.Draw(_camera, (float)Raylib.GetTime());
@@ -140,8 +147,9 @@ public sealed class Renderer : IDisposable
         // readable through the flash.
         if (seizure is { Glow: > 0f }) DrawCoreGlare(seizure.Glow);
 
-        // Flat instrument panel over the scene: vital bars + radar along the top.
-        HudRenderer.Draw(world);
+        // Flat instrument panel over the scene: vital bars + radar along the top, plus
+        // the R/T/Y/U equip slots showing their 3D item icons.
+        HudRenderer.Draw(world, _itemIcons);
 
         Raylib.EndTextureMode();
     }
@@ -276,6 +284,45 @@ public sealed class Renderer : IDisposable
     }
 
     /// <summary>
+    /// Draws the inventory / crafting panel as a live overlay: the world is rendered
+    /// normally (the sim is still running behind it — the panel does not pause anything),
+    /// then the mouse-driven panel is laid over it. The panel carries its own translucent
+    /// backing for contrast, so the world stays faintly visible underneath rather than
+    /// being coarsened away.
+    /// </summary>
+    public void DrawInventory(World.World world, UI.InventoryScreen screen, float elapsed)
+    {
+        // DrawWorld already renders the rotating 3D item icons into their textures
+        // (before its own texture pass), so they're ready for the panel to blit.
+        DrawWorld(world);
+
+        Raylib.BeginTextureMode(_target);
+        InventoryRenderer.Draw(world, screen, elapsed, _itemIcons);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// Maps a window-space mouse position to a pixel in the internal 320×240 target,
+    /// inverting the integer upscale + letterbox that <see cref="Present"/> applies. So
+    /// the inventory's slot hit-testing lands on the same pixels the panel is drawn at,
+    /// whatever the window size or fullscreen state. Points in the letterbox bars map
+    /// outside the target (negative or past the edge), which the caller reads as "no
+    /// slot here".
+    /// </summary>
+    public static Vector2 ScreenToInternal(Vector2 mouse)
+    {
+        int scale = Math.Min(
+            Raylib.GetScreenWidth() / Config.InternalWidth,
+            Raylib.GetScreenHeight() / Config.InternalHeight);
+        if (scale < 1) scale = 1;
+
+        int offX = (Raylib.GetScreenWidth() - Config.InternalWidth * scale) / 2;
+        int offY = (Raylib.GetScreenHeight() - Config.InternalHeight * scale) / 2;
+
+        return new Vector2((mouse.X - offX) / scale, (mouse.Y - offY) / scale);
+    }
+
+    /// <summary>
     /// Draws a paused run: the frozen world with a pixel-blur closing over it and
     /// the pause panel on top. <paramref name="t"/> (0..1) is how far the blur has
     /// set in — 0 is the clean frame, 1 is the fully coarsened, dimmed hold. The
@@ -370,5 +417,6 @@ public sealed class Renderer : IDisposable
     {
         Raylib.UnloadRenderTexture(_target);
         Raylib.UnloadRenderTexture(_scratch);
+        _itemIcons.Dispose();
     }
 }
