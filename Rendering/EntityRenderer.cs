@@ -36,16 +36,40 @@ public sealed class EntityRenderer
     // the parts and places them from a per-frame pose.
     private readonly CrabRenderer _crab = new();
 
+    // ...and so is the Maw-Core, which shares two of the crab's parts outright.
+    private readonly MawRenderer _maw = new();
+
     public void Draw(World.World world, Vector3 cameraPos)
     {
+        // The world is a torus, so every world thing is drawn at its nearest image
+        // across the wrap — the copy of it that sits closest to the eye. Something just
+        // over the world's edge is then drawn just past the player rather than a whole
+        // arena away, which is what keeps the seam invisible as they roam over it.
+        var eyeXZ = new Vector2(cameraPos.X, cameraPos.Z);
+
         // The lone Stalker, if the stage seeded one, drawn from its live pose. Once
         // it's fully dead the rig is gone; while dying it draws mid-glitch-apart.
         if (world.Boss is { } boss && !boss.Dead)
         {
-            _crab.Draw(boss.Pose, boss.Position, boss.Heading, cameraPos, boss.DeathProgress);
+            Vector2 bossPos = Torus.NearestImage(boss.Position, eyeXZ);
+            _crab.Draw(boss.Pose, bossPos, boss.Heading, cameraPos, boss.DeathProgress);
             // Its beam attack, if it is charging or burning — drawn straight after the
-            // rig so the shaft leaves a crystal that has already been placed.
-            if (boss.Alive) _crab.DrawLance(boss);
+            // rig so the shaft leaves a crystal that has already been placed. The same
+            // wrap shift is handed to it so the lance leaves the re-imaged crystal.
+            if (boss.Alive) _crab.DrawLance(boss, bossPos - boss.Position);
+        }
+
+        // The hanging mouth. Its drool and its lasers are drawn after the rig so both
+        // read as coming off a body that has already been placed — and the drips keep
+        // falling right through the death glitch, which is exactly right: the stuff
+        // was already leaking out of it before it died.
+        if (world.Maw is { } maw && !maw.Dead)
+        {
+            Vector2 mawPos = Torus.NearestImage(maw.Position, eyeXZ);
+            Vector2 mawShift = mawPos - maw.Position;
+            _maw.Draw(maw.Pose, mawPos, maw.BodyY, cameraPos, maw.DeathProgress);
+            _maw.DrawDrips(maw, cameraPos, mawShift);
+            _maw.DrawLasers(maw, cameraPos, mawShift);
         }
 
         foreach (var e in world.Enemies)
@@ -54,7 +78,7 @@ public sealed class EntityRenderer
             var mesh = e.IsElite ? _eliteCone : _standardTank;
             // Scale the mesh by the same factor the hitbox uses, so the visible
             // body and the collision radius are one and the same.
-            mesh.Draw(e.Position, e.Heading, 0f, cameraPos, EnemyTank.Scale);
+            mesh.Draw(Torus.NearestImage(e.Position, eyeXZ), e.Heading, 0f, cameraPos, EnemyTank.Scale);
         }
 
         // Floating pickups: bob at waist height and turn slowly on the spot, so the
@@ -62,18 +86,19 @@ public sealed class EntityRenderer
         foreach (var pk in world.Pickups)
         {
             var mesh = pk.Kind == PickupKind.Battery ? _battery : _bullet;
-            mesh.Draw(pk.Position, pk.Spin, pk.BobHeight, cameraPos);
+            mesh.Draw(Torus.NearestImage(pk.Position, eyeXZ), pk.Spin, pk.BobHeight, cameraPos);
         }
 
         foreach (var p in world.Projectiles)
         {
             if (!p.Active) continue;
+            Vector2 shotPos = Torus.NearestImage(p.Position, eyeXZ);
             // Draw each bolt at its own height, so a shot fired mid-jump visibly
             // rides high — level with the leap — and sinks toward the horizon, rather
             // than snapping back to barrel height. The heavy grenade is a fatter slug
             // in the elite/orange colour.
-            if (p.IsGrenade) _grenade.Draw(p.Position, 0f, p.Height, cameraPos);
-            else _bolt.Draw(p.Position, 0f, p.Height, cameraPos);
+            if (p.IsGrenade) _grenade.Draw(shotPos, 0f, p.Height, cameraPos);
+            else _bolt.Draw(shotPos, 0f, p.Height, cameraPos);
         }
 
         // Death debris last: chunks and sparks flung from destroyed enemies, each
@@ -81,7 +106,7 @@ public sealed class EntityRenderer
         foreach (var s in world.Debris.Shards)
         {
             if (!s.Active) continue;
-            var posXZ = new Vector2(s.Position.X, s.Position.Z);
+            var posXZ = Torus.NearestImage(new Vector2(s.Position.X, s.Position.Z), eyeXZ);
             float f = s.LifeFrac;
             Color tint = GridRenderer.LerpColor(s.Color, Palette.Void, 1f - f);
             var mesh = s.IsSpark ? _spark : _shard;
@@ -141,5 +166,22 @@ public sealed class EntityRenderer
         {
             _crab.DrawLance(origin, dir, 0f, elapsed % CrabCore.BeamTime / CrabCore.BeamTime);
         }
+    }
+
+    /// <summary>
+    /// Draws the Maw-Core for the test screen: hanging at its real world height, with
+    /// the crystal and both tooth rings turning. Held still rather than spun on the
+    /// turntable — the rings are already rotating, and adding a third rotation on top
+    /// of them makes the grind impossible to read.
+    ///
+    /// Drawn at its true <see cref="MawRig.BodyWorldY"/> rather than at a framing
+    /// height chosen for the picture, so the bestiary shows exactly how high off the
+    /// grid the thing actually floats — which is the single fact about it a tester
+    /// most needs to be able to check.
+    /// </summary>
+    public void DrawMawShowcase(Vector2 pos, float elapsed, Vector3 cameraPos)
+    {
+        MawPose pose = MawCore.ShowcasePose(elapsed);
+        _maw.Draw(pose, pos, MawRig.BodyWorldY, cameraPos);
     }
 }

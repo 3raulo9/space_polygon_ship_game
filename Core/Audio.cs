@@ -59,13 +59,12 @@ public static class Audio
         for (int i = 0; i < BeamWarnVoices; i++)
             _beamWarns[i] = Raylib.LoadSoundAlias(_warning);
 
-        // The rotor bed, synthesised once per session so each run's crab hums at a
-        // slightly different pitch and throb. Rolled here rather than per boss: it
-        // is a streaming loop, not a one-shot, and rebuilding it mid-fight would
-        // mean tearing down a stream that is currently audible.
-        _hum = LoadHumStream(SfxSynth.RenderWav(SfxSynth.Hum(_sfxRng)));
-        _hum.Looping = true;
-        _humReady = true;
+        // The two continuous beds, synthesised once per session so each run's monsters
+        // hum and hover at slightly different pitches and throbs. Rolled here rather
+        // than per monster: they are streaming loops, not one-shots, and rebuilding
+        // one mid-fight would mean tearing down a stream that is currently audible.
+        _hum.Load(SfxSynth.RenderWav(SfxSynth.Hum(_sfxRng)));
+        _mawHover.Load(SfxSynth.RenderWav(SfxSynth.MawHover(_sfxRng)));
 
         _enabled = true;
     }
@@ -411,53 +410,145 @@ public static class Audio
         }
     }
 
-    // --- The Crab-Core's rotor: a continuous hum that spools up ---------------
-
-    // A looping Music stream rather than a Sound. A Sound is a one-shot: to hold a
-    // continuous bed you would have to re-trigger it as it ended, and the frame of
-    // slack between "finished" and "restarted" is an audible hole once per lap. A
-    // Music stream loops in the mixer itself, seamlessly.
-    private static Music _hum;
-    private static bool _humReady;      // stream exists
-    private static bool _humRunning;    // ...and is currently voiced
-
-    /// <summary>The hum's encoded .wav bytes, in unmanaged memory. Freed in
-    /// <see cref="Shutdown"/>, after the stream that reads from it is unloaded.</summary>
-    private static IntPtr _humWav;
+    // --- Continuous beds: the crab's rotor and the maw's hover ----------------
 
     /// <summary>
-    /// Hands a rendered .wav to raylib as a streaming Music.
+    /// One looping ambience owned by a monster — a bed rather than an event, running
+    /// for as long as its owner is on the field, with its playback rate driven by how
+    /// worked-up that owner is.
     ///
-    /// The bytes must be copied into unmanaged memory first, and must stay there for
-    /// as long as the stream lives. Unlike a Sound — which is decoded up front into
-    /// its own buffer — a Music stream decodes lazily: raylib keeps a bare pointer to
-    /// this buffer and reads more of it on every UpdateMusicStream. Handing it a
-    /// managed byte[] pins that array only for the duration of the P/Invoke, so once
-    /// Init returns the GC is free to move or collect it and the stream is left
-    /// reading whatever now occupies that address. The result is a use-after-free
-    /// that only bites once a collection happens to run — which is why it looked like
-    /// a Crab-Core bug: the fight is what allocates hard enough (a fresh WAV per
-    /// footstep, clamp and hunting call) to trigger the GC that pulls the rug.
+    /// A looping Music stream rather than a Sound. A Sound is a one-shot: to hold a
+    /// continuous bed you would have to re-trigger it as it ended, and the frame of
+    /// slack between "finished" and "restarted" is an audible hole once per lap. A
+    /// Music stream loops in the mixer itself, seamlessly.
+    ///
+    /// Both rate and level are eased toward their targets rather than set outright, so
+    /// <see cref="Set"/> is safe to call every tick with whatever the monster's
+    /// current state happens to be.
     /// </summary>
-    private static unsafe Music LoadHumStream(byte[] wav)
+    private sealed class Bed
     {
-        _humWav = Marshal.AllocHGlobal(wav.Length);
-        Marshal.Copy(wav, 0, _humWav, wav.Length);
+        private Music _music;
+        private bool _ready;        // stream exists
+        private bool _running;      // ...and is currently voiced
+        private IntPtr _wav;        // its encoded bytes, in unmanaged memory
 
-        fixed (byte* type = ".wav"u8)   // u8 literals are NUL-terminated
-            return Raylib.LoadMusicStreamFromMemory((sbyte*)type, (byte*)_humWav, wav.Length);
+        private float _pitch = 1f, _pitchTarget = 1f;
+        private float _volume, _volumeTarget;
+
+        private readonly float _wokenPitch;
+        private readonly float _range;
+        private readonly float _maxVolume;
+
+        /// <param name="wokenPitch">Playback rate once its owner is fully agitated.
+        /// Driving the rate rather than the frequency is what makes it a faster
+        /// <em>spin</em> than a higher note — every part of the loop, throb included,
+        /// speeds up together.</param>
+        /// <param name="range">Past this many world units it can't be heard.</param>
+        /// <param name="maxVolume">Level with the player standing underneath it. Kept
+        /// well under the one-shot cues: a bed runs constantly, so it should be felt
+        /// rather than listened to.</param>
+        public Bed(float wokenPitch, float range, float maxVolume)
+        {
+            _wokenPitch = wokenPitch;
+            _range = range;
+            _maxVolume = maxVolume;
+        }
+
+        /// <summary>
+        /// Renders the recipe and hands it to raylib as a streaming Music.
+        ///
+        /// The bytes must be copied into unmanaged memory first, and must stay there
+        /// for as long as the stream lives. Unlike a Sound — which is decoded up front
+        /// into its own buffer — a Music stream decodes lazily: raylib keeps a bare
+        /// pointer to this buffer and reads more of it on every UpdateMusicStream.
+        /// Handing it a managed byte[] pins that array only for the duration of the
+        /// P/Invoke, so once Init returns the GC is free to move or collect it and the
+        /// stream is left reading whatever now occupies that address. The result is a
+        /// use-after-free that only bites once a collection happens to run — which is
+        /// why it looked like a Crab-Core bug: the fight is what allocates hard enough
+        /// (a fresh WAV per footstep, clamp and hunting call) to trigger the GC that
+        /// pulls the rug.
+        /// </summary>
+        public unsafe void Load(byte[] wav)
+        {
+            _wav = Marshal.AllocHGlobal(wav.Length);
+            Marshal.Copy(wav, 0, _wav, wav.Length);
+
+            fixed (byte* type = ".wav"u8)   // u8 literals are NUL-terminated
+                _music = Raylib.LoadMusicStreamFromMemory((sbyte*)type, (byte*)_wav, wav.Length);
+
+            _music.Looping = true;
+            _ready = true;
+        }
+
+        /// <summary>Sets this frame's targets. <paramref name="present"/> is false
+        /// whenever there is no live owner, which fades the bed out and stops it.</summary>
+        public void Set(bool present, float distance, float agitation)
+        {
+            if (!_ready) return;
+            _pitchTarget = 1f + (_wokenPitch - 1f) * Math.Clamp(agitation, 0f, 1f);
+            _volumeTarget = present && distance < _range
+                ? _maxVolume * (1f - distance / _range)
+                : 0f;
+        }
+
+        /// <summary>Eases toward the targets and refills the stream. Once per frame.</summary>
+        public void Service(float dt)
+        {
+            if (!_ready) return;
+
+            _pitch = Approach(_pitch, _pitchTarget, SpoolRate * dt);
+            _volume = Approach(_volume, _volumeTarget, FadeRate * dt);
+
+            // Start on the first frame it is wanted and stop once it has faded out, so
+            // an empty arena costs nothing and no bed is left running after its owner
+            // is gone.
+            if (_volume > 0.001f && !_running)
+            {
+                Raylib.PlayMusicStream(_music);
+                _running = true;
+            }
+            else if (_volume <= 0.001f && _running)
+            {
+                Raylib.StopMusicStream(_music);
+                _running = false;
+            }
+
+            if (!_running) return;
+            Raylib.SetMusicPitch(_music, _pitch);
+            Raylib.SetMusicVolume(_music, _volume);
+            Raylib.UpdateMusicStream(_music);     // refills the stream's buffers
+        }
+
+        /// <summary>Stops and frees the stream, then the buffer it was reading from —
+        /// in that order, since the stream holds a bare pointer into it.</summary>
+        public void Unload()
+        {
+            if (_ready)
+            {
+                if (_running) { Raylib.StopMusicStream(_music); _running = false; }
+                Raylib.UnloadMusicStream(_music);
+                _ready = false;
+            }
+            if (_wav != IntPtr.Zero) { Marshal.FreeHGlobal(_wav); _wav = IntPtr.Zero; }
+        }
+
+        /// <summary>How fast a bed spools between rates and levels, per second. Slow
+        /// enough to hear it wind up — an instant jump sounds like a cut, not like a
+        /// machine coming to life.</summary>
+        private const float SpoolRate = 0.9f;
+        private const float FadeRate = 1.6f;
     }
 
-    private static float _humPitch = HumIdlePitch;
-    private static float _humPitchTarget = HumIdlePitch;
-    private static float _humVolume;
-    private static float _humVolumeTarget;
+    /// <summary>The Crab-Core's internal rotor.</summary>
+    private static readonly Bed _hum = new(wokenPitch: 1.95f, range: HumRange, maxVolume: 0.42f);
 
-    /// <summary>Playback rate of the rotor at rest, and wound fully up. Driving the
-    /// rate is what makes it a faster <em>spin</em> rather than just a higher note —
-    /// every part of the loop, throb included, speeds up together.</summary>
-    private const float HumIdlePitch = 1f;
-    private const float HumWokenPitch = 1.95f;
+    /// <summary>The Maw-Core holding itself up. Carries further than the crab's rotor
+    /// and sits a touch quieter: it is in the air, so there is nothing between it and
+    /// the player, but it is also the sound of something hovering rather than of
+    /// machinery grinding through a floor.</summary>
+    private static readonly Bed _mawHover = new(wokenPitch: 1.7f, range: 70f, maxVolume: 0.38f);
 
     /// <summary>Past this many world units the rotor can't be heard.</summary>
     public const float HumRange = 55f;
@@ -495,37 +586,30 @@ public static class Audio
         PlaySynth(SfxSynth.CoreSting(_sfxRng, severity));
     }
 
-    /// <summary>How fast the rotor spools between rates, in units per second. Slow
-    /// enough to hear it wind up — an instant jump would sound like a cut, not a
-    /// machine coming to life.</summary>
-    private const float HumSpoolRate = 0.9f;
-    private const float HumFadeRate = 1.6f;
-
     /// <summary>
-    /// Voices the boss's internal rotor for this frame. <paramref name="present"/>
-    /// is false whenever there is no live boss, which fades the hum out and stops
-    /// it; <paramref name="distance"/> is the world gap to the player, and
-    /// <paramref name="agitation"/> is 0 while it idles and 1 once it has noticed
-    /// the player — the rotor spools up toward <see cref="HumWokenPitch"/> as that
-    /// rises, so the machine audibly winds up the moment it wakes.
-    ///
-    /// Both rate and level are eased toward their targets rather than set outright,
-    /// so this is safe to call every tick with whatever the boss's current state is.
+    /// Voices the Crab-Core's internal rotor for this frame. <paramref name="present"/>
+    /// is false whenever there is no live boss, which fades the hum out and stops it;
+    /// <paramref name="distance"/> is the world gap to the player, and
+    /// <paramref name="agitation"/> is 0 while it idles and 1 once it has noticed the
+    /// player — the rotor spools up as that rises, so the machine audibly winds up the
+    /// moment it wakes. Safe to call every tick with whatever state the boss is in.
     /// </summary>
     public static void SetBossHum(bool present, float distance, float agitation)
     {
-        if (!_enabled || !_humReady) return;
-
-        _humPitchTarget = HumIdlePitch + (HumWokenPitch - HumIdlePitch) * Math.Clamp(agitation, 0f, 1f);
-        _humVolumeTarget = present && distance < HumRange
-            ? HumMaxVolume * (1f - distance / HumRange)
-            : 0f;
+        if (_enabled) _hum.Set(present, distance, agitation);
     }
 
-    /// <summary>Level of the rotor with the player standing on top of it. Kept well
-    /// under the one-shot cues — it is a bed that sits under everything else, and
-    /// it is running constantly, so it should be felt rather than listened to.</summary>
-    private const float HumMaxVolume = 0.42f;
+    /// <summary>
+    /// The Maw-Core holding station overhead — its equivalent bed, driven the same way
+    /// and running the whole time one is on the field. Deliberately a different sound
+    /// from the crab's rotor rather than a re-pitch of it: two monsters that hummed
+    /// alike would be impossible to tell apart when both are out in the fog, and this
+    /// one has to be identifiable as coming from <em>above</em> you.
+    /// </summary>
+    public static void SetMawHover(bool present, float distance, float agitation)
+    {
+        if (_enabled) _mawHover.Set(present, distance, agitation);
+    }
 
     /// <summary>
     /// Drains any scheduled sounds that have come due and services the rotor hum.
@@ -547,30 +631,9 @@ public static class Audio
             Raylib.PlaySound(_bossBooms[i]);
         }
 
-        if (!_humReady) return;
         float dt = Raylib.GetFrameTime();
-
-        _humPitch = Approach(_humPitch, _humPitchTarget, HumSpoolRate * dt);
-        _humVolume = Approach(_humVolume, _humVolumeTarget, HumFadeRate * dt);
-
-        // Start the stream on the first frame it is wanted and stop it once it has
-        // faded out, so a dormant arena costs nothing and no rotor is left running
-        // after its crab is gone.
-        if (_humVolume > 0.001f && !_humRunning)
-        {
-            Raylib.PlayMusicStream(_hum);
-            _humRunning = true;
-        }
-        else if (_humVolume <= 0.001f && _humRunning)
-        {
-            Raylib.StopMusicStream(_hum);
-            _humRunning = false;
-        }
-
-        if (!_humRunning) return;
-        Raylib.SetMusicPitch(_hum, _humPitch);
-        Raylib.SetMusicVolume(_hum, _humVolume);
-        Raylib.UpdateMusicStream(_hum);     // refills the stream's buffers
+        _hum.Service(dt);
+        _mawHover.Service(dt);
     }
 
     /// <summary>Moves <paramref name="v"/> toward <paramref name="target"/> by at
@@ -642,6 +705,114 @@ public static class Audio
         if (_enabled) Raylib.PlaySound(_alarm);
     }
 
+    // --- The Maw-Core: the hanging mouth --------------------------------------
+    // Every cue here is voiced through the synth pool rather than the clip bank, so
+    // none of them ever plays the same twice — which matters more for this monster
+    // than for anything else in the game, because several of them fire on a loop for
+    // as long as it is on the field. A sampled drip repeating every half-second is a
+    // fault; a drip that is a slightly different drip each time is weather.
+
+    /// <summary>Past this many world units the mouth's cues stop being audible.</summary>
+    public const float MawRange = 62f;
+
+    /// <summary>Linear distance falloff to a quiet floor, shared by the ranged cues
+    /// below so they all thin out at the same rate. Returns 0 past the range, which
+    /// the callers take as "don't bother voicing it".</summary>
+    private static float MawFalloff(float distance)
+        => distance >= MawRange ? 0f : Math.Clamp(1f - distance / MawRange, 0f, 1f);
+
+    /// <summary>One of the little lasers being spat at the player.</summary>
+    public static void PlayMawSpit(float distance)
+    {
+        if (!_enabled) return;
+        float vol = MawFalloff(distance);
+        if (vol > 0f) PlaySynth(SfxSynth.MawSpit(_sfxRng), vol);
+    }
+
+    /// <summary>
+    /// The rings of teeth grinding. Voiced on a cadence while it hunts, and far more
+    /// often — with <paramref name="grinding"/> set, which lengthens and darkens it —
+    /// while it is actually chewing someone. Distance is ignored in the grinding case
+    /// on purpose: if you can hear that version, it is happening to you.
+    /// </summary>
+    public static void PlayMawTeeth(float distance, bool grinding = false)
+    {
+        if (!_enabled) return;
+        float vol = grinding ? 1f : MawFalloff(distance);
+        if (vol > 0f) PlaySynth(SfxSynth.ToothGrind(_sfxRng, grinding), vol);
+    }
+
+    /// <summary>The crystal turning in its well — the rotating-crystal layer over the
+    /// hover bed, voiced on a slow cadence. <paramref name="agitation"/> winds the
+    /// whole thing faster and higher as it fixes on the player.</summary>
+    public static void PlayMawCrystal(float distance, float agitation)
+    {
+        if (!_enabled) return;
+        float vol = MawFalloff(distance);
+        if (vol > 0f) PlaySynth(SfxSynth.CrystalWhirr(_sfxRng, agitation), vol * 0.8f);
+    }
+
+    /// <summary>One bead of the black stuff letting go. Barely audible by design —
+    /// see <see cref="SfxSynth.MawDrip"/> for why it has to stay that way.</summary>
+    public static void PlayMawDrip()
+    {
+        if (_enabled) PlaySynth(SfxSynth.MawDrip(_sfxRng), 0.5f);
+    }
+
+    /// <summary>The mouth dropping on the player. Full volume, no falloff: it is
+    /// directly overhead, which is the only situation this ever fires in.</summary>
+    public static void PlayMawDive()
+    {
+        if (_enabled) PlaySynth(SfxSynth.MawDive(_sfxRng));
+    }
+
+    /// <summary>
+    /// The throat closing and hauling the player up into it. Layered over the bank's
+    /// impact clip so the swallow registers as something that happened <em>to</em> the
+    /// craft, not just as a noise the world made — the same pairing the crab's claw
+    /// slam uses, and for the same reason.
+    /// </summary>
+    public static void PlayMawSwallow()
+    {
+        if (!_enabled) return;
+        Raylib.PlaySound(_hit);
+        PlaySynth(SfxSynth.MawSwallow(_sfxRng));
+    }
+
+    /// <summary>One bite while it digests the player — fired per damage tick, so the
+    /// player can count their shield going.</summary>
+    public static void PlayMawDigest()
+    {
+        if (_enabled) PlaySynth(SfxSynth.MawDigestBite(_sfxRng));
+    }
+
+    /// <summary>
+    /// The thing being shot from the inside. <paramref name="severity"/> runs toward 1
+    /// as the escape count fills, so the third shot is audibly the one that broke its
+    /// hold. This is the player's only confirmation that firing into a throat is doing
+    /// anything at all, so it is layered over the bank's impact clip as well.
+    /// </summary>
+    public static void PlayMawHurt(float severity)
+    {
+        if (!_enabled) return;
+        Raylib.PlaySound(_hit);
+        PlaySynth(SfxSynth.MawWail(_sfxRng, severity));
+    }
+
+    /// <summary>The jaw springing open and throwing the player clear.</summary>
+    public static void PlayMawRelease()
+    {
+        if (_enabled) PlaySynth(SfxSynth.MawRelease(_sfxRng));
+    }
+
+    /// <summary>
+    /// The Maw-Core coming apart. Reuses the Crab-Core's death cascade wholesale — a
+    /// falling scream over scheduled, descending blasts — because they are the same
+    /// machine and should fail identically. Nothing about dying is specific to which
+    /// half of it survived.
+    /// </summary>
+    public static void PlayMawDeath() => PlayBossDeath();
+
     /// <summary>
     /// A pickup being absorbed — a battery cell or stray round. Reuses the menu
     /// blip (the only bright, non-combat transient in the bank) so the collect
@@ -656,14 +827,8 @@ public static class Audio
     public static void Shutdown()
     {
         if (!_enabled) return;
-        if (_humReady)
-        {
-            if (_humRunning) { Raylib.StopMusicStream(_hum); _humRunning = false; }
-            Raylib.UnloadMusicStream(_hum);
-            _humReady = false;
-        }
-        // Only once the stream that reads from it is gone.
-        if (_humWav != IntPtr.Zero) { Marshal.FreeHGlobal(_humWav); _humWav = IntPtr.Zero; }
+        _hum.Unload();
+        _mawHover.Unload();
         // Aliases first: they borrow their source clips' samples, so they must all
         // be released before the clips that own those samples go.
         for (int i = 0; i < BossBoomCount; i++) Raylib.UnloadSoundAlias(_bossBooms[i]);

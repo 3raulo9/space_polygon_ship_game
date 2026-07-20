@@ -14,6 +14,7 @@ public static class SelfTest
     public static int Run()
     {
         int failures = 0;
+        failures += Check("the world is a finite wrap-around torus", WorldIsAFiniteTorus);
         failures += Check("player can destroy an enemy", PlayerKillsEnemy);
         failures += Check("enemy can damage the player", EnemyDamagesPlayer);
         failures += Check("ammo is finite", AmmoDepletes);
@@ -27,6 +28,12 @@ public static class SelfTest
         failures += Check("a held player is raised to face the core", SeizureFramesTheCore);
         failures += Check("the boss's hands frame the held player", SeizureHandsReachThePlayer);
         failures += Check("the boss's beam fires where the player was", BeamLocksItsDirection);
+        failures += Check("the maw hangs at the top of the player's jump", MawHangsAtJumpApex);
+        failures += Check("only a leaping shot reaches the maw's crystal", MawNeedsAnAirShot);
+        failures += Check("the maw swallows a player who stands under it", MawSwallowsStillPlayer);
+        failures += Check("three shots from inside break the maw's hold", MawReleasesOnThreeShots);
+        failures += Check("digestion bites 15% a time until you escape", MawDigestionBites);
+        failures += Check("a swallowed player can shoot their way out for real", MawEscapeThroughTheGun);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -44,6 +51,35 @@ public static class SelfTest
         }
         Console.WriteLine($"  FAIL  {name}: {err}");
         return 1;
+    }
+
+    private static string? WorldIsAFiniteTorus()
+    {
+        // Drive off one edge and you come back on the opposite one — the map is not
+        // infinite. A point a full world-width along any axis is literally the same
+        // point, so its wrapped distance is zero.
+        if (Torus.Distance(new Vector2(12f, -30f), new Vector2(12f + Torus.Size, -30f)) > 0.001f)
+            return "a full world-width apart isn't the same place";
+
+        // Wrapping always folds a coordinate back into the [-Half, Half) play window,
+        // so positions can never run off to infinity.
+        float w = Torus.WrapCoord(Torus.Half + 5f);
+        if (w < -Torus.Half || w >= Torus.Half)
+            return $"a wrapped coordinate ({w:F1}) fell outside the world window";
+
+        // The opposite edges are stitched together: just over the top edge is a couple
+        // of units below the bottom edge, not a whole arena away.
+        float seam = Torus.Distance(new Vector2(0f, Torus.Half - 1f),
+                                    new Vector2(0f, -Torus.Half + 1f));
+        if (seam > 3f) return $"the seam isn't stitched — edge to edge measured {seam:F1}";
+
+        // And a craft driven straight past the world's edge reappears wrapped, still
+        // in the window, rather than sailing off forever.
+        var player = new Entities.PlayerTank(new Vector2(Torus.Half - 2f, 0f));
+        player.Position = Torus.Wrap(player.Position + new Vector2(6f, 0f));
+        if (player.Position.X > 0f)
+            return "crossing the +X edge didn't wrap the craft to the far side";
+        return null;
     }
 
     private static string? PlayerKillsEnemy()
@@ -435,6 +471,202 @@ public static class SelfTest
         boss.Position = player.Position + new Vector2(0f, 9f);
         boss.SnapToFace(player.Position);
         return (boss, player);
+    }
+
+    // --- The Maw-Core: the hanging mouth --------------------------------------
+
+    private static string? MawHangsAtJumpApex()
+    {
+        // The load-bearing claim of the whole enemy: its crystal sits where a bolt
+        // fired at the peak of a leap is travelling. Checked against the jump's own
+        // physics rather than against a copy of the number, so retuning the jump
+        // without moving the monster fails here rather than silently in play.
+        float apexShot = Entities.PlayerTank.JumpApex + Entities.Projectile.BoltHeight;
+        var maw = new Entities.MawCore(Vector2.Zero);
+
+        if (!maw.HitsCrystal(Vector2.Zero, apexShot))
+            return $"a shot at apex height {apexShot:F2} missed the crystal";
+
+        // The band must also be tight enough that it is genuinely a jump check: a shot
+        // from halfway up the arc has to miss, or "shoot it while airborne" collapses
+        // into "shoot it while vaguely off the ground".
+        float halfway = Entities.PlayerTank.JumpApex * 0.5f + Entities.Projectile.BoltHeight;
+        return maw.HitsCrystal(Vector2.Zero, halfway)
+            ? $"a shot from halfway up the jump ({halfway:F2}) still reached the crystal"
+            : null;
+    }
+
+    private static string? MawNeedsAnAirShot()
+    {
+        var maw = new Entities.MawCore(Vector2.Zero);
+
+        // Grounded: must sail underneath, however well aimed.
+        if (maw.HitsCrystal(Vector2.Zero, Entities.Projectile.BoltHeight))
+            return "a grounded-height shot connected with the crystal";
+
+        // ...and the crystal must actually be destructible from the air, glitch and all.
+        if (!maw.HitsCrystal(Vector2.Zero, Entities.MawRig.CrystalWorldY))
+            return "a shot at the strike band missed the crystal";
+
+        bool killedReported = false;
+        for (int i = 0; i < 100 && maw.Alive; i++)
+            killedReported = maw.DamageCrystal(1f);
+
+        if (maw.Alive) return "crystal never depleted under repeated air hits";
+        if (!killedReported) return "the killing hit didn't report the kill";
+
+        for (int i = 0; i < 60 * 3 && !maw.Dead; i++)
+            maw.Update((float)Config.FixedDt, Vector2.Zero, 0f);
+        return maw.Dead ? null : "death glitch never finished";
+    }
+
+    private static string? MawSwallowsStillPlayer()
+    {
+        // Standing still under it has to end in being caught — that is the deal, and
+        // UnderTheMaw only returns a pair once JustCaught has actually fired.
+        var (maw, player) = UnderTheMaw();
+        if (maw == null || player == null) return "the maw never dropped on a still player";
+        if (maw.Phase != Entities.MawCore.State.Digest)
+            return $"the maw caught the player but sat in {maw.Phase}";
+
+        // ...and the other half of the deal: a player who keeps walking is never
+        // caught, so the lunge has to miss someone who left the column.
+        var mover = new Entities.PlayerTank(Vector2.Zero);
+        var missing = new Entities.MawCore(Vector2.Zero);
+        for (int i = 0; i < 60 * 10; i++)
+        {
+            // Walking flat out, straight line — the simplest possible evasion.
+            mover.Position += new Vector2(0f, Entities.PlayerTank.MaxSpeed * (float)Config.FixedDt);
+            missing.Update((float)Config.FixedDt, mover.Position, mover.Height);
+            if (missing.JustCaught) return "the maw caught a player who never stopped moving";
+        }
+        return null;
+    }
+
+    private static string? MawReleasesOnThreeShots()
+    {
+        var (maw, player) = UnderTheMaw();
+        if (maw == null || player == null) return "the maw never caught the player";
+
+        var digestion = new Entities.MawDigestion(maw, player);
+
+        // Step into the hold, then put the escape shots in. Fewer than three must not
+        // free anybody — that is the whole tension of the beat.
+        for (int i = 0; i < 60 * 2 && digestion.Phase != Entities.MawDigestion.Stage.Digest; i++)
+            digestion.Update((float)Config.FixedDt);
+        if (digestion.Phase != Entities.MawDigestion.Stage.Digest)
+            return "the swallow never reached the digest stage";
+
+        if (digestion.RegisterShot()) return "one shot freed the player";
+        if (digestion.RegisterShot()) return "two shots freed the player";
+        if (!digestion.RegisterShot()) return "three shots did not free the player";
+        if (digestion.Hits != Entities.MawDigestion.EscapeHits)
+            return $"escape counted {digestion.Hits} hits, expected {Entities.MawDigestion.EscapeHits}";
+
+        // The whole cinematic must then play out and hand control back — a trap the
+        // player can never drive out of is a hang, not a set piece.
+        bool landed = false;
+        for (int i = 0; i < 60 * 12 && digestion.Active; i++)
+            if (digestion.Update((float)Config.FixedDt) == Entities.MawDigestion.Event.Landed)
+                landed = true;
+
+        if (digestion.Active) return "the digestion never finished";
+        if (!landed) return "the player was never put back on the grid";
+        if (player.Captured) return "control was never handed back";
+        return null;
+    }
+
+    private static string? MawDigestionBites()
+    {
+        var (maw, player) = UnderTheMaw();
+        if (maw == null || player == null) return "the maw never caught the player";
+
+        var digestion = new Entities.MawDigestion(maw, player);
+
+        // Held and never shooting back: the bites have to keep coming. Run long enough
+        // to see several, so a single one firing on entry wouldn't pass this.
+        int bites = 0;
+        for (int i = 0; i < 60 * 6 && digestion.Held; i++)
+            if (digestion.Update((float)Config.FixedDt) == Entities.MawDigestion.Event.Bitten)
+                bites++;
+
+        if (bites < 3) return $"only {bites} bite(s) in six seconds of being digested";
+
+        // And each one must be worth 15% of a shield, which is what makes the escape
+        // urgent rather than optional.
+        if (MathF.Abs(Entities.MawDigestion.BiteFraction - 0.15f) > 0.001f)
+            return $"a bite costs {Entities.MawDigestion.BiteFraction:P0}, expected 15%";
+        return null;
+    }
+
+    private static string? MawEscapeThroughTheGun()
+    {
+        // The escape driven the way a player actually drives it: through the world's
+        // own fire entry point, against a live World, with the cannon's real cooldown
+        // and ammo in the way.
+        //
+        // This exists because testing the digestion in isolation is not enough and once
+        // shipped a trap with no exit. MawReleasesOnThreeShots calls RegisterShot()
+        // directly, which sails straight past PlayerTank.TryFire — and TryFire depends
+        // on a cooldown that Update() used to skip entirely while Captured. The player
+        // got one shot, then the gun stayed locked for the whole hold and the only way
+        // out of the monster was sealed. Every layer between the button and the effect
+        // has to be in the loop or the check proves nothing.
+        var world = new World.World { DynamicSpawning = false };
+        world.Enemies.Clear();
+
+        var player = world.Player;
+        var maw = new Entities.MawCore(player.Position);
+        world.AttachMawForTest(maw);
+
+        // Stand still and be caught.
+        for (int i = 0; i < 60 * 10 && world.Digestion == null; i++)
+            StepWithoutInput(world);
+        if (world.Digestion == null) return "the maw never swallowed a stationary player";
+
+        int ammo0 = player.Ammo;
+
+        // Hold the trigger down, exactly as a panicking player would, and step the sim.
+        // Three shots at a 0.35s cooldown is about a second of being chewed.
+        for (int i = 0; i < 60 * 8 && world.Digestion is { Held: true }; i++)
+        {
+            world.FirePlayerShot();
+            StepWithoutInput(world);
+        }
+
+        if (world.Digestion is { Held: true })
+            return "holding fire for eight seconds never broke the maw's hold";
+        if (player.Ammo >= ammo0)
+            return "the escape shots never cost any ammo";
+        if (ammo0 - player.Ammo > 8)
+            return $"the escape burned {ammo0 - player.Ammo} rounds — the cooldown isn't holding";
+
+        // ...and the player ends up back on the grid, driving.
+        for (int i = 0; i < 60 * 12 && world.Digestion != null; i++)
+            StepWithoutInput(world);
+        if (world.Digestion != null) return "the digestion never finished";
+        if (player.Captured) return "control was never handed back";
+        return null;
+    }
+
+    /// <summary>
+    /// Hangs a maw directly over a stationary player and runs it forward until its
+    /// lunge closes over them — the state a digestion needs. Returns nulls if it never
+    /// got there, which is itself the failure worth reporting.
+    /// </summary>
+    private static (Entities.MawCore?, Entities.PlayerTank?) UnderTheMaw()
+    {
+        var player = new Entities.PlayerTank(Vector2.Zero);
+        var maw = new Entities.MawCore(Vector2.Zero);
+
+        // Hover -> (windup) -> lunge -> caught. The player never moves, which is the
+        // one behaviour this monster punishes.
+        for (int i = 0; i < 60 * 10; i++)
+        {
+            maw.Update((float)Config.FixedDt, player.Position, player.Height);
+            if (maw.JustCaught) return (maw, player);
+        }
+        return (null, null);
     }
 
     // --- helpers: advance the sim without going through global input ---

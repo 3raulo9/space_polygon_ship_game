@@ -66,7 +66,10 @@ public sealed class Renderer : IDisposable
         // a translational rumble on the eye plus an extra rotational rattle on the
         // aim point, so the closer it gets the less steady the world holds.
         float shake = world.Boss is { } b ? b.ProximityShake(player.Position) : 0f;
-        var seizure = world.Seizure;
+        // Whichever set piece owns the camera this frame — the crab's seizure or the
+        // maw's digestion. Both drive the same four channels, so nothing below has to
+        // know which of them is running.
+        var seizure = world.Cinematic;
 
         // Being held in its claw dwarfs merely standing near it, so the cinematic's
         // judder replaces the proximity rumble rather than adding to it — and at an
@@ -231,9 +234,16 @@ public sealed class Renderer : IDisposable
         var specimen = Vector2.Zero;
         // The boss rig towers ~10× a tank, so frame it from far back and higher up;
         // the smaller silhouettes keep the close view.
-        var eye = screen.ShowingBoss ? new Vector3(0f, 20f, -36f) : new Vector3(0f, 3.0f, -6.8f);
+        // The maw hangs high but is far smaller than the crab, so it gets its own
+        // framing: closer in than the boss and aimed up at where it floats, since the
+        // one thing a picture of it has to show is that it is off the ground.
+        var eye = screen.ShowingBoss ? new Vector3(0f, 20f, -36f)
+                : screen.ShowingMaw ? new Vector3(0f, 9f, -20f)
+                : new Vector3(0f, 3.0f, -6.8f);
         _camera.Position = eye;
-        _camera.Target = screen.ShowingBoss ? new Vector3(0f, 5.5f, 0f) : new Vector3(0f, 1.2f, 0f);
+        _camera.Target = screen.ShowingBoss ? new Vector3(0f, 5.5f, 0f)
+                       : screen.ShowingMaw ? new Vector3(0f, 6.5f, 0f)
+                       : new Vector3(0f, 1.2f, 0f);
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);
@@ -246,6 +256,12 @@ public sealed class Renderer : IDisposable
             // The boss is a rig: hold it still (no turntable) and loop the chosen
             // protocol phase so its animation reads.
             _entities.DrawCrabShowcase(screen.CrabPhase, specimen, elapsed, eye);
+        }
+        else if (screen.ShowingMaw)
+        {
+            // Also a rig, also held still — the turntable would fight the tooth rings,
+            // which are the whole thing worth looking at.
+            _entities.DrawMawShowcase(specimen, elapsed, eye);
         }
         else
         {

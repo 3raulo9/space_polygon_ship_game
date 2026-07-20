@@ -1,4 +1,5 @@
 using System.Numerics;
+using VoidTanks.Core;
 
 namespace VoidTanks.Entities;
 
@@ -65,6 +66,11 @@ public sealed class EnemyTank
         fireOrigin = default;
         fireDir = default;
 
+        // Chase across the seam the short way: work against the player's nearest image
+        // on the torus, not their raw coordinates, so a hunter by the world's edge homes
+        // in on a player just over it instead of driving the long way round the arena.
+        playerPos = Torus.NearestImage(playerPos, Position);
+
         Vector2 toPlayer = playerPos - Position;
         float dist = toPlayer.Length();
         if (dist < 0.001f) return false;
@@ -87,6 +93,7 @@ public sealed class EnemyTank
         // toward its stand-off point as it turns to face you.
         var facing = new Vector2(MathF.Sin(Heading), MathF.Cos(Heading));
         Position += facing * (_moveSpeed * advance) * dt;
+        Position = Torus.Wrap(Position);
 
         // Fire when roughly lined up and off cooldown — line-of-sight is trivial
         // on the open plane, so "aimed" stands in for "can see you".

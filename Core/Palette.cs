@@ -65,6 +65,28 @@ public static class Palette
     // #FF2828 — flashing neon red. The core once the threat display begins.
     public static readonly Color NeonRed = new(255, 40, 40, 255);
 
+    // --- Maw-Core (the Hanging Mouth) ----------------------------------------
+    // The Crab-Core's carapace and crystal with the walking half torn off, left
+    // hovering at head height with a throat where its body used to be. Its shell is
+    // the same dead moulded plastic as the crab's, gone a shade sicker; everything
+    // below the shell is either bone or the black stuff leaking out of it.
+
+    // #6B7A6E — the shell, greyed toward a dead green. Close enough to the crab's
+    // chassis to read as the same species, far enough to read as a diseased one.
+    public static readonly Color MawShell = new(107, 122, 110, 255);
+
+    // #14101A — the ichor: near-black with a bruised purple cast, so a drip reads as
+    // a hole in the world rather than as a dark grey polygon.
+    public static readonly Color MawIchor = new(20, 16, 26, 255);
+
+    // #D8CFB4 — old bone. The rotating teeth are the only warm thing on the model,
+    // which is exactly why they are the part the eye goes to.
+    public static readonly Color MawTooth = new(216, 207, 180, 255);
+
+    // #7CE04A — the thin acid-green of its little lasers. Nothing else in the game
+    // is this colour, so a bolt drifting toward you is unmistakably its.
+    public static readonly Color MawLaser = new(124, 224, 74, 255);
+
     // --- Floating pickups ----------------------------------------------------
     // Salvage that drifts on the grid: a battery cell that recharges shield + hyper,
     // and a stray round that restocks ammo. Both read as "good" — a cool charged

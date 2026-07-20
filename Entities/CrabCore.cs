@@ -70,7 +70,7 @@ public sealed class CrabCore
     public float ProximityShake(Vector2 playerPos)
     {
         if (Phase is State.Idle or State.Dying or State.Dead) return 0f;
-        float dist = Vector2.Distance(playerPos, Position);
+        float dist = Torus.Distance(playerPos, Position);
         return Math.Clamp(1f - dist / ShakeRadius, 0f, 1f);
     }
 
@@ -156,6 +156,11 @@ public sealed class CrabCore
         _footfalls.Clear();
         bool snapped = false;
 
+        // Stalk across the seam the short way: everything below reasons about the
+        // player's nearest image on the torus, so a crab by the world's edge wakes to
+        // and hunts a player just over it rather than ignoring them as a world away.
+        playerPos = Torus.NearestImage(playerPos, Position);
+
         // Mid-seizure the protocol is suspended: it has already caught you, so there
         // is nothing left to stalk. It plants where it stands and only the core keeps
         // turning — the stillness is the point, since a boss that carried on
@@ -183,6 +188,11 @@ public sealed class CrabCore
             case State.Dying:       UpdateDying(dt); break;
             case State.Dead:        return false;   // gone; nothing left to do
         }
+
+        // Whatever the protocol slid it, fold the chassis back into the wrap window so
+        // its own coordinates stay canonical — its feet, beam and pose all read off
+        // Position, and the renderer re-images it near the player anyway.
+        Position = Torus.Wrap(Position);
 
         // Core always turns; flash always cools. Outside the lance the chassis
         // settles back onto its legs, so a boss interrupted mid-charge (killed, or
@@ -212,7 +222,7 @@ public sealed class CrabCore
     {
         if (!Alive) return false;
         if (MathF.Abs(shotHeight - CoreHitHeight) > CoreHitVertical) return false;
-        return Vector2.DistanceSquared(shotXZ, Position) <= CoreHitRadius * CoreHitRadius;
+        return Torus.DistanceSquared(shotXZ, Position) <= CoreHitRadius * CoreHitRadius;
     }
 
     /// <summary>
@@ -669,7 +679,9 @@ public sealed class CrabCore
     /// </summary>
     public void SnapToFace(Vector2 target)
     {
-        Vector2 to = target - Position;
+        // The short way round the torus, so a target just over the seam is faced
+        // across it rather than by spinning to point the long way across the arena.
+        Vector2 to = Torus.Delta(Position, target);
         if (to.LengthSquared() > 0.0001f) Heading = MathF.Atan2(to.X, to.Y);
     }
 

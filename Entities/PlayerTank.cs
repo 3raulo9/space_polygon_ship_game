@@ -1,4 +1,5 @@
 using System.Numerics;
+using VoidTanks.Core;
 using VoidTanks.Input;
 
 namespace VoidTanks.Entities;
@@ -34,12 +35,22 @@ public sealed class PlayerTank
     private const float TurnAccel = 6.5f;
     private const float TurnDrag = 8.0f;
 
-    private const float JumpVel = 15f;      // initial upward kick — a taller leap
+    private const float JumpVel = 17f;      // initial upward kick — a taller leap still
     private const float Gravity = 18f;      // upward pull → the rise still slows crisply
     private const float FallGravity = 13f;  // gentler pull coming down → floats + hangs longer
     private const float JumpForwardDrift = 4f; // small forward glide while airborne — carries you a bit further to the front
 
     public bool IsAirborne => Height > 0.001f;
+
+    /// <summary>
+    /// How high the peak of a leap carries the craft, in world units. Solved from the
+    /// jump's own kick and pull (v²/2g) rather than measured or guessed, because one
+    /// enemy is built entirely around this number: the Maw-Core hovers with its
+    /// crystal exactly at the top of a jump, so it can only be shot by a player at the
+    /// apex of one. Deriving it here means retuning the arc moves the monster with it
+    /// instead of quietly making it unhittable.
+    /// </summary>
+    public static float JumpApex => JumpVel * JumpVel / (2f * Gravity);
 
     // --- Combat state (Doc 03) ---
     public float MaxShield = 100f;
@@ -109,6 +120,15 @@ public sealed class PlayerTank
 
     public void Update(float dt)
     {
+        // The cannon cools whatever else is happening to the craft — it is a property
+        // of the weapon, not of who is driving. This has to sit *above* the capture
+        // check: the Maw-Core's digestion is escaped by shooting your way out from
+        // inside it, and a cooldown frozen for the duration of the hold would let the
+        // player fire exactly once and then leave them locked out of the only exit
+        // they have. Whether a trigger pull is honoured at all is the world's call
+        // (see World.FirePlayerShot) — this only keeps the gun alive.
+        if (_fireCooldown > 0f) _fireCooldown -= dt;
+
         // A cinematic has the wheel: it writes the transform itself this tick.
         if (Captured) return;
 
@@ -120,12 +140,17 @@ public sealed class PlayerTank
         if (Hyper < MaxHyper)
             Hyper = MathF.Min(MaxHyper, Hyper + HyperRegen * dt);
 
-        if (_fireCooldown > 0f) _fireCooldown -= dt;
-
         // Apply planar motion along the current heading (no strafe: motion is
         // always along the facing axis).
         var dir = new Vector2(MathF.Sin(Heading), MathF.Cos(Heading));
         Position += dir * _speed * dt;
+
+        // The world is a torus: drive off one edge and you come back on the opposite
+        // one. Fold the craft back into the wrap window every tick — the jump drift
+        // above has already been applied, so this catches all planar motion. Skipped
+        // while a cinematic has the wheel (it returns early above), so a set piece can
+        // write positions off the grid without this fighting it.
+        Position = Torus.Wrap(Position);
     }
 
     /// <summary>
@@ -180,7 +205,7 @@ public sealed class PlayerTank
         // Random bearing and distance — a genuine gamble, not a controlled blink.
         float angle = Random.Shared.NextSingle() * MathF.Tau;
         float dist = TeleportRange * (0.4f + 0.6f * Random.Shared.NextSingle());
-        Position += new Vector2(MathF.Sin(angle), MathF.Cos(angle)) * dist;
+        Position = Torus.Wrap(Position + new Vector2(MathF.Sin(angle), MathF.Cos(angle)) * dist);
 
         Hyper -= HyperspaceCost;
         _speed = 0f;        // the warp kills momentum — you arrive dead-stopped
