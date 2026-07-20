@@ -69,34 +69,87 @@ public sealed class CrabSeizure
 
     // --- Geometry of the hold -------------------------------------------------
 
-    /// <summary>How far out in front of the boss's centre the craft is held. Clear of
-    /// the chassis but well inside the leg span, so the body fills the view.</summary>
-    private const float GripReach = 7.5f;
-
     /// <summary>
-    /// How high off the grid the craft is held — and this number is measured straight
-    /// off the rig rather than picked for feel. The core pyramid's base sits at world
-    /// y≈6.7 and its apex at ≈12.7, so anything much lower than this leaves the player
-    /// staring at the carapace with the gem out of frame entirely, which throws away
-    /// the whole point of being held up in front of it.
+    /// How far out in front of the boss's centre the craft is held — solved off the
+    /// rig rather than chosen, because the player is meant to be <em>in the claw</em>.
+    /// This is the point the front-right limb's tip reaches when it swings onto the
+    /// chassis centre line, so the hand closes on the craft instead of extending past
+    /// it into empty space, which is what a shorter hold looks like from inside.
     ///
-    /// At this height the eye (which rides <see cref="Config.CameraHeight"/> above the
-    /// craft) lands just under the middle of the pyramid: the core fills most of the
-    /// view, the player is looking slightly <em>up</em> into it, and the apex is still
-    /// inside the frustum. Raising the craft clear of the chassis roof at ≈5.5 also
-    /// means nothing of the body occludes the gem.
+    /// It also frames the fight: at arm's length the whole boss sits in the view, the
+    /// core gem included, where held close against the chassis the carapace fills the
+    /// screen and the crystal is cropped out of frame.
     /// </summary>
-    private const float GripHeight = 6.0f;
+    private static readonly float GripReach =
+        CrabRig.CentreGripReach(CrabRig.Legs[CrabRig.GrabLeg]) + GripStandoff;
 
     /// <summary>
-    /// Extra upward aim held on the core through the turn, the scream and the
-    /// wind-up. Small on purpose — at <see cref="GripHeight"/> the eye is already
-    /// nearly level with the middle of the gem, so this only has to tip the view
-    /// enough to keep the pyramid's apex comfortably in frame and to preserve the
-    /// sense of looking up at the thing. Pitching harder would aim past the tip and
-    /// leave the core sitting low on screen, which reads as the camera missing it.
+    /// How far past the claw the craft is actually carried. Not zero, and the reason is
+    /// the leg mesh: it is a walking limb with a high knee, and the pose that raises it
+    /// into an arm translates the whole thing bodily upward — shoulder and knee with it
+    /// — so a claw parked exactly on the camera puts a limb the size of a building an
+    /// arm's length from the player's eye and blacks out most of the screen.
+    ///
+    /// Held a little beyond the claw instead, the grip still reads: the arm sweeps down
+    /// across the frame from the upper corner and passes just under the view, so the
+    /// player plainly sees the thing holding them without it standing between them and
+    /// the core. This is the number to turn if the hand ever crowds the screen again.
     /// </summary>
-    private const float CoreGaze = 0.12f;
+    private const float GripStandoff = 2.8f;
+
+    /// <summary>
+    /// How high off the grid the craft is carried, with the claw closing a little under
+    /// it — see <see cref="CrabRig.GripDrop"/> for why the hand sits below rather than
+    /// level with the eye.
+    ///
+    /// The core pyramid runs from world y≈6.7 to ≈12.7 and the eye rides
+    /// <see cref="Config.CameraHeight"/> above the craft, so this puts the eye just
+    /// under the middle of the gem: the player looks genuinely <em>up</em> into the
+    /// crystal, and the craft still clears the chassis roof (≈5.5) so no part of the
+    /// body comes between them and it.
+    /// </summary>
+    private static readonly float GripHeight = CrabRig.HoldWorldY;
+
+    /// <summary>
+    /// How far the craft is canted over in the grip, in radians. The thing has hold of
+    /// you by one corner and is carrying you at arm's length — hanging perfectly level
+    /// in that grip is the one thing that would read as the game having simply moved
+    /// the camera. The tilt is what sells the hold: the horizon goes off-square, and
+    /// the world stays that way for as long as it has you.
+    ///
+    /// Toward the holding hand, so the cant and the claw agree about which side is
+    /// taking the weight. Kept modest — enough to feel wrong, not enough to make the
+    /// core hard to look at.
+    /// </summary>
+    private const float HoldRoll = -0.17f;
+
+    /// <summary>
+    /// Where in the gem's own height the view is aimed, 0 at its base and 1 at the
+    /// apex. Above the middle, so the player is looking up into the crystal and the
+    /// apex is comfortably inside the frame rather than crowding the top of it.
+    /// </summary>
+    private const float GazeUpGem = 0.6f;
+
+    /// <summary>Where the eye sits while the craft is held — the camera rides above
+    /// the craft, and every framing decision here is measured from it. Declared before
+    /// the gaze below, which reads it: static initialisers run in written order.</summary>
+    private static readonly float EyeHeight = CrabRig.HoldWorldY + Config.CameraHeight;
+
+    /// <summary>
+    /// The aim held on the core through the turn, the scream and the wind-up, as an
+    /// offset to the camera's standing tilt.
+    ///
+    /// Solved rather than dialled in, because the standing tilt makes eyeballing it
+    /// actively misleading: <see cref="Config.CameraLookLift"/> already aims the eye
+    /// well up, so a small <em>positive</em> number here — which reads like "look
+    /// slightly up at the core" — actually points the camera some four units over the
+    /// gem's apex and leaves the crystal in the bottom corner of the screen. What is
+    /// wanted is the slope from the eye to a point up the gem, less the tilt that is
+    /// already there; that arithmetic comes out negative, and it should.
+    /// </summary>
+    private static readonly float CoreGaze =
+        (CrabRig.CoreWorldY + GazeUpGem * CrabRig.CoreMeshHeight - EyeHeight) / GripReach
+        - Config.CameraLookLift;
 
     // --- Timings (seconds) ----------------------------------------------------
 
@@ -268,6 +321,7 @@ public sealed class CrabSeizure
         // left to escalate to. The whole cinematic's judder builds from here.
         Shake = 0.1f + 0.12f * f;
         Pitch = -0.2f * f;                   // wrenched downward as it takes the weight
+        Roll = HoldRoll * f;                 // and canted over as the claw takes it
         Glow = 0.12f * f;
 
         if (_t >= SeizeTime) Enter(Stage.Turn);
@@ -290,6 +344,7 @@ public sealed class CrabSeizure
         // player is turned round, sees what has them, and nothing has happened yet.
         Shake = 0.16f;
         Pitch = Lerp(-0.2f, CoreGaze, f);    // the view comes up onto the core
+        Roll = HoldRoll;
         Glow = Lerp(0.12f, 0.45f, f);
 
         if (_t >= TurnTime) Enter(Stage.Scream);
@@ -312,8 +367,10 @@ public sealed class CrabSeizure
         HoldInGrip(0.05f + 0.12f * f);
         _player.Heading = FacingBoss();
 
-        // Held wide open on the core the whole way through.
+        // Held wide open on the core the whole way through, and held off-square: the
+        // cant drifts a little as the grip works, so the horizon is never quite still.
         Pitch = CoreGaze;
+        Roll = HoldRoll + 0.03f * MathF.Sin(_clock * 4.3f);
 
         // The core doesn't ramp smoothly to white — it surges, so the gem pulses in
         // the player's face at roughly the rate the sub-layer of the scream heaves.
@@ -341,13 +398,15 @@ public sealed class CrabSeizure
 
         if (_t < StrikeImpact)
         {
-            // Wind-up. Everything goes quiet and still for a beat — the shake drops
-            // away and the glow dims, so the blow lands into a hole rather than on
-            // top of the noise that preceded it.
+            // The claw is travelling. Everything else goes quiet for the beat it takes
+            // — the shake drops away and the glow dims — so the blow lands into a hole
+            // rather than on top of the noise that preceded it, and so the only thing
+            // moving in the view is the hand coming at the player.
             float f = _t / StrikeImpact;
             Shake = Lerp(1f, 0.15f, f);
             Glow = Lerp(1f, 0.35f, f);
             Pitch = CoreGaze;
+            Roll = HoldRoll;
         }
         else
         {
@@ -370,6 +429,9 @@ public sealed class CrabSeizure
 
             Shake = 1f;
             Pitch = CoreGaze - 0.75f * recoil;  // the view slammed toward the floor
+            // Knocked hard the other way by the blow, then dragged back to the cant the
+            // grip holds them at — the horizon takes the hit along with the player.
+            Roll = HoldRoll + 0.5f * recoil;
             Glow = 0.35f + 0.5f * recoil;       // a white flash on contact
         }
 
@@ -392,6 +454,7 @@ public sealed class CrabSeizure
 
         Shake = 0.45f;
         Pitch = Lerp(CoreGaze - 0.75f, 0.1f, f);   // recovering from the blow
+        Roll = HoldRoll * (1f - f);                // levelling out as the grip opens
         Glow = 0.35f * (1f - f);
 
         if (_t >= WindTime) BeginFlight();
@@ -510,17 +573,26 @@ public sealed class CrabSeizure
 
     /// <summary>
     /// The striking limb's swing. It winds back across the scream — visible in the
-    /// player's peripheral vision the whole time, which is the telegraph — hangs at
-    /// the top through the strike's wind-up, then comes through fast.
+    /// player's peripheral vision the whole time, which is the telegraph — and then
+    /// comes through, arriving on the player at the exact tick the blow is dealt.
+    ///
+    /// That alignment is the whole point of the beat, and it is why the swing occupies
+    /// the run-up to <see cref="StrikeImpact"/> rather than the time after it: the
+    /// claw has to travel <em>into</em> the hit. Landing the flash and the damage first
+    /// and animating the arm afterwards is what makes a strike read as the screen
+    /// simply flickering rather than as something hitting you. Past the impact the arm
+    /// holds at full extension — the claw resting where it landed, on the player, while
+    /// they reel off it.
     /// </summary>
     private float StrikeArm => _stage switch
     {
-        // Drawing back: negative-going is expressed by the renderer as the wind-up,
-        // so the scream ends with the claw cocked and obvious.
-        Stage.Scream => 0.35f * Ease(_t / ScreamTime),
+        // Drawing back to the cocked pose, which the renderer expresses as the claw
+        // rising and swinging outward — so the scream ends with the blow obviously
+        // loaded and hanging in the corner of the view.
+        Stage.Scream => CrabRig.StrikeCock * Ease(_t / ScreamTime),
         Stage.Strike => _t < StrikeImpact
-            ? 0.35f                                    // held, cocked
-            : 0.35f + 0.65f * Ease((_t - StrikeImpact) / (StrikeTime - StrikeImpact)),
+            ? CrabRig.StrikeCock + (1f - CrabRig.StrikeCock) * Ease(_t / StrikeImpact)
+            : 1f,                                      // landed, and left on them
         Stage.Wind => 1f - Ease(_t / WindTime),        // withdrawing
         _ => 0f,
     };

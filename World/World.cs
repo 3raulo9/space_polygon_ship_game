@@ -97,7 +97,7 @@ public sealed class World
         string? nearPickup = Environment.GetEnvironmentVariable("VOIDTANKS_PICKUP_NEAR");
         string? nearEnemy = Environment.GetEnvironmentVariable("VOIDTANKS_ENEMY_NEAR");
         string? nearBoss = Environment.GetEnvironmentVariable("VOIDTANKS_BOSS_NEAR");
-        bool capture = nearPickup == "1" || nearEnemy is "1" or "elite" || nearBoss == "1";
+        bool capture = nearPickup == "1" || nearEnemy is "1" or "elite" || nearBoss is "1" or "seize";
         if (capture) DynamicSpawning = false;
 
         // Salvage. Capture seeds one battery and one round dead ahead; play seeds a
@@ -129,7 +129,16 @@ public sealed class World
         // The Crab-Core is no longer pre-placed on the field. A capture override drops
         // it in point-blank for screenshots; in play it starts absent and rises rarely
         // out of the fog via the spawn director.
-        Boss = nearBoss == "1" ? new CrabCore(new Vector2(0f, 44f)) : null;
+        // "seize" stands the boss right on top of the player instead, inside
+        // CrabSeizure.GrabRadius, so the protocol runs itself up to pursuit and the
+        // grab fires on its own a second or two in — the only way to get a screenshot
+        // of the cinematic, which otherwise needs a human to let the thing corner them.
+        Boss = nearBoss switch
+        {
+            "1"     => new CrabCore(new Vector2(0f, 44f)),
+            "seize" => new CrabCore(new Vector2(0f, 9f)),
+            _       => null,
+        };
     }
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;

@@ -192,27 +192,27 @@ public sealed class CrabRenderer
     // forward, and read as hands precisely because a walking leg doing that is
     // obviously wrong. The maths is the same for both; only the target angles differ.
 
-    private const int GrabLeg = 0;    // right front, in CrabRig.Legs order
-    private const int StrikeLeg = 3;  // left front
+    private const int GrabLeg = CrabRig.GrabLeg;      // right front, in CrabRig.Legs order
+    private const int StrikeLeg = CrabRig.StrikeLeg;  // left front
 
-    // A leg mesh is modelled pointing along its own +X, and PolyMesh's rotation maps
-    // local +X onto world +Z at a yaw of -PI/2 — so these are the angles at which a
-    // limb points straight out in front of the chassis. The two hands approach that
-    // heading from opposite sides, hence the two windings: lerping the left arm
-    // toward -PI/2 would take the short way round and barely move it at all.
-    private const float GripYawRight = -MathF.PI / 2f;          // right limb, swinging in
-    private const float GripYawLeft = 3f * MathF.PI / 2f;       // left limb, swinging across
+    // Where each hand reaches to. A shoulder is mounted off to its own side of the
+    // chassis, so a limb pointing bluntly "forward" carries its claw forward *and*
+    // sideways and ends up alongside the player rather than on them — the angle has to
+    // be solved, and CrabRig does it, converging both hands on one point in front of
+    // the body. The right limb takes that yaw directly; the left is offset a full turn
+    // so it sweeps across the front of the chassis on the way in, rather than taking
+    // the short way round and barely moving.
+    private static readonly float GripYawRight = CrabRig.HoldingGripYaw(CrabRig.Legs[GrabLeg]);
+    private static readonly float GripYawLeft =
+        CrabRig.CentreGripYaw(CrabRig.Legs[StrikeLeg]) + MathF.Tau;
 
-    /// <summary>
-    /// How far up (in the rig's local units) a limb rises to hold the player clear of
-    /// the grid. The rig's geometry makes this exact rather than eyeballed: a leg's
-    /// shoulder mounts at <c>BodyHeight + Mount.Y</c> and its foot hangs
-    /// <c>-Foot.Y</c> below that, and those two happen to cancel — so the claw's world
-    /// height is simply this value times <see cref="CrabRig.Scale"/>. At 2.5 that puts
-    /// the hand at world y=6, which is precisely where CrabSeizure parks the craft, so
-    /// the claw and the thing it is supposedly gripping occupy the same space.
-    /// </summary>
-    private const float ArmLift = 2.5f;
+    /// <summary>Where the holding claw rides: under the craft, so the limb stays out of
+    /// the player's line of sight to the core. See <see cref="CrabRig.GripDrop"/>.</summary>
+    private const float ArmLift = CrabRig.HoldLift - CrabRig.GripDrop;
+
+    /// <summary>Where the striking claw finishes: just above the craft, so unlike the
+    /// holding hand this one does come into frame — that is the hit.</summary>
+    private const float StrikeLift = CrabRig.HoldLift + CrabRig.StrikeRest;
 
     /// <summary>
     /// Swings one limb from a walking pose into an outstretched arm by
@@ -243,24 +243,26 @@ public sealed class CrabRenderer
 
         if (amount <= CockPoint)
         {
-            // Winding up: back, and rising well above the grip so the blow has
+            // Winding up: back, and rising well above the craft so the blow has
             // somewhere to fall from.
             float w = amount / CockPoint;
             yaw = Lerp(yaw, cockedYaw, w);
-            footLift = Lerp(footLift, ArmLift + CockRise, w);
+            footLift = Lerp(footLift, StrikeLift + CockRise, w);
             return;
         }
 
-        // Coming through: across the front of the chassis and down onto the player.
+        // Coming through: across the front of the chassis and down onto the player,
+        // finishing just above them rather than under them — this hand is meant to
+        // arrive in the view, not skirt the bottom of it like the holding one.
         float s = (amount - CockPoint) / (1f - CockPoint);
         s = s * s;                                 // accelerates into the impact
         yaw = Lerp(cockedYaw, GripYawLeft, s);
-        footLift = Lerp(ArmLift + CockRise, ArmLift, s);
+        footLift = Lerp(StrikeLift + CockRise, StrikeLift, s);
     }
 
-    /// <summary>Where in the strike channel the limb is fully wound back — matched to
-    /// the value the cinematic holds through its own wind-up beat.</summary>
-    private const float CockPoint = 0.35f;
+    /// <summary>Where in the strike channel the limb is fully wound back — shared with
+    /// the cinematic, which winds the channel to exactly here across the scream.</summary>
+    private const float CockPoint = CrabRig.StrikeCock;
 
     /// <summary>Extra height the striking limb gains at the top of its wind-up, above
     /// the grip. This is the whole telegraph: the claw visibly gets further away

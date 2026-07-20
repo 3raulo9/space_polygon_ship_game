@@ -32,4 +32,13 @@ public static class Config
     // ceiling of nothing (Doc 02).
     public const float CameraFovY = 62f;
     public const float CameraHeight = 3.2f; // eye height above the grid plane
+
+    /// <summary>
+    /// The standing upward tilt of the eye, as a slope on the look direction — this is
+    /// what drops the horizon and opens the sky band above it. Anything that wants to
+    /// aim the camera at a specific thing has to work <em>relative</em> to this rather
+    /// than from level, or it ends up pointing a good fifteen degrees over the top of
+    /// whatever it meant to frame.
+    /// </summary>
+    public const float CameraLookLift = 0.15f;
 }

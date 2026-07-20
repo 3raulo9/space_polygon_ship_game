@@ -112,7 +112,8 @@ public sealed class Renderer : IDisposable
         // Pitch the eye up a touch so the horizon sits low on screen: that opens
         // up a tall sky band above the floor, where the pink glow can fade all
         // the way to black below the top HUD strip.
-        _camera.Target = eye + rumble + new Vector3(fwd.X, 0.15f + pitch, fwd.Y) + rattle;
+        _camera.Target = eye + rumble
+                       + new Vector3(fwd.X, Config.CameraLookLift + pitch, fwd.Y) + rattle;
         // Roll tips the whole world by turning the camera's idea of up. The axis is
         // the craft's own right on the plane, so the horizon pivots about the centre
         // of the view rather than sliding sideways.
