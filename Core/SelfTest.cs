@@ -25,6 +25,8 @@ public static class SelfTest
         failures += Check("debug key spawns a random enemy", DebugSpawnAddsEnemy);
         failures += Check("the boss seizes and throws a cornered player", BossSeizesPlayer);
         failures += Check("a held player is raised to face the core", SeizureFramesTheCore);
+        failures += Check("the boss's hands frame the held player", SeizureHandsReachThePlayer);
+        failures += Check("the boss's beam fires where the player was", BeamLocksItsDirection);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -228,6 +230,84 @@ public static class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// The two hands have opposite jobs, and both are easy to get silently wrong.
+    ///
+    /// The striking one has to converge on the craft or the blow lands in empty air.
+    /// The holding one has to stay off the line of sight: it is drawn from a walking
+    /// leg, and the pose that raises it into an arm lifts the whole limb — knee
+    /// included — so on the centre line it becomes a column through the middle of the
+    /// shot and the player spends the scream looking at a leg instead of the crystal.
+    ///
+    /// Neither is visible from the numbers alone, because a claw's world position and
+    /// the point the cinematic parks the craft at are reached down entirely separate
+    /// paths: a pose yaw through the renderer's rotation convention, versus a forward
+    /// offset through the seizure's.
+    /// </summary>
+    private static string? SeizureHandsReachThePlayer()
+    {
+        var (boss, player) = CorneredByBoss();
+        if (boss == null || player == null) return "the boss never entered pursuit";
+
+        var legs = Entities.CrabRig.Legs;
+        var grab = legs[Entities.CrabRig.GrabLeg];
+        var strike = legs[Entities.CrabRig.StrikeLeg];
+
+        var seizure = new Entities.CrabSeizure(boss, player);
+        bool sawHold = false;
+        for (int i = 0; i < 60 * 20 && seizure.Active; i++)
+        {
+            boss.Update((float)Config.FixedDt, player.Position);
+            seizure.Update((float)Config.FixedDt);
+
+            // Checked once the hold has settled: the drag in is an interpolation from
+            // wherever the craft was standing, so only the stages after it are claimed
+            // to have the player actually in the grip.
+            if (seizure.Phase is not (Entities.CrabSeizure.Stage.Scream
+                                   or Entities.CrabSeizure.Stage.Strike)) continue;
+            sawHold = true;
+
+            // The striking hand converges on the craft: it has to actually connect.
+            // Generous, because the grip trembles and the blow knocks the craft off the
+            // claw on purpose — this only catches a hand in the wrong place entirely.
+            Vector2 hit = Entities.CrabRig.TipWorldXZ(
+                strike, Entities.CrabRig.CentreGripYaw(strike), boss.Position, boss.Heading);
+            float miss = Vector2.Distance(hit, player.Position);
+            if (miss > 5f)
+                return $"the striking claw is {miss:F1} from the player it should hit";
+
+            // The holding hand must NOT. It is a limb the size of a building and the
+            // pose that raises it carries its knee higher still, so anywhere near the
+            // line of sight it becomes a column straight through the middle of the shot
+            // with the core behind it. Held off to the side it frames the view instead.
+            Vector2 held = Entities.CrabRig.TipWorldXZ(
+                grab, Entities.CrabRig.HoldingGripYaw(grab), boss.Position, boss.Heading);
+            Vector2 toClaw = held - player.Position;
+            Vector2 view = boss.Position - player.Position;
+            if (toClaw.LengthSquared() > 0.01f && view.LengthSquared() > 0.01f)
+            {
+                float off = MathF.Acos(Math.Clamp(Vector2.Dot(
+                    Vector2.Normalize(toClaw), Vector2.Normalize(view)), -1f, 1f));
+                if (off < 0.6f)
+                    return $"the holding claw is only {off:F2} rad off the view axis "
+                         + "— it will stand between the player and the core";
+            }
+
+            float lift = MathF.Abs(player.Height - Entities.CrabRig.HoldWorldY);
+            if (lift > 3f)
+                return $"the craft is carried {lift:F1} off the height it is held at";
+
+            // The point of the whole arrangement: the holding claw grips from below the
+            // eye. Level with it, the limb lies along the line of sight and the player
+            // spends the scream looking at a leg instead of at the crystal.
+            float eye = player.Height + Config.CameraHeight;
+            if (Entities.CrabRig.GripWorldY >= eye - 1f)
+                return $"the holding claw at {Entities.CrabRig.GripWorldY:F1} is not clear "
+                     + $"below the eye at {eye:F1} — it will block the core";
+        }
+        return sawHold ? null : "the hold never played";
+    }
+
     private static string? SeizureFramesTheCore()
     {
         // The whole point of being held is watching the core. The craft has to be
@@ -237,7 +317,7 @@ public static class SelfTest
         if (boss == null || player == null) return "the boss never entered pursuit";
 
         float gemBase = Entities.CrabRig.CoreWorldY;
-        float gemApex = gemBase + 2.5f * Entities.CrabRig.Scale;   // the mesh's own height
+        float gemApex = gemBase + Entities.CrabRig.CoreMeshHeight;
 
         var seizure = new Entities.CrabSeizure(boss, player);
         bool sawScream = false;
@@ -251,10 +331,88 @@ public static class SelfTest
             float eye = player.Height + Config.CameraHeight;
             if (eye < gemBase || eye > gemApex)
                 return $"eye at {eye:F1} is outside the core's {gemBase:F1}..{gemApex:F1} band";
-            // And it must be looking up at it, not down onto it.
-            if (seizure.Pitch <= 0f) return "the view wasn't aimed up at the core";
+
+            // And the camera has to actually be pointed at the gem. Checking the sign
+            // of the seizure's own pitch is not the same thing and quietly passes while
+            // the crystal sits off the bottom of the screen: the eye carries a standing
+            // upward tilt of its own, so what matters is where the two together land at
+            // the boss's distance, not whether the cinematic's share of it is positive.
+            float slope = Config.CameraLookLift + seizure.Pitch;
+            float aim = eye + slope * Vector2.Distance(player.Position, boss.Position);
+            if (aim < gemBase || aim > gemApex)
+                return $"the view is aimed at {aim:F1}, outside the core's "
+                     + $"{gemBase:F1}..{gemApex:F1} band";
         }
         return sawScream ? null : "the scream stage never played";
+    }
+
+    /// <summary>
+    /// The lance's one promise: once it fires, it fires where the player <em>was</em>.
+    ///
+    /// This is the property the whole attack is balanced on — the charge is a window
+    /// to leave the line, and that window is only real if walking out of it works. So
+    /// this drives a boss all the way to the shot and then teleports the player a long
+    /// way sideways mid-burn, and asserts the beam neither turns to follow nor lands a
+    /// hit. If a future change ever makes the beam track, this fails rather than the
+    /// attack quietly becoming unavoidable.
+    /// </summary>
+    private static string? BeamLocksItsDirection()
+    {
+        var (boss, player) = CorneredByBoss();
+        if (boss == null || player == null) return "boss never reached pursuit";
+
+        // Stand it off at lance range — inside the grab radius it goes for the claw.
+        var aimedAt = new Vector2(0f, 34f);
+        boss.Position = aimedAt;
+        float dt = (float)Config.FixedDt;
+
+        // The cooldown runs down over several seconds of pursuit, during which the
+        // boss is walking in. Pin it at range each tick — in play that gap is held by
+        // the player outrunning it, which is the situation the attack exists for; here
+        // it just keeps the wait from ending with the crab in the player's lap.
+        for (int i = 0; i < 60 * 30 && !boss.BeamActive; i++)
+        {
+            if (boss.Phase == Entities.CrabCore.State.Pursuit) boss.Position = aimedAt;
+            boss.Update(dt, player.Position);
+        }
+
+        if (!boss.BeamActive) return "boss never fired its beam in 30s of pursuit";
+
+        Vector3 firedAlong = boss.BeamDirection;
+
+        // First: it is aimed at the player it locked. This is what pins the bearing
+        // and elevation conventions together — get either of them mirrored and the
+        // beam still fires, still holds its line, and still misses every time.
+        if (!InBeam(boss, player.Position, firedAlong))
+            return "the beam did not point at the player it locked onto";
+
+        // Now break for cover: straight out to one side, well clear of the shaft.
+        player.Position = new Vector2(60f, 0f);
+
+        for (int i = 0; i < 60 * 4 && boss.BeamActive; i++)
+        {
+            boss.Update(dt, player.Position);
+            if (!boss.BeamActive) break;
+
+            if (Vector3.Distance(boss.BeamDirection, firedAlong) > 0.001f)
+                return "the beam turned to follow the player after firing";
+
+            // ...and the player who ran is genuinely out of it.
+            if (InBeam(boss, player.Position, firedAlong))
+                return "a player who ran clear was still inside the beam";
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether a craft standing at <paramref name="at"/> is inside the
+    /// boss's beam — the same point-to-ray test the world damages on.</summary>
+    private static bool InBeam(Entities.CrabCore boss, Vector2 at, Vector3 dir)
+    {
+        var p = new Vector3(at.X, 1f, at.Y);
+        Vector3 from = boss.BeamOrigin;
+        float along = Math.Clamp(Vector3.Dot(p - from, dir), 0f, Entities.CrabCore.BeamLength);
+        return Vector3.Distance(p, from + dir * along) <= Entities.CrabCore.BeamRadius;
     }
 
     /// <summary>

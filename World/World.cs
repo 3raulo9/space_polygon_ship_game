@@ -97,7 +97,7 @@ public sealed class World
         string? nearPickup = Environment.GetEnvironmentVariable("VOIDTANKS_PICKUP_NEAR");
         string? nearEnemy = Environment.GetEnvironmentVariable("VOIDTANKS_ENEMY_NEAR");
         string? nearBoss = Environment.GetEnvironmentVariable("VOIDTANKS_BOSS_NEAR");
-        bool capture = nearPickup == "1" || nearEnemy is "1" or "elite" || nearBoss == "1";
+        bool capture = nearPickup == "1" || nearEnemy is "1" or "elite" || nearBoss is "1" or "seize";
         if (capture) DynamicSpawning = false;
 
         // Salvage. Capture seeds one battery and one round dead ahead; play seeds a
@@ -129,7 +129,16 @@ public sealed class World
         // The Crab-Core is no longer pre-placed on the field. A capture override drops
         // it in point-blank for screenshots; in play it starts absent and rises rarely
         // out of the fog via the spawn director.
-        Boss = nearBoss == "1" ? new CrabCore(new Vector2(0f, 44f)) : null;
+        // "seize" stands the boss right on top of the player instead, inside
+        // CrabSeizure.GrabRadius, so the protocol runs itself up to pursuit and the
+        // grab fires on its own a second or two in — the only way to get a screenshot
+        // of the cinematic, which otherwise needs a human to let the thing corner them.
+        Boss = nearBoss switch
+        {
+            "1"     => new CrabCore(new Vector2(0f, 44f)),
+            "seize" => new CrabCore(new Vector2(0f, 9f)),
+            _       => null,
+        };
     }
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
@@ -196,6 +205,8 @@ public sealed class World
             // notices the player. Fed every tick; Audio eases the rate and level.
             Audio.SetBossHum(true, Vector2.Distance(boss.Position, Player.Position), boss.Agitation);
 
+            UpdateBeam(boss, dt);
+
             // Once the death glitch has fully torn the rig apart, drop the boss so it
             // stops updating and the director is free to raise a new one later.
             if (boss.Dead) Boss = null;
@@ -211,6 +222,56 @@ public sealed class World
         if (DynamicSpawning) UpdateSpawning(dt);
         Debris.Update(dt);
         Enemies.RemoveAll(e => !e.Alive);
+    }
+
+    /// <summary>What standing in the Crab-Core's beam costs, per damage tick.</summary>
+    private const float BeamDamage = 9f;
+
+    /// <summary>
+    /// How often the beam bites while the player is inside it. Ticked rather than
+    /// applied per-frame for two reasons: the damage stops depending on the frame
+    /// rate, and each bite fires the hit cue, which at 60Hz would be a solid tone
+    /// rather than the sound of being hurt repeatedly.
+    /// </summary>
+    private const float BeamTickInterval = 0.35f;
+
+    private float _beamTick;
+
+    /// <summary>
+    /// Applies the Crab-Core's beam to the player: while it is burning, anything
+    /// inside the shaft takes a bite every <see cref="BeamTickInterval"/>.
+    ///
+    /// The test is a plain point-to-ray distance in 3D, which is exactly what the
+    /// renderer draws — so what looks like standing in the light is standing in the
+    /// light. Because the boss locked its direction before firing, the player's own
+    /// movement is the entire defence: walk out of the line and the beam keeps
+    /// burning empty grid for the rest of its five seconds.
+    /// </summary>
+    private void UpdateBeam(CrabCore boss, float dt)
+    {
+        if (!boss.BeamActive)
+        {
+            // Reset between shots so stepping into a fresh beam bites immediately
+            // rather than on whatever was left of the last one's clock.
+            _beamTick = 0f;
+            return;
+        }
+
+        var target = new Vector3(Player.Position.X, Player.Height + 1f, Player.Position.Y);
+        Vector3 from = boss.BeamOrigin;
+        Vector3 dir = boss.BeamDirection;
+
+        // Distance from the craft to the beam's axis, clamped to the shaft's own
+        // length so the ray doesn't reach backwards out of the emitter.
+        float along = Math.Clamp(Vector3.Dot(target - from, dir), 0f, CrabCore.BeamLength);
+        float miss = Vector3.Distance(target, from + dir * along);
+
+        _beamTick -= dt;
+        if (miss > CrabCore.BeamRadius + PlayerTank.Radius) return;
+        if (_beamTick > 0f) return;
+
+        _beamTick = BeamTickInterval;
+        DamagePlayer(BeamDamage);
     }
 
     /// <summary>
@@ -337,6 +398,20 @@ public sealed class World
     }
 
     /// <summary>A random point on the plane at [min,max] from the player.</summary>
+    /// <summary>
+    /// Debug hatch: plants a Crab-Core directly ahead of the player's current heading,
+    /// far enough out that it sits outside <see cref="CrabCore.DetectRadius"/> and stays
+    /// dormant — so a tester can walk up on a sleeping boss and choose the moment it
+    /// wakes. Replaces any Crab-Core already on the field rather than stacking a second.
+    /// </summary>
+    public void SpawnCrabAhead()
+    {
+        // A margin past the wake radius: close enough to see and approach, but the
+        // boss is unmistakably still asleep when it lands.
+        const float Ahead = CrabCore.DetectRadius + 15f;
+        Boss = new CrabCore(Player.Position + Player.Forward * Ahead);
+    }
+
     private Vector2 RandomPointAroundPlayer(float minDist, float maxDist)
         => PointAround(Player.Position, minDist, maxDist);
 

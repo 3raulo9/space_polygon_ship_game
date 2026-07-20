@@ -60,9 +60,19 @@ public static class InputMap
     // onto the horizon each press, so threats can be stacked on demand while playing.
     public static bool DebugSpawnPressed => Raylib.IsKeyPressed(KeyboardKey.L);
 
+    // 'N' toggles the spawn director off and on — a quiet field to test against
+    // without the horizon refilling behind you. Only affects automatic spawning;
+    // the manual hatches below still work.
+    public static bool DebugNoSpawnPressed => Raylib.IsKeyPressed(KeyboardKey.N);
+
+    // 'K' plants a Crab-Core dead ahead of the player, parked outside its own
+    // detect radius so it stays dormant until you choose to walk into it.
+    public static bool DebugSpawnCrabPressed => Raylib.IsKeyPressed(KeyboardKey.K);
+
     /// <summary>
-    /// Number-row 1..4 as a just-pressed digit (0 if none). The test screen uses it
-    /// to scrub between an animated specimen's phases.
+    /// Number-row 1..6 as a just-pressed digit (0 if none). The test screen uses it
+    /// to scrub between an animated specimen's phases — six of them now that the
+    /// Crab-Core's lance charge and burn are their own states.
     /// </summary>
     public static int MenuDigitPressed()
     {
@@ -70,6 +80,8 @@ public static class InputMap
         if (Raylib.IsKeyPressed(KeyboardKey.Two)) return 2;
         if (Raylib.IsKeyPressed(KeyboardKey.Three)) return 3;
         if (Raylib.IsKeyPressed(KeyboardKey.Four)) return 4;
+        if (Raylib.IsKeyPressed(KeyboardKey.Five)) return 5;
+        if (Raylib.IsKeyPressed(KeyboardKey.Six)) return 6;
         return 0;
     }
 }

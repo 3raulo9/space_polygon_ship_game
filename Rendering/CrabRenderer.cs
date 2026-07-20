@@ -39,12 +39,17 @@ public sealed class CrabRenderer
         float baseY = CrabRig.BodyHeight;
         float fling = death * death;    // ease-in: a beat of shudder, then it lets go
 
+        // The chassis's lean while it lines up its lance. Zero in every other phase,
+        // so all of this collapses back to the flat rig it has always drawn as.
+        float pitch = pose.BodyPitch, roll = pose.BodyRoll;
+
         // Lower base: grinds down into the grid as it tears.
         if (!Flicker(death))
         {
             Vector3 j = Jitter(death, 1.2f) + new Vector3(0f, -fling * 3f, 0f);
             _bodyLower.Draw(new Vector2(bodyPos.X + j.X, bodyPos.Y + j.Z), heading,
-                baseY * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death));
+                baseY * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death),
+                pitch, roll);
         }
 
         // Upper carapace lid: rises by the clamp amount in life; on death it blows
@@ -55,7 +60,8 @@ public sealed class CrabRenderer
             Vector3 j = Jitter(death, 1.6f) + new Vector3(0f, fling * 12f, 0f);
             float spin = heading + fling * 6f;
             _bodyUpper.Draw(new Vector2(bodyPos.X + j.X, bodyPos.Y + j.Z), spin,
-                (baseY + lift) * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death));
+                (baseY + lift) * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death),
+                pitch, roll);
         }
 
         // Neon gem in the well, spinning and tinted this frame's colour — on death it
@@ -64,8 +70,10 @@ public sealed class CrabRenderer
         {
             Vector3 j = Jitter(death, 2.2f) + new Vector3(0f, fling * 8f, 0f);
             Color coreTint = death > 0f ? DeathTint(Palette.NeonRed, death) : pose.CoreColor;
+            // The gem is the emitter, so it takes the full lean: when the body tips
+            // onto the player, the crystal is what ends up pointed at them.
             DrawPart(_core, new Vector3(0f, baseY + CoreY, 0f), pose.CoreSpin + fling * 20f,
-                bodyPos, heading, cameraPos, coreTint, j);
+                bodyPos, heading, cameraPos, coreTint, j, pitch, roll, tiltPart: true);
         }
 
         // Six legs, bobbing out of phase for the skitter; on death each snaps off and
@@ -97,9 +105,84 @@ public sealed class CrabRenderer
                 Vector2 outward = LegOutward(leg, heading);
                 offset += new Vector3(outward.X * fling * 16f, fling * 6f, outward.Y * fling * 16f);
             }
+            // The legs' shoulders ride the leaning chassis — that is what makes the
+            // tilt read as the body shifting its weight — but each limb itself stays
+            // upright, because its foot is on the grid holding the thing up. Tipping
+            // the legs too would swing the feet through the floor.
             DrawPart(_leg, mount, yaw + fling * 4f, bodyPos, heading, cameraPos,
-                DeathTint(Palette.CrabChassis, death), offset);
+                DeathTint(Palette.CrabChassis, death), offset, pitch, roll, tiltPart: false);
         }
+    }
+
+    // --- The lance ------------------------------------------------------------
+
+    /// <summary>
+    /// Draws whatever the boss's beam attack is doing this frame: a gathering flare
+    /// in the crystal across the charge, then the beam itself.
+    ///
+    /// The beam is white cored inside red, and the layering is what makes that read
+    /// rather than the colours: an opaque white shaft is drawn first and a wide
+    /// translucent red sheath over it, so the edges bleed red into the dark while the
+    /// centre stays blown-out white — a beam too bright to have a colour in the
+    /// middle. Drawn as round cylinders rather than the game's flat-shaded facets on
+    /// purpose: light is the one thing out here that isn't built out of polygons.
+    /// </summary>
+    public void DrawLance(Entities.CrabCore boss)
+        => DrawLance(boss.BeamOrigin, boss.BeamDirection, boss.ChargeProgress,
+            boss.BeamActive ? boss.BeamProgress : -1f);
+
+    /// <summary>
+    /// The lance from plain values rather than a live boss, so the test screen can
+    /// show the charge and the beam with no brain behind them. A negative
+    /// <paramref name="beam"/> means the shaft isn't firing at all.
+    /// </summary>
+    public void DrawLance(Vector3 origin, Vector3 direction, float charge, float beam)
+    {
+        float t = (float)Raylib.GetTime();
+
+        // The charge: a ball of light swelling in the gem, pulsing faster as it
+        // fills, so the crystal is visibly loading before anything comes out of it.
+        if (charge > 0f)
+        {
+            float pulse = 0.75f + 0.25f * MathF.Sin(t * (14f + 26f * charge));
+            float r = (0.8f + 3.2f * charge * charge) * pulse;
+            Color hot = GridRenderer.LerpColor(Palette.NeonRed, Color.White, charge * charge);
+            Raylib.DrawSphereEx(origin, r * 1.7f, 8, 8,
+                new Color(Palette.NeonRed.R, Palette.NeonRed.G, Palette.NeonRed.B, (int)(120 * charge)));
+            Raylib.DrawSphereEx(origin, r, 8, 8, hot);
+        }
+
+        if (beam < 0f) return;
+
+        float f = beam;
+        // Snaps on and cuts out, holding full width almost the whole way between —
+        // the beam is either firing or it isn't, and the taper at each end only
+        // exists so neither edge lands as a hard pop.
+        float env = Math.Clamp(MathF.Min(f / 0.06f, (1f - f) / 0.12f), 0f, 1f);
+        if (env <= 0f) return;
+
+        Vector3 from = origin;
+        Vector3 to = from + direction * Entities.CrabCore.BeamLength;
+
+        // A fast flutter on the width, so the shaft boils rather than sitting there
+        // as a static cone — a still beam reads as geometry, not as energy.
+        float flutter = 0.9f + 0.1f * MathF.Sin(t * 37f);
+        float core = Entities.CrabCore.BeamRadius * 0.42f * env * flutter;
+        float sheath = Entities.CrabCore.BeamRadius * env * flutter;
+
+        // White core first, red sheath over it: the sheath's near face then blends
+        // across the white instead of the depth buffer hiding it.
+        Raylib.DrawCylinderEx(from, to, core * 1.35f, core, 10, Color.White);
+        Raylib.DrawCylinderEx(from, to, sheath * 1.4f, sheath, 10,
+            new Color(Palette.NeonRed.R, Palette.NeonRed.G, Palette.NeonRed.B, (byte)130));
+
+        // The muzzle: a small blown-out flare where it leaves the crystal, so the beam
+        // has an obvious source and doesn't read as having simply appeared in the air.
+        // Kept barely wider than the shaft itself — sized off the beam and not off the
+        // rig, because a flare big enough to be seen from across the arena is also big
+        // enough to swallow the boss that fired it.
+        Raylib.DrawSphereEx(from, sheath * 0.95f, 8, 8, new Color((int)255, 120, 120, 150));
+        Raylib.DrawSphereEx(from, core * 1.1f, 8, 8, Color.White);
     }
 
     // --- The seizure's two hands ---------------------------------------------
@@ -109,27 +192,27 @@ public sealed class CrabRenderer
     // forward, and read as hands precisely because a walking leg doing that is
     // obviously wrong. The maths is the same for both; only the target angles differ.
 
-    private const int GrabLeg = 0;    // right front, in CrabRig.Legs order
-    private const int StrikeLeg = 3;  // left front
+    private const int GrabLeg = CrabRig.GrabLeg;      // right front, in CrabRig.Legs order
+    private const int StrikeLeg = CrabRig.StrikeLeg;  // left front
 
-    // A leg mesh is modelled pointing along its own +X, and PolyMesh's rotation maps
-    // local +X onto world +Z at a yaw of -PI/2 — so these are the angles at which a
-    // limb points straight out in front of the chassis. The two hands approach that
-    // heading from opposite sides, hence the two windings: lerping the left arm
-    // toward -PI/2 would take the short way round and barely move it at all.
-    private const float GripYawRight = -MathF.PI / 2f;          // right limb, swinging in
-    private const float GripYawLeft = 3f * MathF.PI / 2f;       // left limb, swinging across
+    // Where each hand reaches to. A shoulder is mounted off to its own side of the
+    // chassis, so a limb pointing bluntly "forward" carries its claw forward *and*
+    // sideways and ends up alongside the player rather than on them — the angle has to
+    // be solved, and CrabRig does it, converging both hands on one point in front of
+    // the body. The right limb takes that yaw directly; the left is offset a full turn
+    // so it sweeps across the front of the chassis on the way in, rather than taking
+    // the short way round and barely moving.
+    private static readonly float GripYawRight = CrabRig.HoldingGripYaw(CrabRig.Legs[GrabLeg]);
+    private static readonly float GripYawLeft =
+        CrabRig.CentreGripYaw(CrabRig.Legs[StrikeLeg]) + MathF.Tau;
 
-    /// <summary>
-    /// How far up (in the rig's local units) a limb rises to hold the player clear of
-    /// the grid. The rig's geometry makes this exact rather than eyeballed: a leg's
-    /// shoulder mounts at <c>BodyHeight + Mount.Y</c> and its foot hangs
-    /// <c>-Foot.Y</c> below that, and those two happen to cancel — so the claw's world
-    /// height is simply this value times <see cref="CrabRig.Scale"/>. At 2.5 that puts
-    /// the hand at world y=6, which is precisely where CrabSeizure parks the craft, so
-    /// the claw and the thing it is supposedly gripping occupy the same space.
-    /// </summary>
-    private const float ArmLift = 2.5f;
+    /// <summary>Where the holding claw rides: under the craft, so the limb stays out of
+    /// the player's line of sight to the core. See <see cref="CrabRig.GripDrop"/>.</summary>
+    private const float ArmLift = CrabRig.HoldLift - CrabRig.GripDrop;
+
+    /// <summary>Where the striking claw finishes: just above the craft, so unlike the
+    /// holding hand this one does come into frame — that is the hit.</summary>
+    private const float StrikeLift = CrabRig.HoldLift + CrabRig.StrikeRest;
 
     /// <summary>
     /// Swings one limb from a walking pose into an outstretched arm by
@@ -160,24 +243,26 @@ public sealed class CrabRenderer
 
         if (amount <= CockPoint)
         {
-            // Winding up: back, and rising well above the grip so the blow has
+            // Winding up: back, and rising well above the craft so the blow has
             // somewhere to fall from.
             float w = amount / CockPoint;
             yaw = Lerp(yaw, cockedYaw, w);
-            footLift = Lerp(footLift, ArmLift + CockRise, w);
+            footLift = Lerp(footLift, StrikeLift + CockRise, w);
             return;
         }
 
-        // Coming through: across the front of the chassis and down onto the player.
+        // Coming through: across the front of the chassis and down onto the player,
+        // finishing just above them rather than under them — this hand is meant to
+        // arrive in the view, not skirt the bottom of it like the holding one.
         float s = (amount - CockPoint) / (1f - CockPoint);
         s = s * s;                                 // accelerates into the impact
         yaw = Lerp(cockedYaw, GripYawLeft, s);
-        footLift = Lerp(ArmLift + CockRise, ArmLift, s);
+        footLift = Lerp(StrikeLift + CockRise, StrikeLift, s);
     }
 
-    /// <summary>Where in the strike channel the limb is fully wound back — matched to
-    /// the value the cinematic holds through its own wind-up beat.</summary>
-    private const float CockPoint = 0.35f;
+    /// <summary>Where in the strike channel the limb is fully wound back — shared with
+    /// the cinematic, which winds the channel to exactly here across the scream.</summary>
+    private const float CockPoint = CrabRig.StrikeCock;
 
     /// <summary>Extra height the striking limb gains at the top of its wind-up, above
     /// the grip. This is the whole telegraph: the claw visibly gets further away
@@ -193,14 +278,38 @@ public sealed class CrabRenderer
     /// <paramref name="offset"/> (used by the death glitch) shoves the part off its rig.
     /// </summary>
     private void DrawPart(PolyMesh mesh, Vector3 localMount, float localYaw,
-        Vector2 bodyPos, float heading, Vector3 cameraPos, Color? tint = null, Vector3 offset = default)
+        Vector2 bodyPos, float heading, Vector3 cameraPos, Color? tint = null, Vector3 offset = default,
+        float pitch = 0f, float roll = 0f, bool tiltPart = false)
     {
         Vector3 o = localMount * Scale;
+        // The mount point always rides the lean, so every part stays bolted to the
+        // chassis wherever it has tipped to; whether the part itself turns with it is
+        // the caller's call (the gem does, the legs don't).
+        o = Tilt(o, pitch, roll);
         float cos = MathF.Cos(heading), sin = MathF.Sin(heading);
         float rx = o.X * cos + o.Z * sin;
         float rz = -o.X * sin + o.Z * cos;
         var worldXZ = new Vector2(bodyPos.X + rx + offset.X, bodyPos.Y + rz + offset.Z);
-        mesh.Draw(worldXZ, heading + localYaw, o.Y + offset.Y, cameraPos, Scale, tint);
+        mesh.Draw(worldXZ, heading + localYaw, o.Y + offset.Y, cameraPos, Scale, tint,
+            tiltPart ? pitch : 0f, tiltPart ? roll : 0f);
+    }
+
+    /// <summary>Rolls then pitches a vector in the body's own frame — the same order
+    /// <see cref="PolyMesh"/> applies to a tilted mesh, so a mount point and the part
+    /// standing on it never disagree about where the chassis is leaning.</summary>
+    private static Vector3 Tilt(Vector3 v, float pitch, float roll)
+    {
+        if (roll != 0f)
+        {
+            float c = MathF.Cos(roll), s = MathF.Sin(roll);
+            v = new Vector3(v.X * c - v.Y * s, v.X * s + v.Y * c, v.Z);
+        }
+        if (pitch != 0f)
+        {
+            float c = MathF.Cos(pitch), s = MathF.Sin(pitch);
+            v = new Vector3(v.X, v.Y * c - v.Z * s, v.Y * s + v.Z * c);
+        }
+        return v;
     }
 
     // --- Death-glitch helpers -------------------------------------------------

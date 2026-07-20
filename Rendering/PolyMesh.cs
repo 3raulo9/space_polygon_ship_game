@@ -95,7 +95,7 @@ public sealed class PolyMesh
     /// no matter which way each triangle happens to be wound.
     /// </summary>
     public void Draw(Vector2 position, float heading, float height, Vector3 cameraPos,
-        float scale = 1f, Color? tint = null)
+        float scale = 1f, Color? tint = null, float pitch = 0f, float roll = 0f)
     {
         float cos = MathF.Cos(heading);
         float sin = MathF.Sin(heading);
@@ -109,9 +109,9 @@ public sealed class PolyMesh
 
         foreach (var f in _faces)
         {
-            Vector3 a = Transform(f.A, cos, sin, position, height, scale);
-            Vector3 b = Transform(f.B, cos, sin, position, height, scale);
-            Vector3 c = Transform(f.C, cos, sin, position, height, scale);
+            Vector3 a = Transform(f.A, cos, sin, position, height, scale, pitch, roll);
+            Vector3 b = Transform(f.B, cos, sin, position, height, scale, pitch, roll);
+            Vector3 c = Transform(f.C, cos, sin, position, height, scale, pitch, roll);
 
             // A per-instance tint (used by short-lived debris that fade as they
             // die) overrides the face's built-in colour before shading.
@@ -122,10 +122,35 @@ public sealed class PolyMesh
         }
     }
 
-    /// <summary>Scale about the model origin, rotate about Y (heading), then translate to world position.</summary>
-    private static Vector3 Transform(Vector3 v, float cos, float sin, Vector2 pos, float height, float scale)
+    /// <summary>
+    /// Scale about the model origin, tip it on its own axes, rotate about Y
+    /// (heading), then translate to world position.
+    ///
+    /// The tilt runs <em>before</em> the heading so both angles are read in the
+    /// model's own frame: <paramref name="roll"/> tips it onto one side (about its
+    /// local Z, the nose/tail axis) and <paramref name="pitch"/> noses it down
+    /// (about its local X). Applied in that order, a part that is both rolled and
+    /// pitched leans the way a body braced on one side and aiming downward does,
+    /// rather than swinging through a second axis that has already moved. Both are
+    /// zero for everything but the Crab-Core lining up its lance, so every other
+    /// caller transforms exactly as it always has.
+    /// </summary>
+    private static Vector3 Transform(Vector3 v, float cos, float sin, Vector2 pos,
+        float height, float scale, float pitch = 0f, float roll = 0f)
     {
         v *= scale;
+
+        if (roll != 0f)
+        {
+            float c = MathF.Cos(roll), s = MathF.Sin(roll);
+            v = new Vector3(v.X * c - v.Y * s, v.X * s + v.Y * c, v.Z);
+        }
+        if (pitch != 0f)
+        {
+            float c = MathF.Cos(pitch), s = MathF.Sin(pitch);
+            v = new Vector3(v.X, v.Y * c - v.Z * s, v.Y * s + v.Z * c);
+        }
+
         // Heading 0 faces +Z, matching PlayerTank: rotate X/Z about Y.
         float x = v.X * cos + v.Z * sin;
         float z = -v.X * sin + v.Z * cos;

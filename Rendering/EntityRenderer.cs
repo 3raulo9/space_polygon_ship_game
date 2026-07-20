@@ -41,7 +41,12 @@ public sealed class EntityRenderer
         // The lone Stalker, if the stage seeded one, drawn from its live pose. Once
         // it's fully dead the rig is gone; while dying it draws mid-glitch-apart.
         if (world.Boss is { } boss && !boss.Dead)
+        {
             _crab.Draw(boss.Pose, boss.Position, boss.Heading, cameraPos, boss.DeathProgress);
+            // Its beam attack, if it is charging or burning — drawn straight after the
+            // rig so the shaft leaves a crystal that has already been placed.
+            if (boss.Alive) _crab.DrawLance(boss);
+        }
 
         foreach (var e in world.Enemies)
         {
@@ -114,6 +119,27 @@ public sealed class EntityRenderer
     public void DrawCrabShowcase(CrabCore.State phase, Vector2 pos, float elapsed, Vector3 cameraPos)
     {
         const float showHeading = 0.6f; // a slight turn off head-on
-        _crab.Draw(CrabCore.ShowcasePose(phase, elapsed), pos, showHeading, cameraPos);
+        CrabPose pose = CrabCore.ShowcasePose(phase, elapsed);
+        _crab.Draw(pose, pos, showHeading, cameraPos);
+
+        // The lance phases get their light too, aimed off the pose's own lean, so the
+        // turntable shows where the tilt is actually pointing the crystal.
+        if (phase is not (CrabCore.State.Aiming or CrabCore.State.Firing)) return;
+
+        var origin = new Vector3(pos.X, CrabRig.CoreWorldY + 3.0f, pos.Y);
+        float cp = MathF.Cos(pose.BodyPitch);
+        var dir = new Vector3(MathF.Sin(showHeading) * cp, -MathF.Sin(pose.BodyPitch),
+                              MathF.Cos(showHeading) * cp);
+
+        if (phase == CrabCore.State.Aiming)
+        {
+            // Re-derive the charge from the same loop the pose runs on.
+            float lt = elapsed % (CrabCore.ChargeTime + 0.6f);
+            _crab.DrawLance(origin, dir, Math.Clamp(lt / CrabCore.ChargeTime, 0f, 1f), -1f);
+        }
+        else
+        {
+            _crab.DrawLance(origin, dir, 0f, elapsed % CrabCore.BeamTime / CrabCore.BeamTime);
+        }
     }
 }

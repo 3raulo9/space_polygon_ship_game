@@ -151,6 +151,14 @@ public sealed class Game : IDisposable
             if (InputMap.DebugSpawnPressed)
                 _world!.SpawnRandomEnemy();
 
+            // 'N' silences the spawn director so the field stops refilling itself;
+            // 'K' parks a dormant Crab-Core straight ahead. Both are testing hatches.
+            if (InputMap.DebugNoSpawnPressed)
+                _world!.DynamicSpawning = !_world.DynamicSpawning;
+
+            if (InputMap.DebugSpawnCrabPressed)
+                _world!.SpawnCrabAhead();
+
             // Accumulate real elapsed time and step the sim in fixed increments,
             // so a fast or slow display never changes the physics.
             _accumulator += Raylib.GetFrameTime();
@@ -416,6 +424,23 @@ public sealed class Game : IDisposable
         // Grab late enough that the enemy has closed to inside the fog boundary.
         int captureAt = int.TryParse(
             Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FRAME"), out int cf) ? cf : 180;
+
+        // VOIDTANKS_CAPTURE_STAGE=<CrabSeizure.Stage> waits for a named beat of the
+        // seizure instead of counting frames. The cinematic's beats are short and the
+        // protocol that leads into one is not frame-exact, so hunting for the scream by
+        // guessing frame numbers mostly produces pictures of the empty grid.
+        string? stage = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_STAGE");
+        if (stage != null)
+        {
+            if (_world.Seizure is not { } s
+                || !s.Phase.ToString().Equals(stage, StringComparison.OrdinalIgnoreCase))
+                return false;
+            Draw();
+            Draw();
+            Raylib.TakeScreenshot(_capturePath!);
+            return true;
+        }
+
         if (_frame == captureAt)
         {
             // Optional pause-blur capture: VOIDTANKS_CAPTURE_PAUSE=<0..1> grabs the
