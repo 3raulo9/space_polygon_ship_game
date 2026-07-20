@@ -24,7 +24,7 @@ namespace VoidTanks.Entities;
 /// out to is <see cref="Audio"/>, which is itself a no-op until a device exists,
 /// exactly as the boss's own protocol already does.
 /// </summary>
-public sealed class CrabSeizure
+public sealed class CrabSeizure : ICinematicView
 {
     /// <summary>The beats of the cinematic, in the order they play.</summary>
     public enum Stage

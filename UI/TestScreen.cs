@@ -28,6 +28,11 @@ public sealed class TestScreen
     /// <summary>Whether the shown specimen is the animated boss rig.</summary>
     public bool ShowingBoss => Current.Kind == EnemyKind.CrabCoreBoss;
 
+    /// <summary>Whether the shown specimen is the Maw-Core. Also an animated rig, but
+    /// a phaseless one — it has no protocol to scrub, it just hangs there turning, so
+    /// it wants the boss's wide framing without the boss's phase picker.</summary>
+    public bool ShowingMaw => Current.Kind == EnemyKind.MawCore;
+
     public TestScreen()
     {
         // Capture harness: VOIDTANKS_TEST_INDEX picks which specimen to open on,

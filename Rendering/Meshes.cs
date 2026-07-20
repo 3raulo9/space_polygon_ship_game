@@ -311,6 +311,91 @@ public static class Meshes
         return m;
     }
 
+    // --- Maw-Core parts -------------------------------------------------------
+    // The Maw-Core is the Crab-Core with its middle torn out: it keeps the octagonal
+    // carapace lid and the neon gem standing in the well (both reused verbatim from
+    // the parts above — it is the same machine, which is the point), and where the
+    // lower tier and the six legs used to bolt on there is now a throat. The pieces
+    // below are only the new bottom half.
+
+    /// <summary>
+    /// The jaw: an octagonal funnel hanging under the carapace, tapering outward to a
+    /// hard lip, with a dark gullet bored up through the middle of it. The gullet is
+    /// modelled rather than faked because the player spends the digestion looking
+    /// straight up it — from underneath, this is the whole silhouette of the thing.
+    /// Pivot at the carapace's underside so the renderer can hang it off the body.
+    /// </summary>
+    public static PolyMesh MawJaw(Color fill)
+    {
+        var m = new PolyMesh();
+        Color gullet = new(22, 14, 26, 255);   // wet, unlit throat
+
+        Vector3[] shoulder = Ngon(8, 1.9f, 0f);      // where it meets the shell
+        Vector3[] lipOut = Ngon(8, 2.35f, -0.75f);   // flared hard rim
+        Vector3[] lipIn = Ngon(8, 1.75f, -0.9f);     // underside of that rim
+
+        RingWall(m, fill, lipOut, shoulder);   // outer flank of the funnel
+        RingCap(m, fill, lipOut, lipIn);       // the lip's flat underside
+
+        // The gullet, bored back up into where the body's middle tier used to be. It
+        // narrows as it climbs, so from below the eye is drawn up into a vanishing
+        // point instead of stopping on a flat plate.
+        Vector3[] throatLow = Ngon(8, 1.6f, -0.85f);
+        Vector3[] throatMid = Ngon(8, 1.15f, 0.35f);
+        Vector3[] throatTop = Ngon(8, 0.55f, 1.4f);
+        RingWall(m, gullet, throatLow, throatMid);
+        RingWall(m, gullet, throatMid, throatTop);
+        NgonCap(m, gullet, throatTop, up: true);     // the dead end you get swallowed into
+        return m;
+    }
+
+    /// <summary>
+    /// One tooth: a slightly hooked spike pointing straight down, built about the
+    /// origin so the renderer can fan a ring of them around the jaw and turn the whole
+    /// ring. Hooked rather than straight because a cone reads as a spike and a spike
+    /// reads as scenery — the kink is what makes it read as something meant to hold
+    /// prey in.
+    /// </summary>
+    public static PolyMesh MawTooth(Color fill)
+    {
+        var m = new PolyMesh();
+        const float r = 0.18f;
+        Vector3 root0 = new(-r, 0f, -r), root1 = new(r, 0f, -r);
+        Vector3 root2 = new(r, 0f, r), root3 = new(-r, 0f, r);
+        // The tip is pulled inward on Z as well as down, so the ring of teeth curls
+        // toward the throat's centre line like a trap rather than a crown.
+        Vector3 tip = new(0f, -1.15f, -0.32f);
+
+        m.AddFace(fill, root0, root1, tip); m.AddFace(fill, root1, root2, tip);
+        m.AddFace(fill, root2, root3, tip); m.AddFace(fill, root3, root0, tip);
+        m.AddFace(fill, root3, root2, root1, root0);   // cap where it sockets in
+        return m;
+    }
+
+    /// <summary>
+    /// A bead of the black stuff the thing leaks: a stretched octahedron, longer than
+    /// it is wide so a falling drip reads as liquid rather than as another shard of
+    /// debris. Drawn near-black, so what the player actually sees is a hole in the
+    /// grid behind it falling to the floor.
+    /// </summary>
+    public static PolyMesh Ichor(Color fill)
+    {
+        var m = new PolyMesh();
+        // Small. A bead of drool that reads correctly hanging off a monster twenty
+        // units up is enormous by the time it falls past the player's face, so this is
+        // sized for the near view — where it is at its most misleading — rather than
+        // for the silhouette, where it barely registers anyway.
+        const float w = 0.08f, h = 0.22f;
+        Vector3 up = new(0f, h, 0f), dn = new(0f, -h * 1.4f, 0f);   // teardrop: pointed below
+        Vector3 px = new(w, 0f, 0f), nx = new(-w, 0f, 0f);
+        Vector3 pz = new(0f, 0f, w), nz = new(0f, 0f, -w);
+        m.AddFace(fill, up, px, pz); m.AddFace(fill, up, pz, nx);
+        m.AddFace(fill, up, nx, nz); m.AddFace(fill, up, nz, px);
+        m.AddFace(fill, dn, pz, px); m.AddFace(fill, dn, nx, pz);
+        m.AddFace(fill, dn, nz, nx); m.AddFace(fill, dn, px, nz);
+        return m;
+    }
+
     // --- Low-poly building blocks for the boss --------------------------------
 
     /// <summary>A square-section strut (prism) between two points — the leg segments.</summary>

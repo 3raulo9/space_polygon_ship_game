@@ -69,9 +69,16 @@ public sealed class Game : IDisposable
         if (_capturePath != null && !_captureMenu)
         {
             EnterSinglePlayer();
-            if (_world!.Enemies.Count > 0)
+            // Face whatever the capture was actually set up to photograph. A seeded
+            // hunter drops in at a random bearing, so aiming at it points the camera
+            // away from a deliberately-placed monster — which produces a picture of
+            // empty grid and looks exactly like the monster failing to draw.
+            Vector2? subject = _world!.Maw?.Position
+                ?? (Vector2?)_world.Boss?.Position
+                ?? (_world.Enemies.Count > 0 ? _world.Enemies[0].Position : null);
+            if (subject is { } at)
             {
-                Vector2 to = _world.Enemies[0].Position - _world.Player.Position;
+                Vector2 to = at - _world.Player.Position;
                 _world.Player.Heading = MathF.Atan2(to.X, to.Y);
             }
         }
@@ -158,6 +165,10 @@ public sealed class Game : IDisposable
 
             if (InputMap.DebugSpawnCrabPressed)
                 _world!.SpawnCrabAhead();
+
+            // 'J' does the same for the hanging mouth.
+            if (InputMap.DebugSpawnMawPressed)
+                _world!.SpawnMawAhead();
 
             // Accumulate real elapsed time and step the sim in fixed increments,
             // so a fast or slow display never changes the physics.
@@ -434,6 +445,22 @@ public sealed class Game : IDisposable
         {
             if (_world.Seizure is not { } s
                 || !s.Phase.ToString().Equals(stage, StringComparison.OrdinalIgnoreCase))
+                return false;
+            Draw();
+            Draw();
+            Raylib.TakeScreenshot(_capturePath!);
+            return true;
+        }
+
+        // The same hatch for the Maw-Core's digestion. Its beats are even harder to
+        // hit by frame number than the seizure's, because getting eaten depends on the
+        // thing finishing a wind-up over a player who has to be standing still — so
+        // waiting on the named stage is the only reliable way to photograph it.
+        string? mawStage = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MAW_STAGE");
+        if (mawStage != null)
+        {
+            if (_world.Digestion is not { } d
+                || !d.Phase.ToString().Equals(mawStage, StringComparison.OrdinalIgnoreCase))
                 return false;
             Draw();
             Draw();

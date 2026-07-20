@@ -32,6 +32,24 @@ public sealed class World
     /// </summary>
     public CrabSeizure? Seizure { get; private set; }
 
+    /// <summary>The lone Maw-Core hanging over the stage, or null. Hovers at the top
+    /// of the player's jump and runs its own hunt — see <see cref="MawCore"/>.</summary>
+    public MawCore? Maw { get; private set; }
+
+    /// <summary>
+    /// The Maw-Core's digestion, while it has the player in its throat. Unlike the
+    /// crab's seizure this one has no timer: it runs until the player shoots their way
+    /// out of it or is eaten.
+    /// </summary>
+    public MawDigestion? Digestion { get; private set; }
+
+    /// <summary>
+    /// Whichever set piece currently owns the camera, or null. Only ever one at a
+    /// time: both monsters refuse to start one on a player who is already
+    /// <see cref="PlayerTank.Captured"/>, so the two can never overlap.
+    /// </summary>
+    public ICinematicView? Cinematic => (ICinematicView?)Seizure ?? Digestion;
+
     private readonly Projectile[] _projectiles;
 
     private const int MaxProjectiles = 64;
@@ -84,6 +102,14 @@ public sealed class World
     private const float BossSpawnChance = 0.14f;
     private float _bossTimer;
 
+    // The Maw-Core rolls on its own clock, independent of the crab's — the two are
+    // different threats occupying different space (one on the grid, one in the air
+    // over it) and meeting both at once is a legitimate, if unkind, situation. Rarer
+    // than a crab: a thing that eats you should not be routine.
+    private const float MawSpawnInterval = 22f;
+    private const float MawSpawnChance = 0.11f;
+    private float _mawTimer;
+
     public World()
     {
         Player = new PlayerTank(Vector2.Zero);
@@ -97,7 +123,9 @@ public sealed class World
         string? nearPickup = Environment.GetEnvironmentVariable("VOIDTANKS_PICKUP_NEAR");
         string? nearEnemy = Environment.GetEnvironmentVariable("VOIDTANKS_ENEMY_NEAR");
         string? nearBoss = Environment.GetEnvironmentVariable("VOIDTANKS_BOSS_NEAR");
-        bool capture = nearPickup == "1" || nearEnemy is "1" or "elite" || nearBoss is "1" or "seize";
+        string? nearMaw = Environment.GetEnvironmentVariable("VOIDTANKS_MAW_NEAR");
+        bool capture = nearPickup == "1" || nearEnemy is "1" or "elite"
+                    || nearBoss is "1" or "seize" || nearMaw is "1" or "swallow";
         if (capture) DynamicSpawning = false;
 
         // Salvage. Capture seeds one battery and one round dead ahead; play seeds a
@@ -139,6 +167,17 @@ public sealed class World
             "seize" => new CrabCore(new Vector2(0f, 9f)),
             _       => null,
         };
+
+        // Same arrangement for the Maw-Core. "swallow" hangs it directly over the
+        // player's head, inside its own strike column, so it winds up and drops on a
+        // stationary craft within a second — the only way to screenshot the digestion,
+        // which otherwise needs a human willing to stand still and be eaten.
+        Maw = nearMaw switch
+        {
+            "1"       => new MawCore(new Vector2(0f, 20f)),
+            "swallow" => new MawCore(Vector2.Zero),
+            _         => null,
+        };
     }
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
@@ -149,7 +188,17 @@ public sealed class World
         // step itself is input-free so the headless self-test can reuse it.
         // Grenade takes precedence over the cannon on the frame both are held,
         // since they share the fire cooldown.
-        if (InputMap.Grenade)
+        // Inside the Maw-Core's throat every trigger is the same trigger. Normally the
+        // grenade takes precedence on a frame both are held (they share a cooldown),
+        // but honouring that here would mean a player mashing the heavy button while
+        // being eaten never lands an escape shot and dies wondering why. There is
+        // nothing to lob a splash round at inside a mouth, so both buttons route to
+        // the one action that can save them.
+        if (Digestion is { Held: true })
+        {
+            if (InputMap.Fire || InputMap.Grenade) FirePlayerShot();
+        }
+        else if (InputMap.Grenade)
             FirePlayerGrenade();
         else if (InputMap.Fire)
             FirePlayerShot();
@@ -216,6 +265,12 @@ public sealed class World
             // No boss on the field — let the rotor fade out and stop.
             Audio.SetBossHum(false, 0f, 0f);
         }
+
+        // The hanging mouth runs on the same pattern: its set piece steps first,
+        // because while one is live it owns the player's transform and the monster is
+        // frozen around them.
+        UpdateDigestion(dt);
+        UpdateMaw(dt);
 
         UpdateProjectiles(dt);
         UpdatePickups(dt);
@@ -308,6 +363,162 @@ public sealed class World
             Seizure = new CrabSeizure(boss, Player);
     }
 
+    // --- The Maw-Core ---------------------------------------------------------
+
+    /// <summary>What one of the mouth's little lasers costs. Less than a hunter's
+    /// round: they are slow enough to walk away from, so a player who eats one has
+    /// usually chosen to stand their ground and shoot back, and that shouldn't be
+    /// punished as hard as being caught out by a tank.</summary>
+    private const float MawLaserDamage = 7f;
+
+    // Cadences for the mouth's two continuous layers. Held here rather than in the
+    // entity so the simulation stays free of anything that has to know about ranges
+    // and mixing — exactly where the crab's hunting call lives.
+    private const float MawTeethInterval = 1.1f;
+    private const float MawCrystalInterval = 2.4f;
+    private float _mawTeethTimer;
+    private float _mawCrystalTimer;
+
+    /// <summary>
+    /// Steps the Maw-Core: its own hunt, the lasers it has in the air, and the two
+    /// sound layers that run the whole time it exists. Its hover bed is fed every tick
+    /// the way the crab's rotor is, and faded out on the ticks where there is nothing
+    /// up there.
+    /// </summary>
+    private void UpdateMaw(float dt)
+    {
+        if (Maw is not { } maw)
+        {
+            Audio.SetMawHover(false, 0f, 0f);
+            return;
+        }
+
+        if (maw.Update(dt, Player.Position, Player.Height))
+            Audio.PlayMawSpit(Vector2.Distance(maw.Position, Player.Position));
+
+        float dist = Vector2.Distance(maw.Position, Player.Position);
+        Audio.SetMawHover(true, dist, maw.Agitation);
+
+        // The teeth and the crystal, each on their own unrelated clock so the two
+        // never fall into a rhythm together. Suppressed while it is digesting — the
+        // cinematic voices its own, much closer, grinding.
+        if (maw.Alive && !maw.Digesting)
+        {
+            _mawTeethTimer -= dt;
+            if (_mawTeethTimer <= 0f)
+            {
+                _mawTeethTimer = MawTeethInterval;
+                Audio.PlayMawTeeth(dist);
+            }
+
+            _mawCrystalTimer -= dt;
+            if (_mawCrystalTimer <= 0f)
+            {
+                _mawCrystalTimer = MawCrystalInterval;
+                Audio.PlayMawCrystal(dist, maw.Agitation);
+            }
+        }
+
+        UpdateMawLasers(maw);
+
+        // Once the death glitch has fully torn it apart, drop it so the director is
+        // free to hang a new one later.
+        if (maw.Dead) Maw = null;
+    }
+
+    /// <summary>
+    /// Applies the mouth's little lasers to the player. Unlike a hunter's round these
+    /// bite an airborne craft too: the jump is the counter to everything on the grid,
+    /// and this monster's whole point is that it forces you into the air — sparing a
+    /// leaping player would mean the safe answer is to simply never come down.
+    /// </summary>
+    private void UpdateMawLasers(MawCore maw)
+    {
+        // Nothing can touch a player inside a set piece; they cannot act, so they
+        // must not be shot at by anything else either.
+        if (Player.Captured) return;
+
+        var craft = new Vector3(Player.Position.X, Player.Height + 1f, Player.Position.Y);
+        float reach = MawCore.LaserRadius + PlayerTank.Radius;
+
+        var lasers = maw.Lasers;
+        for (int i = 0; i < lasers.Length; i++)
+        {
+            if (!lasers[i].Active) continue;
+            if (Vector3.DistanceSquared(lasers[i].Position, craft) > reach * reach) continue;
+
+            maw.ConsumeLaser(i);      // one bolt, one bite
+            DamagePlayer(MawLaserDamage);
+        }
+    }
+
+    /// <summary>
+    /// Runs the digestion: starts one on the tick a lunging mouth closes over the
+    /// player, steps the live one, and applies the two things that cost anything — the
+    /// bites while they are held, and the landing when they are spat out.
+    /// </summary>
+    private void UpdateDigestion(float dt)
+    {
+        if (Digestion is { } active)
+        {
+            switch (active.Update(dt))
+            {
+                case MawDigestion.Event.Bitten:
+                    // A fraction of the maximum, so being eaten costs the same share
+                    // of a life whatever state the player was caught in.
+                    DamagePlayer(Player.MaxShield * MawDigestion.BiteFraction);
+                    break;
+                case MawDigestion.Event.Landed:
+                    DamagePlayer(Player.MaxShield * MawDigestion.LandingFraction);
+                    break;
+            }
+
+            if (!active.Active) Digestion = null;
+            return;
+        }
+
+        if (Maw is { } maw && MawDigestion.CanSwallow(maw, Player))
+            Digestion = new MawDigestion(maw, Player);
+    }
+
+    /// <summary>
+    /// The Maw-Core's death: the shell blows apart, the teeth go everywhere and the
+    /// whole thing stops holding itself up. Bursts are staged at the three heights the
+    /// rig actually occupies rather than at one centre, so a tall floating thing comes
+    /// apart down its length instead of popping like a tank.
+    /// </summary>
+    private void DestroyMaw(MawCore maw)
+    {
+        Audio.PlayMawDeath();
+
+        var c = maw.Position;
+        float body = maw.BodyY;
+        // The crystal, up in the well — a hot neon burst where the weak spot was.
+        Debris.Burst(new Vector3(c.X, body + MawRig.CrystalLocalY * MawRig.Scale, c.Y),
+            Palette.NeonRed, elite: true);
+        // The shell shattering at the seam where its middle used to be.
+        Debris.Burst(new Vector3(c.X, body, c.Y), Palette.MawShell, elite: true);
+        // And the teeth, thrown off the ring they were still turning on.
+        Debris.Burst(new Vector3(c.X, body + MawRig.ToothLocalY * MawRig.Scale, c.Y),
+            Palette.MawTooth, elite: false);
+    }
+
+    /// <summary>
+    /// Debug hatch: hangs a Maw-Core well ahead of the player, outside its own detect
+    /// radius so it drifts nowhere until they walk up on it. Replaces any already on
+    /// the field rather than stacking a second.
+    /// </summary>
+    public void SpawnMawAhead()
+    {
+        const float Ahead = MawCore.DetectRadius + 15f;
+        Maw = new MawCore(Player.Position + Player.Forward * Ahead);
+    }
+
+    /// <summary>Test hatch: hangs a prepared Maw-Core on the field, so the headless
+    /// self-test can drive a swallow end to end against a real world rather than
+    /// against the entity in isolation.</summary>
+    public void AttachMawForTest(MawCore maw) => Maw = maw;
+
     /// <summary>
     /// The horizon spawn director: on independent timers, rolls to raise a new hunter,
     /// drift in fresh salvage, or — rarely — bring up a Crab-Core, always at a random
@@ -350,6 +561,15 @@ public sealed class World
             // Only ever one crab, and only when the field is clear of a live one.
             if (Boss is null && Random.Shared.NextSingle() < BossSpawnChance)
                 Boss = new CrabCore(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange));
+        }
+
+        _mawTimer += dt;
+        if (_mawTimer >= MawSpawnInterval)
+        {
+            _mawTimer = 0f;
+            // Only ever one mouth, and never while one is already up there.
+            if (Maw is null && Random.Shared.NextSingle() < MawSpawnChance)
+                Maw = new MawCore(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange));
         }
     }
 
@@ -448,10 +668,14 @@ public sealed class World
     {
         Vector2 at = RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange);
 
-        // Weight toward tanks; only offer the boss when none stalks the field, so
-        // the roll never wastes on an impossible pick.
-        int forms = Boss is null ? 3 : 2;
-        switch (Random.Shared.Next(forms))
+        // Weight toward tanks; only offer each big form when the field is clear of
+        // one, so the roll never wastes on an impossible pick.
+        int forms = 2 + (Boss is null ? 1 : 0) + (Maw is null ? 1 : 0);
+        int pick = Random.Shared.Next(forms);
+        // With the crab already up, the boss slot is skipped and the mouth slides
+        // down into index 2 — so the roll always lands on something that can spawn.
+        if (pick == 2 && Boss is not null) pick = 3;
+        switch (pick)
         {
             case 0: // standard hunter
                 if (Enemies.Count >= MaxEnemies) RemoveFarthest(Enemies, e => e.Position);
@@ -461,17 +685,47 @@ public sealed class World
                 if (Enemies.Count >= MaxEnemies) RemoveFarthest(Enemies, e => e.Position);
                 Enemies.Add(new EnemyTank(at, elite: true));
                 break;
-            default: // Crab-Core (only reachable when Boss is null)
+            case 2: // Crab-Core (only reachable when Boss is null)
                 Boss = new CrabCore(at);
+                break;
+            default: // Maw-Core (only reachable when Maw is null)
+                Maw = new MawCore(at);
                 break;
         }
     }
 
-    /// <summary>Requests a player shot; honoured only if off cooldown with ammo.</summary>
+    /// <summary>
+    /// Requests a player shot; honoured only if off cooldown with ammo.
+    ///
+    /// Fired from inside the Maw-Core's throat the round never becomes a projectile:
+    /// there is nothing to aim at and nothing to miss at point-blank inside a mouth,
+    /// so the shot is handed straight to the digestion as one of the three that break
+    /// its hold. Note that the craft still pays for it in ammo and cooldown — being
+    /// swallowed does not come with free bullets, and the cooldown is what makes the
+    /// escape take a few seconds of being chewed rather than one panicked trigger pull.
+    /// </summary>
     public void FirePlayerShot()
     {
-        if (Player.TryFire(out Vector2 origin, out Vector2 dir, out float launchHeight))
-            SpawnProjectile(origin, dir, fromPlayer: true, launchHeight: launchHeight);
+        // The Crab-Core's seizure is a cutscene, not a trap: there is no shooting your
+        // way out of it, so the trigger is dead for its duration and the round isn't
+        // even spent. Checked before TryFire so a held player doesn't quietly burn
+        // ammo on shots that go nowhere. This matters more than it used to — the gun
+        // now cools while captured (so the Maw's escape can work), which without this
+        // would let a seized player plink bolts out of the crab's claw all through the
+        // scream.
+        if (Seizure is { Held: true }) return;
+
+        if (!Player.TryFire(out Vector2 origin, out Vector2 dir, out float launchHeight))
+            return;
+
+        if (Digestion is { } digestion && digestion.Held)
+        {
+            digestion.RegisterShot();
+            Audio.PlayDetonation();
+            return;
+        }
+
+        SpawnProjectile(origin, dir, fromPlayer: true, launchHeight: launchHeight);
     }
 
     /// <summary>Requests a heavy grenade; honoured only if off cooldown with 10 ammo.</summary>
@@ -525,6 +779,20 @@ public sealed class World
                         // A shriek over the impact, pitched by how far gone the core
                         // is — the boss loses composure as it's worn down.
                         Audio.PlayCoreHit(1f - liveBoss.CoreFraction);
+                    p.Active = false;
+                    continue;
+                }
+
+                // The Maw-Core's crystal, hanging at the top of a jump. Same bargain
+                // as the crab's core and a stricter one: this band sits so far above
+                // barrel height that a grounded shot cannot reach it at all, so
+                // landing this is proof the player was in the air when they fired.
+                if (!p.IsGrenade && Maw is { } liveMaw && liveMaw.HitsCrystal(p.Position, p.Height))
+                {
+                    if (liveMaw.DamageCrystal(PlayerShotDamage))
+                        DestroyMaw(liveMaw);
+                    else
+                        Audio.PlayMawHurt(1f - liveMaw.CrystalFraction);
                     p.Active = false;
                     continue;
                 }

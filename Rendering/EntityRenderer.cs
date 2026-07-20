@@ -36,6 +36,9 @@ public sealed class EntityRenderer
     // the parts and places them from a per-frame pose.
     private readonly CrabRenderer _crab = new();
 
+    // ...and so is the Maw-Core, which shares two of the crab's parts outright.
+    private readonly MawRenderer _maw = new();
+
     public void Draw(World.World world, Vector3 cameraPos)
     {
         // The lone Stalker, if the stage seeded one, drawn from its live pose. Once
@@ -46,6 +49,17 @@ public sealed class EntityRenderer
             // Its beam attack, if it is charging or burning — drawn straight after the
             // rig so the shaft leaves a crystal that has already been placed.
             if (boss.Alive) _crab.DrawLance(boss);
+        }
+
+        // The hanging mouth. Its drool and its lasers are drawn after the rig so both
+        // read as coming off a body that has already been placed — and the drips keep
+        // falling right through the death glitch, which is exactly right: the stuff
+        // was already leaking out of it before it died.
+        if (world.Maw is { } maw && !maw.Dead)
+        {
+            _maw.Draw(maw.Pose, maw.Position, maw.BodyY, cameraPos, maw.DeathProgress);
+            _maw.DrawDrips(maw, cameraPos);
+            _maw.DrawLasers(maw, cameraPos);
         }
 
         foreach (var e in world.Enemies)
@@ -141,5 +155,22 @@ public sealed class EntityRenderer
         {
             _crab.DrawLance(origin, dir, 0f, elapsed % CrabCore.BeamTime / CrabCore.BeamTime);
         }
+    }
+
+    /// <summary>
+    /// Draws the Maw-Core for the test screen: hanging at its real world height, with
+    /// the crystal and both tooth rings turning. Held still rather than spun on the
+    /// turntable — the rings are already rotating, and adding a third rotation on top
+    /// of them makes the grind impossible to read.
+    ///
+    /// Drawn at its true <see cref="MawRig.BodyWorldY"/> rather than at a framing
+    /// height chosen for the picture, so the bestiary shows exactly how high off the
+    /// grid the thing actually floats — which is the single fact about it a tester
+    /// most needs to be able to check.
+    /// </summary>
+    public void DrawMawShowcase(Vector2 pos, float elapsed, Vector3 cameraPos)
+    {
+        MawPose pose = MawCore.ShowcasePose(elapsed);
+        _maw.Draw(pose, pos, MawRig.BodyWorldY, cameraPos);
     }
 }

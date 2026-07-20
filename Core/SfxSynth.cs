@@ -1022,6 +1022,440 @@ public static class SfxSynth
         };
     }
 
+    // --- The Maw-Core: a hovering mouth --------------------------------------
+    // The Crab-Core is a machine and every sound it makes is machined: crushed,
+    // geared, mechanical. The Maw-Core is built from the same parts but the half that
+    // walked has been replaced by something wet, and its whole sound bank is built on
+    // that contrast. Where the crab's cues are tight and rhythmic, these are loose,
+    // breathy and irregular — the same chassis with an animal living in it.
+
+    /// <summary>
+    /// The hover: the bed that runs the entire time the thing is on the field. A
+    /// seamless loop like the crab's rotor, and deliberately its opposite in
+    /// character — where the rotor is a tight low drone heard through armour, this is
+    /// airier and unsteady, with a slow heave in the level at roughly the rate
+    /// something large breathes.
+    ///
+    /// That heave is what makes it read as flight rather than as machinery. A
+    /// perfectly steady drone is a motor holding a speed; a drone that surges and
+    /// sags is something working to stay up. The caller drives the playback rate, so
+    /// the whole bed — heave included — speeds up as it notices you.
+    /// </summary>
+    public static Params MawHover(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(74f, 96f);
+        return new Params
+        {
+            Loop = true,
+            Wave = Osc.Saw,
+            Length = Range(1.3f, 1.7f),        // long enough that the lap isn't a pattern
+
+            StartFreq = baseF,
+            EndFreq = baseF,                   // pinned flat by Loop anyway
+
+            // The breathing. Slower and deeper than anything the crab does — this is
+            // the single field that separates "hovering" from "idling".
+            TremoloDepth = Range(0.3f, 0.45f),
+            TremoloSpeed = Range(1.6f, 3.2f),
+
+            VibratoDepth = Range(0.03f, 0.055f),   // an unsteady hold, not a machine's
+            VibratoSpeed = Range(4f, 7.5f),
+
+            Detune = Range(1.012f, 1.032f),    // further off unison than the rotor: sicker
+            DetuneGain = Range(0.6f, 0.85f),
+
+            Duty = Range(0.25f, 0.45f),
+            LpCutoff = Range(0.2f, 0.32f),     // airier than the crab's bulkhead drone
+            LpResonance = Range(0.25f, 0.5f),
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = 1,                     // rate-crush can't be made seamless
+            Volume = 0.5f,                     // the caller scales this by range
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The crystal turning in its well — voiced on a cadence while the thing hunts,
+    /// so the spin is something you hear as well as see.
+    ///
+    /// Built almost entirely out of tremolo. A pitched tone with its level chopped
+    /// thirty-odd times a second <em>is</em> the sound of a thing rotating: each pass
+    /// of a facet past you is one pulse in the level, and the ear reads a train of
+    /// those as revolution rather than as a note. The pitch barely moves; it is the
+    /// chop that carries the whole effect, which is why this is the one recipe here
+    /// where the tremolo is the loudest decision in it.
+    /// </summary>
+    public static Params CrystalWhirr(Random rng, float agitation)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+        agitation = Math.Clamp(agitation, 0f, 1f);
+
+        float baseF = Range(380f, 520f) * (1f + agitation * 0.5f);
+        return new Params
+        {
+            Wave = Osc.Square,                      // hard-edged: it is a faceted crystal
+            Length = Range(0.5f, 0.75f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.94f, 1.12f),  // near-flat: a held ring
+
+            Attack = Range(0.15f, 0.3f),            // it is already turning when you hear it
+            Sustain = Range(0.35f, 0.5f),
+            Decay = Range(0.3f, 0.45f),
+
+            // The revolution itself, faster the more worked-up it is.
+            TremoloDepth = Range(0.6f, 0.85f),
+            TremoloSpeed = Range(24f, 38f) * (1f + agitation * 0.6f),
+
+            Duty = Range(0.1f, 0.28f),              // thin and glassy
+            DutySweep = Range(-0.8f, 0.8f),
+
+            VibratoDepth = Range(0.008f, 0.022f),
+            VibratoSpeed = Range(12f, 26f),
+
+            Detune = Range(1.48f, 1.52f),           // a fifth: it rings rather than growls
+            DetuneGain = Range(0.3f, 0.5f),
+
+            LpCutoff = Range(0.55f, 0.8f),
+            LpResonance = Range(0.35f, 0.65f),
+            HpCutoff = Range(0.04f, 0.09f),         // strip the body, keep the shimmer
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.42f,                         // under everything; a texture
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The rings of teeth grinding against each other. Noise rather than a tone,
+    /// because bone on bone has no note — and heavily rate-crushed, which is what
+    /// turns smooth hiss into a stuttering scrape. <paramref name="grinding"/> is set
+    /// while it is actually chewing someone, which lengthens it and drops the filter
+    /// so the sound goes from a dry rattle overhead to something happening around you.
+    /// </summary>
+    public static Params ToothGrind(Random rng, bool grinding)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = grinding ? Range(0.4f, 0.55f) : Range(0.22f, 0.34f),
+
+            Attack = Range(0.08f, 0.2f),            // scrapes in rather than striking
+            Sustain = Range(0.3f, 0.45f),
+            Decay = Range(0.4f, 0.6f),
+
+            // The chop of individual teeth passing. Slower than a motor's gearing —
+            // these are big and there are only nine of them.
+            TremoloDepth = Range(0.5f, 0.8f),
+            TremoloSpeed = grinding ? Range(14f, 22f) : Range(9f, 15f),
+
+            LpCutoff = grinding ? Range(0.3f, 0.45f) : Range(0.45f, 0.65f),
+            LpResonance = Range(0.3f, 0.6f),
+            LpSweep = 1f - Range(0f, 0.00002f),
+            HpCutoff = grinding ? 0f : Range(0.02f, 0.06f),
+
+            CrushBits = rng.Next(2, 5),             // the grimiest in the bank
+            CrushRate = rng.Next(4, 12),            // heavy aliasing = the scrape
+            Volume = grinding ? 0.72f : 0.5f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// One of the little lasers being spat out. Short, thin and <em>falling</em> — a
+    /// descending blip reads as something being expelled, where the rising blip every
+    /// other weapon in the game uses reads as something being launched. It is a small
+    /// distinction and it is the entire reason these never get confused with the
+    /// player's own cannon.
+    /// </summary>
+    public static Params MawSpit(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(700f, 1000f);
+        return new Params
+        {
+            Wave = rng.NextDouble() < 0.5 ? Osc.Square : Osc.Saw,
+            Length = Range(0.16f, 0.26f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.3f, 0.5f),    // spat downward
+
+            Attack = 0.01f,
+            Sustain = Range(0.2f, 0.35f),
+            Decay = Range(0.65f, 0.8f),
+
+            Duty = Range(0.12f, 0.32f),             // thin: it is a small thing
+            DutySweep = Range(-1f, 1f),
+
+            VibratoDepth = Range(0.02f, 0.06f),
+            VibratoSpeed = Range(20f, 40f),
+
+            Detune = Range(1.33f, 1.45f),           // sour, so it never sounds friendly
+            DetuneGain = Range(0.3f, 0.5f),
+
+            LpCutoff = Range(0.5f, 0.8f),
+            LpResonance = Range(0.3f, 0.6f),
+            HpCutoff = Range(0.03f, 0.08f),
+
+            CrushBits = rng.Next(3, 7),
+            CrushRate = rng.Next(1, 4),
+            Volume = 0.45f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The thing coming down on the player. Noise with its filter thrown wide open
+    /// across the clip, which is heard as a rush arriving rather than as a pitch
+    /// moving — the same trick the Crab-Core's throw whoosh uses, run much faster and
+    /// much louder, because this one is coming <em>at</em> you rather than carrying
+    /// you. It is over in a third of a second: the dive is not something to react to,
+    /// it is the consequence of having already stood still too long.
+    /// </summary>
+    public static Params MawDive(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.35f, 0.5f),
+
+            Attack = Range(0.05f, 0.12f),           // arrives almost fully formed
+            Sustain = Range(0.25f, 0.4f),
+            Decay = Range(0.5f, 0.65f),
+
+            LpCutoff = Range(0.1f, 0.18f),
+            LpResonance = Range(0.3f, 0.55f),
+            LpSweep = 1f + Range(0.00006f, 0.00013f),  // tears open as it falls on you
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(1, 4),
+            Volume = 0.85f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The gulp: the throat closing over the player and hauling them up. Low, wet and
+    /// rising — rising because they are being drawn <em>upward</em> into it, and a
+    /// falling swallow would read as something going down a drain instead.
+    ///
+    /// The wetness is the near-unison detune beating against a heavily closed filter.
+    /// There is no clean way to synthesise "wet" out of an oscillator and an envelope;
+    /// what actually reads as wet is a low sound whose two voices are slightly out of
+    /// tune with each other and whose top end has been taken away entirely, so it
+    /// sounds like it is happening inside something rather than in the air.
+    /// </summary>
+    public static Params MawSwallow(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(55f, 85f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = Range(0.6f, 0.85f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(2.2f, 3.4f),    // drawn up the throat
+
+            Attack = Range(0.1f, 0.2f),
+            Sustain = Range(0.3f, 0.45f),
+            Decay = Range(0.4f, 0.6f),
+
+            TremoloDepth = Range(0.3f, 0.55f),
+            TremoloSpeed = Range(7f, 13f),          // the peristalsis of it
+
+            Duty = Range(0.3f, 0.55f),
+            DutySweep = Range(-0.8f, 0.8f),
+
+            VibratoDepth = Range(0.06f, 0.12f),     // nothing here holds a pitch
+            VibratoSpeed = Range(5f, 11f),
+
+            Detune = Range(1.015f, 1.045f),         // the beating that reads as wet
+            DetuneGain = Range(0.7f, 0.95f),
+
+            LpCutoff = Range(0.12f, 0.22f),         // no top end at all: it is internal
+            LpResonance = Range(0.35f, 0.65f),
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(3, 7),
+            CrushRate = rng.Next(2, 7),
+            Volume = 0.85f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// One bite while it is digesting the player — the sound of losing fifteen percent
+    /// of a shield. A crunch layered onto a pitch drop: the noise front is the teeth
+    /// closing, and the low fall under it is what makes it land as damage rather than
+    /// as texture. Short, so each bite is unmistakably one event and the player can
+    /// count them.
+    /// </summary>
+    public static Params MawDigestBite(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(90f, 150f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = Range(0.3f, 0.45f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.22f, 0.36f),  // bottoms out hard
+
+            Attack = 0.005f,                        // no front: it is already happening
+            Sustain = Range(0.12f, 0.22f),
+            Decay = Range(0.7f, 0.85f),
+
+            TremoloDepth = Range(0.4f, 0.7f),
+            TremoloSpeed = Range(18f, 30f),         // the grind inside the bite
+
+            Duty = Range(0.2f, 0.45f),
+            DutySweep = Range(-1f, 1f),
+
+            Detune = Range(1.02f, 1.06f),
+            DetuneGain = Range(0.7f, 0.95f),
+
+            LpCutoff = Range(0.18f, 0.32f),
+            LpResonance = Range(0.35f, 0.65f),
+            LpSweep = 1f - Range(0.00001f, 0.00004f),
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(2, 5),
+            CrushRate = rng.Next(3, 9),
+            Volume = 0.9f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The thing being shot from the inside. <paramref name="severity"/> runs up
+    /// toward 1 as the escape count fills, and everything about it tightens with that
+    /// — so the third shot, the one that frees the player, is audibly the one that
+    /// broke it. This is the only feedback the player has that shooting into a throat
+    /// is achieving anything, so it is loud and it is unambiguous.
+    /// </summary>
+    public static Params MawWail(Random rng, float severity)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+        severity = Math.Clamp(severity, 0f, 1f);
+
+        float baseF = Range(240f, 340f) * (1f + severity * 0.7f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = Range(0.35f, 0.55f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.6f, 2.6f),    // a yelp, climbing
+
+            Attack = 0.01f,                         // instantaneous: it is a flinch
+            Sustain = Range(0.2f, 0.35f),
+            Decay = Range(0.6f, 0.8f),
+
+            Duty = Range(0.15f, 0.4f),
+            DutySweep = Range(-1.4f, 1.4f),
+
+            // Both widen with severity: it loses hold of the note as it loses hold of
+            // the player.
+            VibratoDepth = Range(0.09f, 0.15f) + severity * 0.07f,
+            VibratoSpeed = Range(12f, 22f) + severity * 14f,
+
+            Detune = Range(1.38f, 1.48f),           // tritone: no root to settle on
+            DetuneGain = Range(0.7f, 0.9f),
+
+            LpCutoff = Range(0.7f, 0.95f),
+            LpResonance = Range(0.3f, 0.6f),
+            HpCutoff = Range(0.02f, 0.06f),
+
+            CrushBits = rng.Next(3, 6),
+            CrushRate = rng.Next(1, 4),
+            Volume = 0.86f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The jaw springing open and throwing the player clear. A hard noise burst with
+    /// the filter tearing open — the exact inverse of <see cref="MawSwallow"/>, which
+    /// closed everything down. Hearing the top end come back is the release.
+    /// </summary>
+    public static Params MawRelease(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.4f, 0.6f),
+
+            Attack = 0.005f,                        // it lets go all at once
+            Sustain = Range(0.15f, 0.25f),
+            Decay = Range(0.7f, 0.85f),
+
+            LpCutoff = Range(0.15f, 0.25f),
+            LpResonance = Range(0.35f, 0.6f),
+            LpSweep = 1f + Range(0.00004f, 0.0001f),  // blown wide open: the air returning
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(3, 7),
+            CrushRate = rng.Next(2, 6),
+            Volume = 0.8f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// A single bead of the black stuff letting go and falling. Tiny, dull and
+    /// pitched down — barely a sound at all, and that is correct: it plays every
+    /// half-second or so for as long as the thing is on the field, so anything with
+    /// presence would become maddening inside a minute. It exists to be noticed
+    /// subliminally, as a wrongness under the hover.
+    /// </summary>
+    public static Params MawDrip(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(300f, 520f);
+        return new Params
+        {
+            Wave = Osc.Sine,                        // soft: a drip has no edge
+            Length = Range(0.1f, 0.18f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.35f, 0.6f),   // the falling "plip"
+
+            Attack = 0.01f,
+            Sustain = Range(0.1f, 0.2f),
+            Decay = Range(0.7f, 0.88f),
+
+            VibratoDepth = Range(0.01f, 0.04f),
+            VibratoSpeed = Range(15f, 30f),
+
+            LpCutoff = Range(0.3f, 0.55f),
+            LpResonance = Range(0.2f, 0.45f),
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(1, 4),
+            Volume = 0.28f,                         // deliberately almost inaudible
+            Seed = rng.Next(),
+        };
+    }
+
     // --- .wav header helpers --------------------------------------------------
 
     private static void WriteTag(byte[] b, int at, string tag)

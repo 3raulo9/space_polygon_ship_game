@@ -13,6 +13,7 @@ public enum EnemyKind
     ShipGunship,
     ShipScout,
     CrabCoreBoss, // the Stalker — animated state-machine boss
+    MawCore,      // the Hanging Mouth — the Stalker's top half, floating and hungry
 }
 
 /// <summary>
@@ -50,5 +51,10 @@ public static class EnemyCatalog
 
         // The Stalker boss — animated rig, shown so its phases can be scrubbed.
         new EnemyArchetype(EnemyKind.CrabCoreBoss,    "CRAB-CORE",   "STALKER",     40f, 20f),
+
+        // The Hanging Mouth — crystal health in shots (5), and the damage figure is
+        // one bite of a digestion (15% of a 100-point shield), since that is what it
+        // actually costs you rather than the little lasers it throws to keep you still.
+        new EnemyArchetype(EnemyKind.MawCore,         "MAW-CORE",    "DEVOURER",     5f, 15f),
     };
 }

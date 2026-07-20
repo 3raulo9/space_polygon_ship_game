@@ -34,12 +34,22 @@ public sealed class PlayerTank
     private const float TurnAccel = 6.5f;
     private const float TurnDrag = 8.0f;
 
-    private const float JumpVel = 15f;      // initial upward kick — a taller leap
+    private const float JumpVel = 17f;      // initial upward kick — a taller leap still
     private const float Gravity = 18f;      // upward pull → the rise still slows crisply
     private const float FallGravity = 13f;  // gentler pull coming down → floats + hangs longer
     private const float JumpForwardDrift = 4f; // small forward glide while airborne — carries you a bit further to the front
 
     public bool IsAirborne => Height > 0.001f;
+
+    /// <summary>
+    /// How high the peak of a leap carries the craft, in world units. Solved from the
+    /// jump's own kick and pull (v²/2g) rather than measured or guessed, because one
+    /// enemy is built entirely around this number: the Maw-Core hovers with its
+    /// crystal exactly at the top of a jump, so it can only be shot by a player at the
+    /// apex of one. Deriving it here means retuning the arc moves the monster with it
+    /// instead of quietly making it unhittable.
+    /// </summary>
+    public static float JumpApex => JumpVel * JumpVel / (2f * Gravity);
 
     // --- Combat state (Doc 03) ---
     public float MaxShield = 100f;
@@ -109,6 +119,15 @@ public sealed class PlayerTank
 
     public void Update(float dt)
     {
+        // The cannon cools whatever else is happening to the craft — it is a property
+        // of the weapon, not of who is driving. This has to sit *above* the capture
+        // check: the Maw-Core's digestion is escaped by shooting your way out from
+        // inside it, and a cooldown frozen for the duration of the hold would let the
+        // player fire exactly once and then leave them locked out of the only exit
+        // they have. Whether a trigger pull is honoured at all is the world's call
+        // (see World.FirePlayerShot) — this only keeps the gun alive.
+        if (_fireCooldown > 0f) _fireCooldown -= dt;
+
         // A cinematic has the wheel: it writes the transform itself this tick.
         if (Captured) return;
 
@@ -119,8 +138,6 @@ public sealed class PlayerTank
         // The Hyper reserve creeps back up when it isn't being spent.
         if (Hyper < MaxHyper)
             Hyper = MathF.Min(MaxHyper, Hyper + HyperRegen * dt);
-
-        if (_fireCooldown > 0f) _fireCooldown -= dt;
 
         // Apply planar motion along the current heading (no strafe: motion is
         // always along the facing axis).

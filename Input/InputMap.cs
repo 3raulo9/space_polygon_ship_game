@@ -69,6 +69,11 @@ public static class InputMap
     // detect radius so it stays dormant until you choose to walk into it.
     public static bool DebugSpawnCrabPressed => Raylib.IsKeyPressed(KeyboardKey.K);
 
+    // 'J' hangs a Maw-Core well ahead of the player, parked outside its own detect
+    // radius so it drifts nowhere until you walk under it. The mouth's twin of the
+    // 'K' hatch above.
+    public static bool DebugSpawnMawPressed => Raylib.IsKeyPressed(KeyboardKey.J);
+
     /// <summary>
     /// Number-row 1..6 as a just-pressed digit (0 if none). The test screen uses it
     /// to scrub between an animated specimen's phases — six of them now that the
