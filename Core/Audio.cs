@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Raylib_cs;
 using VoidTanks.Entities;   // CrabRig, for the boss's leg count
 
@@ -62,7 +63,7 @@ public static class Audio
         // slightly different pitch and throb. Rolled here rather than per boss: it
         // is a streaming loop, not a one-shot, and rebuilding it mid-fight would
         // mean tearing down a stream that is currently audible.
-        _hum = Raylib.LoadMusicStreamFromMemory(".wav", SfxSynth.RenderWav(SfxSynth.Hum(_sfxRng)));
+        _hum = LoadHumStream(SfxSynth.RenderWav(SfxSynth.Hum(_sfxRng)));
         _hum.Looping = true;
         _humReady = true;
 
@@ -178,12 +179,14 @@ public static class Audio
     // These load no asset. SfxSynth rolls a new recipe each time and renders it to
     // .wav bytes in memory, so the sounds below never repeat themselves.
 
-    /// <summary>How many generated clips stay alive at once. A clip is only unloaded
-    /// once this many newer ones have been played after it, which is far longer than
-    /// any of them lasts — so nothing is ever freed mid-playback. Shared by every
+    /// <summary>How many generated clips stay alive at once. A slot is only reused
+    /// once the mixer has actually finished with the clip in it — age alone is not
+    /// enough, since a crab fight can fire sixteen short cues (footsteps, clamps,
+    /// hunting calls) while a seconds-long beam voice is still sounding, and freeing
+    /// a clip out from under the audio thread corrupts the mixer. Shared by every
     /// synthesised cue, which also lets them overlap each other freely (a file-backed
     /// Sound can't overlap itself; these are all distinct objects).</summary>
-    private const int SynthPoolSize = 16;
+    private const int SynthPoolSize = 32;
 
     private static readonly Sound[] _synthPool = new Sound[SynthPoolSize];
     private static readonly bool[] _synthLoaded = new bool[SynthPoolSize];
@@ -192,21 +195,33 @@ public static class Audio
     private static readonly Random _sfxRng = new();
 
     /// <summary>
-    /// Renders a recipe, hands it to the audio device and plays it, retiring
-    /// whatever clip occupied this ring slot <see cref="SynthPoolSize"/> plays ago.
+    /// Renders a recipe, hands it to the audio device and plays it, reusing a ring
+    /// slot whose previous clip has finished sounding. If every slot is still
+    /// audible the cue is dropped rather than stealing a voice — silence for one
+    /// footstep is cheaper than freeing a buffer the mixer is reading.
     /// </summary>
     private static void PlaySynth(SfxSynth.Params p, float volume = 1f)
     {
+        // Claim a slot before rendering anything: a slot is free if it never held a
+        // clip, or if the one it holds has run out.
+        int slot = -1;
+        for (int i = 0; i < SynthPoolSize; i++)
+        {
+            int c = (_synthSlot + i) % SynthPoolSize;
+            if (!_synthLoaded[c] || !Raylib.IsSoundPlaying(_synthPool[c])) { slot = c; break; }
+        }
+        if (slot < 0) return;   // everything still sounding — drop this one
+
         // Raylib copies the samples into the Sound's own buffer, so the staging
         // Wave can go straight back after the handoff.
         Wave wave = Raylib.LoadWaveFromMemory(".wav", SfxSynth.RenderWav(p));
         Sound sound = Raylib.LoadSoundFromWave(wave);
         Raylib.UnloadWave(wave);
 
-        if (_synthLoaded[_synthSlot]) Raylib.UnloadSound(_synthPool[_synthSlot]);
-        _synthPool[_synthSlot] = sound;
-        _synthLoaded[_synthSlot] = true;
-        _synthSlot = (_synthSlot + 1) % SynthPoolSize;
+        if (_synthLoaded[slot]) Raylib.UnloadSound(_synthPool[slot]);
+        _synthPool[slot] = sound;
+        _synthLoaded[slot] = true;
+        _synthSlot = (slot + 1) % SynthPoolSize;
 
         if (volume < 1f) Raylib.SetSoundVolume(sound, volume);
         Raylib.PlaySound(sound);
@@ -405,6 +420,33 @@ public static class Audio
     private static Music _hum;
     private static bool _humReady;      // stream exists
     private static bool _humRunning;    // ...and is currently voiced
+
+    /// <summary>The hum's encoded .wav bytes, in unmanaged memory. Freed in
+    /// <see cref="Shutdown"/>, after the stream that reads from it is unloaded.</summary>
+    private static IntPtr _humWav;
+
+    /// <summary>
+    /// Hands a rendered .wav to raylib as a streaming Music.
+    ///
+    /// The bytes must be copied into unmanaged memory first, and must stay there for
+    /// as long as the stream lives. Unlike a Sound — which is decoded up front into
+    /// its own buffer — a Music stream decodes lazily: raylib keeps a bare pointer to
+    /// this buffer and reads more of it on every UpdateMusicStream. Handing it a
+    /// managed byte[] pins that array only for the duration of the P/Invoke, so once
+    /// Init returns the GC is free to move or collect it and the stream is left
+    /// reading whatever now occupies that address. The result is a use-after-free
+    /// that only bites once a collection happens to run — which is why it looked like
+    /// a Crab-Core bug: the fight is what allocates hard enough (a fresh WAV per
+    /// footstep, clamp and hunting call) to trigger the GC that pulls the rug.
+    /// </summary>
+    private static unsafe Music LoadHumStream(byte[] wav)
+    {
+        _humWav = Marshal.AllocHGlobal(wav.Length);
+        Marshal.Copy(wav, 0, _humWav, wav.Length);
+
+        fixed (byte* type = ".wav"u8)   // u8 literals are NUL-terminated
+            return Raylib.LoadMusicStreamFromMemory((sbyte*)type, (byte*)_humWav, wav.Length);
+    }
 
     private static float _humPitch = HumIdlePitch;
     private static float _humPitchTarget = HumIdlePitch;
@@ -620,6 +662,8 @@ public static class Audio
             Raylib.UnloadMusicStream(_hum);
             _humReady = false;
         }
+        // Only once the stream that reads from it is gone.
+        if (_humWav != IntPtr.Zero) { Marshal.FreeHGlobal(_humWav); _humWav = IntPtr.Zero; }
         // Aliases first: they borrow their source clips' samples, so they must all
         // be released before the clips that own those samples go.
         for (int i = 0; i < BossBoomCount; i++) Raylib.UnloadSoundAlias(_bossBooms[i]);
