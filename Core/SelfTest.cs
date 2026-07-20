@@ -18,8 +18,12 @@ public static class SelfTest
         failures += Check("player can destroy an enemy", PlayerKillsEnemy);
         failures += Check("enemy can damage the player", EnemyDamagesPlayer);
         failures += Check("ammo is finite", AmmoDepletes);
-        failures += Check("battery refuels shield + hyper", BatteryRefuels);
-        failures += Check("bullet pickup restocks ammo", AmmoPickupRestocks);
+        failures += Check("salvage stows into the inventory, doesn't auto-charge", BatteryStowsThenCharges);
+        failures += Check("bullet salvage stows a random handful of rounds", AmmoStowsThenLoads);
+        failures += Check("three fragments craft a throwable CRAB CORE", FragmentsCraftCrabCore);
+        failures += Check("a thrown CRAB CORE blast destroys enemies", CrabCoreBlastKills);
+        failures += Check("a CRAB CORE blast can destroy the Crab-Core", CrabCoreBlastKillsBoss);
+        failures += Check("a CRAB CORE blast can destroy the Maw-Core", CrabCoreBlastKillsMaw);
         failures += Check("grounded shot misses the boss core", GroundedShotMissesCore);
         failures += Check("air shot at core height kills the boss", AirShotKillsCore);
         failures += Check("air shot detonates on the horizon", AirShotExpiresForBlast);
@@ -129,10 +133,10 @@ public static class SelfTest
         return world.Player.Ammo == 0 ? null : $"ammo did not deplete (left {world.Player.Ammo})";
     }
 
-    private static string? BatteryRefuels()
+    private static string? BatteryStowsThenCharges()
     {
         var world = new World.World();
-        // Spend some shield and hyper so a refill has room to land.
+        // Spend some shield and hyper so a later charge has room to land.
         world.Player.TakeDamage(50f);
         world.Player.TryHyperspace(); // drains most of the Hyper reserve
         float shield0 = world.Player.Shield;
@@ -142,22 +146,117 @@ public static class SelfTest
         world.Pickups.Add(new Entities.Pickup(world.Player.Position, Entities.PickupKind.Battery));
         StepWithoutInput(world);
 
-        if (world.Player.Shield <= shield0) return "shield did not recharge";
-        if (world.Player.Hyper <= hyper0) return "hyper did not recharge";
+        // The new contract: salvage no longer charges on contact — it's stowed. Shield
+        // has no passive regen, so it's the clean witness (Hyper trickles back on its
+        // own every tick, which is not the battery charging).
+        if (world.Player.Shield != shield0)
+            return "battery charged shield on contact (should stow, not auto-charge)";
+        if (CountItems(world.Inventory, ItemKind.Battery) < 1)
+            return "battery was not stowed in the inventory";
+
+        // Spending it (as the panel's right-click does) recharges shield + hyper.
+        world.Player.RefillShield(World.World.BatteryChargeFraction);
+        world.Player.RefillHyper(World.World.BatteryChargeFraction);
+        if (world.Player.Shield <= shield0) return "spending a battery did not recharge shield";
+        if (world.Player.Hyper <= hyper0) return "spending a battery did not recharge hyper";
         return null;
     }
 
-    private static string? AmmoPickupRestocks()
+    private static string? AmmoStowsThenLoads()
     {
         var world = new World.World();
-        // Burn some ammo first so a restock is observable.
+        // Burn some ammo first so a later reload is observable.
         for (int i = 0; i < 20; i++) { world.FirePlayerShot(); StepWithoutInput(world); }
         int ammo0 = world.Player.Ammo;
 
         world.Pickups.Add(new Entities.Pickup(world.Player.Position, Entities.PickupKind.Ammo));
         StepWithoutInput(world);
 
-        return world.Player.Ammo > ammo0 ? null : "ammo did not restock";
+        // Stowed, not auto-loaded, and carrying a random 5–20 rounds.
+        if (world.Player.Ammo != ammo0) return "ammo loaded on contact (should stow, not auto-load)";
+        int bullets = CountItems(world.Inventory, ItemKind.Bullet);
+        if (bullets < 5 || bullets > 20) return $"bullet salvage stowed {bullets} rounds (expected 5-20)";
+
+        // Spending the stack loads it into the magazine.
+        world.Player.Ammo = Math.Min(world.Player.MaxAmmo, world.Player.Ammo + bullets);
+        return world.Player.Ammo > ammo0 ? null : "spending bullets did not restock ammo";
+    }
+
+    private static string? FragmentsCraftCrabCore()
+    {
+        var inv = new Inventory();
+        // Three fragments, one to a triangle corner, satisfy the recipe.
+        for (int i = 0; i < Inventory.CraftCount; i++)
+            inv.Craft[i] = new ItemStack(ItemKind.CrabFragment, 1);
+
+        if (!inv.CanCraft()) return "three fragments did not satisfy the recipe";
+        ItemStack core = inv.TakeCraftOutput();
+        if (core.IsEmpty || core.Kind != ItemKind.CrabCore) return "crafting did not yield a CRAB CORE";
+        // The fragments are spent — the corners are now empty.
+        for (int i = 0; i < Inventory.CraftCount; i++)
+            if (!inv.Craft[i].IsEmpty) return "crafting did not consume the fragments";
+        return null;
+    }
+
+    private static string? CrabCoreBlastKills()
+    {
+        var world = new World.World();
+        // Park an enemy just in front of the craft, well inside a lance's reach.
+        world.Enemies.Clear();
+        var enemy = new Entities.EnemyTank(world.Player.Position + world.Player.Forward * 8f, elite: false);
+        world.Enemies.Add(enemy);
+
+        // Equip a crafted core and throw it straight ahead; it lobs a short way, lands
+        // near the enemy and erupts into the lance ring.
+        world.Inventory.Weapons[0] = new ItemStack(ItemKind.CrabCore, 1);
+        world.UseWeaponSlot(0);
+
+        // Step long enough for the bomb to detonate and the star to burn through.
+        for (int i = 0; i < 180 && enemy.Alive; i++) StepWithoutInput(world);
+
+        return enemy.Alive ? "the blast did not destroy the enemy in its path" : null;
+    }
+
+    private static string? CrabCoreBlastKillsBoss()
+    {
+        var world = new World.World();
+        world.DynamicSpawning = false;
+        world.Enemies.Clear();
+        world.SpawnCrabAhead();   // a dormant Crab-Core out along the player's heading
+
+        // Throw a core; it lobs out toward the boss and detonates near it.
+        world.Inventory.Weapons[0] = new ItemStack(ItemKind.CrabCore, 1);
+        world.UseWeaponSlot(0);
+
+        for (int i = 0; i < 240 && world.Boss is { Alive: true }; i++) StepWithoutInput(world);
+
+        return world.Boss is null or { Alive: false }
+            ? null : "the blast did not destroy the Crab-Core";
+    }
+
+    private static string? CrabCoreBlastKillsMaw()
+    {
+        var world = new World.World();
+        world.DynamicSpawning = false;
+        world.Enemies.Clear();
+        world.SpawnMawAhead();    // a hanging Maw-Core out along the player's heading
+
+        world.Inventory.Weapons[0] = new ItemStack(ItemKind.CrabCore, 1);
+        world.UseWeaponSlot(0);
+
+        for (int i = 0; i < 240 && world.Maw is { Alive: true }; i++) StepWithoutInput(world);
+
+        return world.Maw is null or { Alive: false }
+            ? null : "the blast did not destroy the Maw-Core";
+    }
+
+    /// <summary>Total count of a kind across the inventory grid.</summary>
+    private static int CountItems(Inventory inv, ItemKind kind)
+    {
+        int n = 0;
+        foreach (var s in inv.Slots)
+            if (!s.IsEmpty && s.Kind == kind) n += s.Count;
+        return n;
     }
 
     private static string? GroundedShotMissesCore()

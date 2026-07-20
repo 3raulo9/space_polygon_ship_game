@@ -82,11 +82,17 @@ public sealed class EntityRenderer
         }
 
         // Floating pickups: bob at waist height and turn slowly on the spot, so the
-        // charge band and bullet tip catch the light as they drift in the fog.
+        // charge band and bullet tip catch the light as they drift in the fog. A CRAB
+        // CORE fragment reuses the battery cell's shape flooded neon-red, so it reads as
+        // a hot shard of the thing it fell out of.
         foreach (var pk in world.Pickups)
         {
-            var mesh = pk.Kind == PickupKind.Battery ? _battery : _bullet;
-            mesh.Draw(Torus.NearestImage(pk.Position, eyeXZ), pk.Spin, pk.BobHeight, cameraPos);
+            Vector2 at = Torus.NearestImage(pk.Position, eyeXZ);
+            if (pk.Kind == PickupKind.CrabFragment)
+                _battery.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 1f, Palette.NeonRed);
+            else
+                (pk.Kind == PickupKind.Battery ? _battery : _bullet)
+                    .Draw(at, pk.Spin, pk.BobHeight, cameraPos);
         }
 
         foreach (var p in world.Projectiles)
@@ -99,6 +105,51 @@ public sealed class EntityRenderer
             // in the elite/orange colour.
             if (p.IsGrenade) _grenade.Draw(shotPos, 0f, p.Height, cameraPos);
             else _bolt.Draw(shotPos, 0f, p.Height, cameraPos);
+        }
+
+        // Thrown CRAB CORE detonations: a cinematic energy burst. A floating light core
+        // throws tapering lances out in every direction at once, the whole spray churning
+        // fluidly, wrapped in a breathing bubble of energy — all of it swelling in, then
+        // shrinking away to nothing over three seconds (the entity's envelope).
+        foreach (var blast in world.Blasts)
+        {
+            if (!blast.Active) continue;
+            float env = blast.Envelope;
+            if (env <= 0.001f) continue;
+
+            Vector2 atXZ = Torus.NearestImage(blast.Position, eyeXZ);
+            var center = new Vector3(atXZ.X, CrabCoreBlast.CoreHeight, atXZ.Y);
+            float len = blast.BeamLength;
+
+            float t = (float)Raylib.GetTime();
+            float flutter = 0.9f + 0.1f * MathF.Sin(t * 33f); // the shaft boils, not sits
+            float sheath = 1.15f * env * flutter;
+            float core = sheath * 0.45f;
+            var red = Palette.NeonRed;
+            var redSheath = new Color(red.R, red.G, red.B, (byte)(150 * env));
+
+            for (int b = 0; b < CrabCoreBlast.BeamCount; b++)
+            {
+                Vector3 to = center + blast.Direction(b) * len;
+                // White core, red sheath over it — the boss lance's own look, tapering
+                // from fat at the core to a point at the tip.
+                Raylib.DrawCylinderEx(center, to, core * 1.2f, core * 0.15f, 6, Color.White);
+                Raylib.DrawCylinderEx(center, to, sheath * 1.3f, sheath * 0.15f, 6, redSheath);
+            }
+
+            // The bubble of energy breathing around the core.
+            float bubble = blast.BubbleRadius;
+            if (bubble > 0.05f)
+            {
+                var mag = Palette.NeonMagenta;
+                Raylib.DrawSphereEx(center, bubble, 12, 12,
+                    new Color(mag.R, mag.G, mag.B, (byte)(70 * env)));
+                Raylib.DrawSphereEx(center, bubble * 0.6f, 10, 10,
+                    new Color((int)255, 130, 170, (int)(95 * env)));
+            }
+
+            // The blown-out core itself, pulsing at the centre of it all.
+            Raylib.DrawSphereEx(center, (1.5f + 0.6f * MathF.Sin(t * 20f)) * env, 8, 8, Color.White);
         }
 
         // Death debris last: chunks and sparks flung from destroyed enemies, each

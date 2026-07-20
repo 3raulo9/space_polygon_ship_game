@@ -35,8 +35,9 @@ internal static class HudRenderer
     private const int RadarMargin = 6;
     private const float RadarWorldRange = 90f;       // world units mapped to the radar edge
 
-    public static void Draw(World.World world)
+    public static void Draw(World.World world, ItemIconRenderer icons)
     {
+        _icons = icons;
         PlayerTank p = world.Player;
 
         // A faint panel behind the strip so the bars/radar sit on a surface
@@ -46,8 +47,48 @@ internal static class HudRenderer
         Raylib.DrawRectangle(0, StripH, W, 1, Scale(Palette.GridFar, 0.6f)); // seam line
 
         DrawBars(p);
+        DrawWeaponSlots(world.Inventory);
         DrawRadar(world, p);
         DrawAimGuide(p);
+    }
+
+    // --- Equip slots (R T Y U): the crafted CRAB CORE lives here ---
+    // A small row of four boxes in the strip's free centre band, between the vital bars
+    // on the left and the radar on the right. Pressing the matching key throws the slot's
+    // contents (see InputMap.WeaponSlotPressed / World.UseWeaponSlot).
+    private const int WSlot = 16;      // box side
+    private const int WGap = 6;
+    private const int WTop = 3;
+
+    // The frame's live 3D item icons, handed in by the Renderer's world pass.
+    private static ItemIconRenderer? _icons;
+
+    private static void DrawWeaponSlots(Inventory inv)
+    {
+        int total = Inventory.WeaponCount * WSlot + (Inventory.WeaponCount - 1) * WGap;
+        int x0 = (W - total) / 2;
+        string letters = "RTYU";
+
+        for (int i = 0; i < Inventory.WeaponCount; i++)
+        {
+            int x = x0 + i * (WSlot + WGap);
+            Raylib.DrawRectangle(x, WTop, WSlot, WSlot, new Color(10, 20, 24, 220));
+            Raylib.DrawRectangleLines(x, WTop, WSlot, WSlot, Scale(Palette.HudChrome, 0.5f));
+
+            // The equipped item as its rotating 3D icon — the same model the inventory
+            // panel shows, blitted from its render texture (flipped, as it's bottom-up).
+            if (!inv.Weapons[i].IsEmpty && _icons is not null)
+            {
+                var src = new Rectangle(0, 0, ItemIconRenderer.Size, -ItemIconRenderer.Size);
+                var dst = new Rectangle(x + 2, WTop + 2, WSlot - 4, WSlot - 4);
+                Raylib.DrawTexturePro(_icons.Texture(inv.Weapons[i].Kind), src, dst,
+                    Vector2.Zero, 0f, Color.White);
+            }
+
+            // Key letter tucked under the box, in the panel's crisp pixel font.
+            PixelFont.DrawCentered(letters[i].ToString(), x + WSlot / 2, WTop + WSlot + 1, 1,
+                Scale(Palette.HudChrome, 0.9f));
+        }
     }
 
     // --- Aim guide: a small firing scope at the bottom-centre ---
