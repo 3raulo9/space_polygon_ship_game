@@ -191,7 +191,7 @@ public sealed class World
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
 
-    public void Update(float dt)
+    public void Update(float dt, bool acceptCombatInput = true)
     {
         // Read player actions from global input, then run the shared sim step. The
         // step itself is input-free so the headless self-test can reuse it.
@@ -203,17 +203,25 @@ public sealed class World
         // being eaten never lands an escape shot and dies wondering why. There is
         // nothing to lob a splash round at inside a mouth, so both buttons route to
         // the one action that can save them.
-        if (Digestion is { Held: true })
+        //
+        // Combat input is muted while the inventory panel is open (acceptCombatInput
+        // false): the mouse is busy managing items there, so a click on a stack must
+        // never also loose a round. Movement still reads its own keys in StepForTest,
+        // so the craft keeps drifting under the overlay.
+        if (acceptCombatInput)
         {
-            if (InputMap.Fire || InputMap.Grenade) FirePlayerShot();
-        }
-        else if (InputMap.Grenade)
-            FirePlayerGrenade();
-        else if (InputMap.Fire)
-            FirePlayerShot();
+            if (Digestion is { Held: true })
+            {
+                if (InputMap.Fire || InputMap.Grenade) FirePlayerShot();
+            }
+            else if (InputMap.Grenade)
+                FirePlayerGrenade();
+            else if (InputMap.Fire)
+                FirePlayerShot();
 
-        if (InputMap.HyperspacePressed)
-            Player.TryHyperspace();
+            if (InputMap.HyperspacePressed)
+                Player.TryHyperspace();
+        }
 
         StepForTest(dt);
     }

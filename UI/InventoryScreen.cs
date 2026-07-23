@@ -297,8 +297,16 @@ public sealed class InventoryScreen
                 Audio.PlayPickup();
                 break;
             case ItemKind.Bullet:
-                player.Ammo = Math.Min(player.MaxAmmo, player.Ammo + slot.Count);
-                slot = ItemStack.Empty;
+                // The magazine is capped at MaxAmmo. Only load as many rounds as fit,
+                // leaving the overflow in the stack — right-clicking 12 bullets into a
+                // 40/50 magazine loads 10 and leaves 2 behind. A magazine already at
+                // the cap takes nothing and buzzes like a full bar.
+                int room = player.MaxAmmo - player.Ammo;
+                if (room <= 0) { Audio.PlayFull(); break; }
+                int loaded = Math.Min(room, slot.Count);
+                player.Ammo += loaded;
+                slot.Count -= loaded;
+                if (slot.IsEmpty) slot = ItemStack.Empty;
                 Audio.PlayPickup();
                 break;
             // Fragments and crafted cores aren't fuel — right-click does nothing.

@@ -934,6 +934,41 @@ public static class SfxSynth
     }
 
     /// <summary>
+    /// The dull "no" a full magazine gives back when you try to cram more rounds into
+    /// it: a short, low, flat square buzz that sags in pitch rather than climbing.
+    /// Deliberately the inverse of the bright pickup blip — same era of sound, but
+    /// dropping and thin, so it reads as "rejected" without being an alarm.
+    /// </summary>
+    public static Params FullBuzz(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(150f, 170f);
+        return new Params
+        {
+            Wave = Osc.Square,
+            Length = Range(0.16f, 0.2f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.7f, 0.78f),    // sags downward: a refusal, not a chirp
+
+            Attack = 0.02f,
+            Sustain = Range(0.4f, 0.5f),
+            Decay = Range(0.45f, 0.55f),
+
+            Duty = Range(0.45f, 0.55f),              // fat and buzzy, not piercing
+
+            LpCutoff = Range(0.5f, 0.65f),           // rolled off — a muffled thud
+            HpCutoff = Range(0.02f, 0.04f),
+
+            CrushBits = rng.Next(4, 7),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.5f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
     /// The beam itself: a five-second choral tone, and deliberately the only
     /// <em>beautiful</em> sound in the entire bank. Everything else the Crab-Core
     /// makes is crushed, detuned and sick; the thing that actually kills you sings.

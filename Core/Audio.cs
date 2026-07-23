@@ -842,6 +842,17 @@ public static class Audio
         if (_enabled) Raylib.PlaySound(_blip);
     }
 
+    /// <summary>
+    /// The refusal a full magazine gives when you right-click more rounds into it: a
+    /// short low buzz that sags in pitch (<see cref="SfxSynth.FullBuzz"/>). The
+    /// deliberate opposite of <see cref="PlayPickup"/>, so a rejected load never
+    /// reads as a successful one.
+    /// </summary>
+    public static void PlayFull()
+    {
+        if (_enabled) PlaySynth(SfxSynth.FullBuzz(_sfxRng));
+    }
+
     /// <summary>Unloads the clips and closes the device. Mirrors <see cref="Init"/>.</summary>
     public static void Shutdown()
     {
