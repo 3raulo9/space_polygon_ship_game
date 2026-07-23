@@ -87,6 +87,26 @@ public static class Palette
     // is this colour, so a bolt drifting toward you is unmistakably its.
     public static readonly Color MawLaser = new(124, 224, 74, 255);
 
+    // --- Alien structures (the skyline) --------------------------------------
+    // Whatever built these is long gone. The towers are cold dead stone-plastic in a
+    // bruised violet — dark enough that a spire reads as a hole punched in the magenta
+    // sky rather than as an object lit by it — with a few window bands still faintly
+    // alive on them. The accent is deliberately dim: bright enough to pick a tower out
+    // of the fog, nowhere near bright enough to be mistaken for salvage.
+
+    // #4A4272 — the shell: cold violet-grey. Held deliberately low but not black: the
+    // shading term darkens every face by up to half again, and the top half of the sky
+    // is genuinely black, so anything darker than this simply stops existing up there.
+    public static readonly Color StructureShell = new(74, 66, 114, 255);
+
+    // #2A2448 — the deep tone, used where a mass steps back or a face is meant to
+    // recede, so a tower has creases without needing more geometry.
+    public static readonly Color StructureDeep = new(42, 36, 72, 255);
+
+    // #3C8E96 — the dim cyan still burning in the window bands. Cold, low, and a
+    // different hue from every pickup and every enemy, so it reads as architecture.
+    public static readonly Color StructureGlow = new(60, 142, 150, 255);
+
     // --- Floating pickups ----------------------------------------------------
     // Salvage that drifts on the grid: a battery cell that recharges shield + hyper,
     // and a stray round that restocks ammo. Both read as "good" — a cool charged

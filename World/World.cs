@@ -257,6 +257,7 @@ public sealed class World
     public void StepForTest(float dt)
     {
         Player.Update(dt);
+        ResolveStructureCollisions();
 
         foreach (var e in Enemies)
         {
@@ -314,10 +315,215 @@ public sealed class World
 
         UpdateProjectiles(dt);
         UpdateCrabBlasts(dt);
+        UpdateStructures(dt);
         UpdatePickups(dt);
         if (DynamicSpawning) UpdateSpawning(dt);
         Debris.Update(dt);
         Enemies.RemoveAll(e => !e.Alive);
+    }
+
+    // --- The skyline ------------------------------------------------------------
+
+    /// <summary>
+    /// The dead alien city standing on this torus — towers and the arcs slung between
+    /// them. The layout is a fixed feature of the world: the same buildings stand in the
+    /// same places in every run (see <see cref="StructureField"/>), which is what makes
+    /// them landmarks instead of scenery. The <em>instances</em> belong to this stage,
+    /// because they can be cut down.
+    /// </summary>
+    public readonly List<Structure> Structures = StructureField.Create();
+
+    /// <summary>
+    /// Ages any collapse in progress and lets the finished ones go. The tick a mass
+    /// lands, it throws dust off the grid where it came down and thuds at whatever
+    /// volume the distance earns.
+    /// </summary>
+    private void UpdateStructures(float dt)
+    {
+        for (int i = Structures.Count - 1; i >= 0; i--)
+        {
+            var s = Structures[i];
+            if (!s.Falling) continue;
+
+            if (s.Update(dt))
+            {
+                // The impact: a long spray of dust down the line the mass fell along,
+                // rather than one puff at the middle, since the thing that just hit the
+                // grid is forty metres of it.
+                var along = new Vector2(MathF.Cos(s.Heading), -MathF.Sin(s.Heading));
+                for (int k = 1; k <= 3; k++)
+                    Debris.Burst(new Vector3(
+                        s.Position.X + along.X * s.BlockHeight * 0.25f * k, 0.5f,
+                        s.Position.Y + along.Y * s.BlockHeight * 0.25f * k),
+                        Palette.StructureShell, elite: false);
+                Audio.PlayExplosionAt(Torus.Distance(s.Position, Player.Position));
+            }
+
+            if (s.Gone) Structures.RemoveAt(i);
+        }
+    }
+
+    /// <summary>
+    /// Cuts down whatever standing structure is nearest along a beam, and stages the
+    /// collapse: dust off it at several heights and a blast pitched by the distance.
+    ///
+    /// Only beams do this. A round of any kind — the cannon, the heavy grenade, an
+    /// enemy's shot, the SPIDER's laser bolt — stops dead against a wall and leaves it
+    /// standing (see <see cref="BlockShotOnStructure"/>). The distinction is the whole
+    /// point of the buildings: they are cover, and cover you can shoot through is not
+    /// cover. What defeats them is the thing that was never a bullet in the first place —
+    /// the Crab-Core's lance, the SPIDER's charged beam, the ring thrown off a detonating
+    /// CRAB CORE — and a wall coming down under one of those should be worth watching.
+    ///
+    /// The whole shaft is swept rather than stopping at the first hit, because a beam
+    /// that has already cut through one tower has visibly not stopped, and a second wall
+    /// standing untouched in the same light would read as a bug.
+    /// </summary>
+    /// <returns>How many structures this cut down.</returns>
+    private int CutStructuresAlong(Vector3 origin, Vector3 direction, float length, float radius)
+    {
+        var originXZ = new Vector2(origin.X, origin.Z);
+        var dirXZ = new Vector2(direction.X, direction.Z);
+        float planar = dirXZ.Length();
+        if (planar > 1e-4f) dirXZ /= planar;
+        // How fast the shaft climbs per unit of ground covered — a beam loosed from the
+        // top of a jump sails over the low legs of an arc, and should.
+        float slope = planar > 1e-4f ? direction.Y / planar : 0f;
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        int cut = 0;
+
+        foreach (var s in Structures)
+        {
+            int n = s.Blockers(blockers);
+            for (int b = 0; b < n; b++)
+            {
+                var (at, r) = blockers[b];
+                Vector2 near = Torus.NearestImage(at, originXZ);
+                float along = Math.Clamp(Vector2.Dot(near - originXZ, dirXZ), 0f, length);
+                if (Vector2.Distance(near, originXZ + dirXZ * along) > r + radius) continue;
+
+                // Passing overhead is passing overhead, however wide the shaft is.
+                float beamY = origin.Y + slope * along;
+                if (beamY > s.BlockHeight + radius) continue;
+
+                if (FellStructure(s)) cut++;
+                break;   // one strike per structure, whichever leg it was
+            }
+        }
+
+        return cut;
+    }
+
+    /// <summary>
+    /// Starts a structure's collapse and dresses it: chunks blown off the mass at three
+    /// heights up its body, so a tall thing comes apart down its length rather than
+    /// popping at the base, and the report of it carrying to wherever the player is.
+    /// Silently does nothing to something already on its way down.
+    /// </summary>
+    private bool FellStructure(Structure s)
+    {
+        if (!s.Strike()) return false;
+
+        float top = s.BlockHeight;
+        for (int i = 1; i <= 3; i++)
+            Debris.Burst(new Vector3(s.Position.X, top * (i / 4f), s.Position.Y),
+                i == 1 ? Palette.StructureGlow : Palette.StructureShell, elite: i == 3);
+
+        Audio.PlayExplosionAt(Torus.Distance(s.Position, Player.Position));
+        return true;
+    }
+
+    /// <summary>
+    /// Stops a round against the skyline. Returns true if the shot struck a wall, having
+    /// already spent it: the projectile is killed, a scatter of masonry is thrown off the
+    /// point of impact and the hit is heard at whatever the range earns.
+    ///
+    /// Height is honoured, which is what makes an arc worth driving through: its legs are
+    /// short, so a shot passes under the span the same way the craft does. Towers reach
+    /// far higher than anything can shoot, so they simply stop everything.
+    /// </summary>
+    private bool BlockShotOnStructure(Projectile p)
+    {
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+
+        foreach (var s in Structures)
+        {
+            if (p.Height > s.BlockHeight) continue;
+
+            int n = s.Blockers(blockers);
+            for (int b = 0; b < n; b++)
+            {
+                var (at, r) = blockers[b];
+                if (Torus.DistanceSquared(p.Position, at) > r * r) continue;
+
+                // A thrown CRAB CORE is not a round — it is a bomb that happened to hit a
+                // wall, so it does what it would have done anywhere else, and the ring of
+                // lances it throws is perfectly capable of bringing the wall down.
+                if (p.IsCrabBomb)
+                {
+                    StageCrabBlast(p.Position);
+                }
+                else
+                {
+                    Debris.Burst(new Vector3(p.Position.X, MathF.Max(0.4f, p.Height), p.Position.Y),
+                        Palette.StructureShell, elite: false);
+                    Audio.PlayExplosionAt(Torus.Distance(p.Position, Player.Position));
+                }
+
+                p.Active = false;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Keeps the craft out of the solid parts of the skyline: a tower's footprint, an
+    /// arc's two legs. Anything overlapped this tick is resolved by sliding the craft
+    /// straight back out along the shortest way — which, because it never touches the
+    /// player's speed or heading, reads as scraping along a wall rather than as being
+    /// stopped by one, and can't leave the craft stuck inside geometry with nowhere to go.
+    ///
+    /// Run right after the player's own move, so nothing else this tick — aiming,
+    /// shooting, a monster measuring the range — ever sees the craft inside a building.
+    /// A captured player is skipped outright: a set piece owns the transform and is
+    /// entitled to drag them through a wall if that is where the claw goes.
+    ///
+    /// Nothing else on the field collides with the city. Hunters drive through it, and
+    /// so do rounds and beams — buildings are terrain to navigate, not cover, and giving
+    /// the AI walls to path around is a much larger piece of work than this.
+    /// </summary>
+    private void ResolveStructureCollisions()
+    {
+        if (Player.Captured) return;
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+
+        for (int i = 0; i < Structures.Count; i++)
+        {
+            int n = Structures[i].Blockers(blockers);
+            for (int b = 0; b < n; b++)
+            {
+                var (at, radius) = blockers[b];
+                float reach = radius + PlayerTank.Radius;
+
+                // Measured the short way round the torus, so a building sitting over the
+                // seam blocks the craft that has just wrapped past it.
+                Vector2 out_ = Torus.Delta(at, Player.Position);
+                float distSq = out_.LengthSquared();
+                if (distSq >= reach * reach) continue;
+
+                // Dead centre (only reachable if something teleported the craft into a
+                // pylon): shove it out along a fixed axis rather than dividing by zero.
+                Vector2 push = distSq > 1e-6f
+                    ? out_ / MathF.Sqrt(distSq) * reach
+                    : new Vector2(reach, 0f);
+
+                Player.Position = Torus.Wrap(at + push);
+            }
+        }
     }
 
     /// <summary>What standing in the Crab-Core's beam costs, per damage tick.</summary>
@@ -352,6 +558,13 @@ public sealed class World
             _beamTick = 0f;
             return;
         }
+
+        // Whatever the lance is standing in, it cuts down. Swept every tick it burns
+        // rather than once when it lights: the shaft is fixed but the buildings are only
+        // struck once each (Structure.Strike refuses a second), so this costs one pass
+        // over a short list and gains the case where the first tower falls out of the way
+        // and reveals the next one in line, which then goes too.
+        CutStructuresAlong(boss.BeamOrigin, boss.BeamDirection, CrabCore.BeamLength, CrabCore.BeamRadius);
 
         // Measure the player against the boss's nearest image across the torus, so a
         // beam fired near the world's edge still burns the craft standing just over it.
@@ -932,6 +1145,12 @@ public sealed class World
     {
         var originXZ = new Vector2(spider.BeamOrigin.X, spider.BeamOrigin.Z);
 
+        // The emitter's charged beam is a lance, not a round: what it meets, it fells.
+        // Which is the payoff for standing rooted for two seconds while something walks
+        // at you — the SPIDER is the one chassis that can open a road through the city.
+        CutStructuresAlong(spider.BeamOrigin, spider.BeamDirection,
+            SpiderWeapon.BeamLength, SpiderWeapon.BeamRadius);
+
         // A hunter is treated as the standing block it is drawn as, not as a point:
         // the shaft has to pass within its planar radius *and* be somewhere between the
         // grid and the top of its hull where it does so. Which is what makes the two
@@ -1056,6 +1275,13 @@ public sealed class World
                 StageCrabBlast(p.Position);
 
             if (!p.Active) continue;
+
+            // The skyline stops rounds — every round, from anyone. Tested before any
+            // target, so a hunter standing behind a wall is genuinely behind it and a
+            // shot cannot reach a boss's core through a tower. This is what makes the
+            // buildings cover rather than decoration, and it cuts both ways: the thing
+            // the player is hiding behind is also the thing they cannot shoot past.
+            if (BlockShotOnStructure(p)) continue;
 
             if (p.FromPlayer)
             {
@@ -1270,6 +1496,18 @@ public sealed class World
 
             float field = blast.CurrentDamageRadius;
             if (field <= 0f) continue;
+
+            // The ring of lances is beam-grade, so anything of the city caught inside the
+            // swell comes down with everything else. Structures are struck once and then
+            // stop being blockers, so a core thrown into a plaza takes the whole block on
+            // the tick it reaches them rather than gnawing at them for three seconds.
+            foreach (var s in Structures)
+            {
+                if (s.Falling) continue;
+                if (Torus.DistanceSquared(s.Position, blast.Position)
+                    <= (field + BlastBossMargin) * (field + BlastBossMargin))
+                    FellStructure(s);
+            }
 
             float reach = field + EnemyTank.Radius;
             float reachSq = reach * reach;

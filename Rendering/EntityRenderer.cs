@@ -32,6 +32,11 @@ public sealed class EntityRenderer
     private readonly PolyMesh _shipGunship = Meshes.ShipGunship(Palette.EliteFill);
     private readonly PolyMesh _shipScout = Meshes.ShipScout(Palette.PlayerFill);
 
+    // The skyline. Not an entity in any sense — it never updates and nothing in the
+    // sim owns it — but it is drawn inside the same 3D pass as everything else, so it
+    // is held here rather than making the Renderer juggle a second sub-renderer.
+    private readonly StructureRenderer _structures = new();
+
     // The Crab-Core boss is a posed rig, not a single mesh — its own renderer owns
     // the parts and places them from a per-frame pose.
     private readonly CrabRenderer _crab = new();
@@ -53,6 +58,15 @@ public sealed class EntityRenderer
     // and gunmetal, and neither belongs on the player's craft.
     private readonly CrabRenderer _spiderRig = new() { Scale = CrabRig.PlayerScale };
 
+    /// <summary>
+    /// Draws the skyline on its own, without a world. The title and settings screens
+    /// drift a camera over the empty grid with no sim behind it, and the whole point of
+    /// the city being a fixed feature of the torus rather than per-run scenery is that
+    /// those screens can show the same one the player is about to drive into.
+    /// </summary>
+    public void DrawStructures(Vector3 cameraPos)
+        => _structures.Draw(VoidTanks.World.StructureField.Backdrop, cameraPos);
+
     public void Draw(World.World world, Vector3 cameraPos)
     {
         // The world is a torus, so every world thing is drawn at its nearest image
@@ -60,6 +74,11 @@ public sealed class EntityRenderer
         // over the world's edge is then drawn just past the player rather than a whole
         // arena away, which is what keeps the seam invisible as they roam over it.
         var eyeXZ = new Vector2(cameraPos.X, cameraPos.Z);
+
+        // The city first: it is the backdrop everything else is fought in front of. This
+        // stage's own copy, not the shared backdrop — the towers this run has cut down
+        // are down here and nowhere else.
+        _structures.Draw(world.Structures, cameraPos);
 
         // The lone Stalker, if the stage seeded one, drawn from its live pose. Once
         // it's fully dead the rig is gone; while dying it draws mid-glitch-apart.
