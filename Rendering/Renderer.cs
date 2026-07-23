@@ -108,6 +108,10 @@ public sealed class Renderer : IDisposable
         // Same band as the soldier's — these are things happening to a body, not to a hull.
         if (player.Fish is { Shake: > 0f } struck)
             amp = MathF.Max(amp, 0.16f * struck.Shake);
+        // A virus taking a host, soaking a hit into one, or blowing one apart in an overload.
+        // Same band again — these are things happening to a body the player is only borrowing.
+        if (player.Virus is { Shake: > 0f } corrupted)
+            amp = MathF.Max(amp, 0.16f * corrupted.Shake);
 
         Vector3 rumble = Vector3.Zero, rattle = Vector3.Zero;
         if (amp > 0f)
@@ -204,6 +208,12 @@ public sealed class Renderer : IDisposable
         else if (player.IsMachine && seizure == null)
             lift = MathF.Tan(player.Pitch);
 
+        // The VIRUS looks the whole way up and down like the two bodies — the mote flies
+        // where it points — but has no bank of its own, so it only needs the tilt, not the
+        // roll. Same suppression while a set piece owns the view.
+        else if (player.Virus != null && seizure == null)
+            lift = MathF.Tan(player.Pitch);
+
         _camera.FovY = fov;
         _camera.Position = eye + rumble;
         // Pitch the eye up a touch so the horizon sits low on screen: that opens
@@ -223,7 +233,7 @@ public sealed class Renderer : IDisposable
         // whose ring cranes the full way up. The two branches agree exactly at level pitch
         // (see the derivation below), so the tank — pinned to a shallow gun — is
         // unaffected whichever way it falls here.
-        if (player.Soldier != null || player.Fish != null || player.IsMachine)
+        if (player.Soldier != null || player.Fish != null || player.Virus != null || player.IsMachine)
         {
             Vector3 look = Vector3.Normalize(new Vector3(fwd.X, lift + pitch, fwd.Y));
             Vector3 side = Vector3.Normalize(Vector3.Cross(look, new Vector3(0f, 1f, 0f)));
@@ -271,6 +281,11 @@ public sealed class Renderer : IDisposable
         // ever does anything on a given run — each returns immediately without its own
         // chassis — so they cost nothing to have both here.
         FishRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
+
+        // And the VIRUS's: the infection creeping in over a rotting host, or the cold red
+        // pulse and static of being a naked mote. Like the two above, it returns immediately
+        // without its own chassis, so it costs nothing to have here.
+        VirusRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
 
         // Flat instrument panel over the scene: vital bars + radar along the top, plus
         // the R/T/Y/U equip slots showing their 3D item icons.
@@ -410,23 +425,30 @@ public sealed class Renderer : IDisposable
         // a long silhouette and the angle that keeps the lantern against the dark rather
         // than against the grid.
         bool finny = screen.Loadout.Class == PlayerClass.Fish;
+        // ...and the virus is a fourth: a compact cloud hanging a body's height off the plate
+        // like the fish, but roughly as tall as it is wide rather than long and low. It gets
+        // the fish's floating framing pulled in a touch and aimed at the middle of the cloud,
+        // where the mote and its bright core sit.
+        bool buggy = screen.Loadout.Class == PlayerClass.Virus;
 
         // How far it slides is per chassis for the same reason the framing is: the shift
         // is a distance in the world, and the soldier is looked at from a third of the
         // range, so the tank's 2.6 units throws it clean off the side of the frame.
-        float shift = screen.Customising ? (small ? -1.15f : finny ? -0.95f : -2.6f) : 0f;
+        float shift = screen.Customising ? (small ? -1.15f : finny || buggy ? -0.95f : -2.6f) : 0f;
         var eye = leggy ? new Vector3(shift, 4.8f, -13f)
                 : small ? new Vector3(shift, 1.75f, -4.1f)
                 : finny ? new Vector3(shift, 1.5f, -5.6f)
+                : buggy ? new Vector3(shift, 2.1f, -6.4f)
                 : new Vector3(shift, 3.6f, -9.2f);
         _camera.Position = eye;
         // Aimed below the craft's feet rather than at its middle, which lifts the whole
         // model up the frame and clear of the briefing text along the bottom. The fish
         // needs the same trick for a different reason: it hangs a body's height off the
         // plate rather than standing on it, so the aim goes under where it <em>floats</em>
-        // rather than under where it would stand.
+        // rather than under where it would stand. The virus floats too, but is aimed square
+        // at its middle — the mote is a cloud, not a silhouette, and centring it reads best.
         _camera.Target = new Vector3(shift,
-            leggy ? -0.15f : small ? 0.22f : finny ? 0.42f : -0.35f, 0f);
+            leggy ? -0.15f : small ? 0.22f : finny ? 0.42f : buggy ? 1.0f : -0.35f, 0f);
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);

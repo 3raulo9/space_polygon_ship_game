@@ -120,6 +120,7 @@ public sealed class Projectile
                               // plain bolt inherits it and detonates like one on expiry
         IsRocket = false;
         IsTracer = false;
+        IsAcid = false;
         _climb = MathF.Sin(pitch) * Speed;
         SplashRadius = 0f;
         Height = launchHeight;
@@ -156,6 +157,7 @@ public sealed class Projectile
         IsLaser = false;
         IsRocket = false;
         IsTracer = false;
+        IsAcid = false;
         SplashRadius = GrenadeSplash;
         Height = 0.7f;          // the fatter slug rides a touch higher than a bolt
         _descentRate = 0f;
@@ -183,6 +185,7 @@ public sealed class Projectile
         IsLaser = false;
         IsRocket = false;
         IsTracer = false;
+        IsAcid = false;
         SplashRadius = 0f;      // the beams carry the damage, not a splash sphere
         Height = 0.7f;
         _descentRate = 0f;
@@ -202,7 +205,8 @@ public sealed class Projectile
     /// descent, so a round fired at the sky genuinely goes up and a round fired at the
     /// grid from the top of a swing genuinely comes down where it was pointed.
     /// </summary>
-    public void FireDirected(Vector3 origin, Vector3 dir, float speed, bool rocket)
+    public void FireDirected(Vector3 origin, Vector3 dir, float speed, bool rocket,
+        bool acid = false)
     {
         Vector3 d = Vector3.Normalize(dir);
 
@@ -215,7 +219,8 @@ public sealed class Projectile
 
         FromPlayer = true;
         IsRocket = rocket;
-        IsTracer = !rocket;
+        IsAcid = acid;
+        IsTracer = !rocket && !acid;
         IsGrenade = false;      // a rocket carries its own splash; it is not the heavy round
         IsCrabBomb = false;
         IsLaser = false;
@@ -225,6 +230,14 @@ public sealed class Projectile
         JustExpired = false;
         Active = true;
     }
+
+    /// <summary>
+    /// The worn Maw-Core's spit, fired by a VIRUS wearing the mouth: a directed round in
+    /// the maw's own acid green, so what leaves the possessed monster is unmistakably the
+    /// monster's ordnance and not a re-tinted rifle. Travels, collides and damages exactly
+    /// as a tracer does — the flag only changes what it is drawn as.
+    /// </summary>
+    public bool IsAcid { get; private set; }
 
     /// <summary>Vertical velocity for a directed round, in units a second. Zero for
     /// everything that travels flat.</summary>

@@ -69,6 +69,11 @@ public sealed class EntityRenderer
     // pieces out in the run, where the player is inside its head.
     private readonly FishModel _fishModel = new();
 
+    // The VIRUS: not a body at all but a mote of corruption trailing a shed husk. Only ever
+    // seen whole on the turntable — out in the run this chassis wears other things, and what
+    // the player sees is the infection over the frame rather than a craft in front of them.
+    private readonly VirusModel _virusModel = new();
+
     /// <summary>The parts of the fish's own body that hang in the player's view — the
     /// snout, the pectorals and the lantern. Drawn in the camera's frame rather than the
     /// world's, so they stay welded to the eye through a forty-degree carve.</summary>
@@ -160,6 +165,7 @@ public sealed class EntityRenderer
             if (p.IsRocket) DrawRocket(p, shotPos);
             else if (p.IsGrenade) _grenade.Draw(shotPos, 0f, p.Height, cameraPos);
             else if (p.IsLaser) DrawLaserStreak(p, shotPos);
+            else if (p.IsAcid) DrawAcidBolt(p, shotPos);
             else if (p.IsTracer) DrawTracer(p, shotPos, cameraPos);
             else _bolt.Draw(shotPos, 0f, p.Height, cameraPos);
         }
@@ -242,6 +248,28 @@ public sealed class EntityRenderer
             Raylib.DrawSphereEx(center, (1.5f + 0.6f * MathF.Sin(t * 20f)) * env, 8, 8, Color.White);
         }
 
+        // The VIRUS's stolen lance, mid-break: every live shaft of the last discharge,
+        // drawn through the boss's own lance renderer because it is literally the same
+        // light — one beam per direction the corrupted core threw it, each flickering on
+        // its own phase, because a stable shaft would be the one thing this weapon
+        // cannot produce.
+        if (world.Player.Virus is { } virusRig)
+        {
+            float now = (float)Raylib.GetTime();
+            for (int i = 0; i < virusRig.Shafts.Length; i++)
+            {
+                ref readonly var shaft = ref virusRig.Shafts[i];
+                if (shaft.Life <= 0f) continue;
+
+                float progress = 1f - shaft.Life / Entities.VirusRig.LanceBurnTime;
+                float flicker = 0.55f + 0.45f * MathF.Sin(now * 70f + i * 2.4f);
+                _crab.DrawLance(shaft.Origin, shaft.Dir, 0f, progress,
+                    Entities.VirusRig.LanceLength,
+                    Entities.VirusRig.LanceRadius * flicker,
+                    0.4f);
+            }
+        }
+
         // The SOLDIER's rig: both cables out to wherever their hooks have got to, and
         // the forearms holding the launchers. Drawn near the end so the cables pass in
         // front of the city they are anchored to rather than through it, and so the
@@ -320,6 +348,23 @@ public sealed class EntityRenderer
 
     /// <summary>How close a tracer may get to the eye before it stops being drawn.</summary>
     private const float NearTracer = 4f;
+
+    /// <summary>
+    /// A worn maw's acid bolt: a slow green orb with a hot pip in it — the Maw-Core's own
+    /// laser language, fired by the player wearing the mouth. Drawn as spheres rather than
+    /// a streak because the monster's bolts always were: slow ordnance you watch coming is
+    /// round, fast ordnance you only ever see the trail of is a line.
+    /// </summary>
+    private static void DrawAcidBolt(Projectile p, Vector2 at)
+    {
+        var centre = new Vector3(at.X, p.Height, at.Y);
+        float pulse = 0.85f + 0.15f * MathF.Sin((float)Raylib.GetTime() * 21f);
+
+        var acid = Palette.MawLaser;
+        Raylib.DrawSphereEx(centre, 0.34f * pulse, 6, 6,
+            new Color(acid.R, acid.G, acid.B, (byte)190));
+        Raylib.DrawSphereEx(centre, 0.14f * pulse, 5, 5, Color.White);
+    }
 
     /// <summary>
     /// A rocket: the fin-stabilised body, its motor burning behind it, and a smoke
@@ -420,6 +465,13 @@ public sealed class EntityRenderer
                 // to hold it level, the lantern trails, and every few seconds it gulps.
                 // The one specimen in the hangar that never touches the turntable.
                 _fishModel.Draw(loadout, pos, heading, cameraPos, elapsed);
+                break;
+
+            case PlayerClass.Virus:
+                // Hanging in the air like the fish, but nothing so settled: the mote spins,
+                // its veins cast about for a body, and the husk of the last thing it wore
+                // tumbles around it. The turntable heading turns the whole cloud slowly.
+                _virusModel.Draw(loadout, pos, heading, cameraPos, elapsed);
                 break;
         }
     }

@@ -3,17 +3,18 @@ using Raylib_cs;
 namespace VoidTanks.Core;
 
 /// <summary>
-/// What the player climbs into. The machine offers five chassis and admits, on the
-/// same screen, which of them it can still assemble — the rest are listed because the
-/// manifest says they exist, not because anything is left to build.
+/// What the player climbs into. The machine offers five chassis, and with the VIRUS
+/// finally loaded the whole manifest can now be assembled — though calling that one
+/// "assembled" is generous: it is the entry with no pattern, because it has no body.
+/// It takes one.
 /// </summary>
 public enum PlayerClass
 {
     Tank,     // the original craft: the game as it has always played
     Spider,   // a player-sized Crab-Core, lasers and a charged lance
-    Virus,    // offline
-    Fish,     // offline
-    Soldier,  // offline
+    Virus,    // a naked mote that wears hunters as rotting armour
+    Fish,     // the drowned swimmer: the void as an ocean
+    Soldier,  // a person on foot with two gas-fired grappling hooks
 }
 
 /// <summary>
@@ -69,11 +70,24 @@ public static class ClassCatalog
 
         new ClassArchetype(
             PlayerClass.Virus, "VIRUS",
-            "NO BUILD DATA",
-            new[] { "THE MACHINE HAS NO PATTERN FOR THIS CHASSIS." },
-            Available: false,
-            PartNames: Array.Empty<string>(),
-            DefaultSwatches: Array.Empty<int>()),
+            "NO CHASSIS OF ITS OWN",
+            new[]
+            {
+                "THE MACHINE HAS NO PATTERN FOR THIS ONE - IT IS NOT",
+                "A THING TO BUILD. YOU SPAWN AS A NAKED MOTE, ONE HIT",
+                "FROM DEAD. FLY INTO A HUNTER TO WEAR IT. LEFT FIRES.",
+                "RIGHT SPENDS THE ROTTING HOST AS A BOMB. KEEP HOPPING.",
+            },
+            Available: true,
+            // No hull to paint, so the parts are the infection itself: the mote's own
+            // core, the veins that crawl over every stolen body, the husk of whatever it
+            // is wearing, and the payload glow. The tint travels with you onto every host,
+            // which is the whole convention — you always know your own rot.
+            PartNames: new[] { "MOTE", "VEINS", "HUSK", "PAYLOAD" },
+            // Diseased register, kin to the Maw-Core's rot: a magenta mote over a bruised
+            // vein, a dead-green husk, and the one bright neon-red payload for the living
+            // core — this game's whole convention for a thing that is code, not matter.
+            DefaultSwatches: new[] { 7, 3, 11, 8 }),
 
         new ClassArchetype(
             PlayerClass.Fish, "FISH",

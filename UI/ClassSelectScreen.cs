@@ -93,8 +93,8 @@ public sealed class ClassSelectScreen
     /// Leaves for the menu, first making sure the build isn't left pointing at a chassis
     /// the machine can't make. Browsing the roster writes whatever is highlighted into
     /// the loadout — that is what keeps the turntable showing the thing you are reading
-    /// about — so backing out while parked on VIRUS would otherwise persist an
-    /// unbuildable class as the player's current craft.
+    /// about — so backing out while parked on an offline chassis would otherwise persist
+    /// an unbuildable class as the player's current craft.
     /// </summary>
     private Action Back()
     {

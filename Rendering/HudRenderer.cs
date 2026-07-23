@@ -65,6 +65,12 @@ internal static class HudRenderer
         // dashboard has never had an instrument for: the radar says where things are on
         // the plane, and this chassis lives in the column. See FishHud.
         if (p.Fish is { } body) FishHud.DrawOverlay(world, body, p);
+
+        // And the VIRUS, whose additions are the two things no other chassis has to say:
+        // how much of the worn host is left before it bursts, and — the state shout — whether
+        // there is a host at all. It also draws its own crosshair, since it is not a machine
+        // and the dashboard's centre sight above is skipped for it. See VirusHud.
+        if (p.Virus is { } virus) VirusHud.DrawOverlay(world, virus, p);
     }
 
     // --- The SPIDER's lance meter: 0..100 down the right-hand edge ---
