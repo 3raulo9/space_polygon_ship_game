@@ -70,6 +70,10 @@ public sealed class Game : IDisposable
     /// step of the sim may read the trigger as released. See RunCaptureFrame.</summary>
     private bool _lanceHold;
 
+    /// <summary>Capture-only: the building VOIDTANKS_CAPTURE_FELL picked to cut down, so
+    /// every later frame can re-park the camera on it while it comes apart.</summary>
+    private World.Structure? _fellTarget;
+
     public Game()
     {
         _renderer = new Renderer();
@@ -585,6 +589,48 @@ public sealed class Game : IDisposable
                 for (int i = 0; i < 100; i++) cap.Hold((float)Config.FixedDt);
                 _world.FireSpiderLanceForTest();
                 _world.FirePlayerShot(laser: true);
+            }
+        }
+
+        // VOIDTANKS_CAPTURE_FELL=1 walks the craft up to the nearest tower, aims at it
+        // and cuts it down with a full lance on the first frame — the only way to
+        // photograph a collapse, which otherwise needs a human to find a building, stand
+        // still for two seconds and let go at the right moment. Pair it with
+        // VOIDTANKS_CLASS_INDEX=1 (a spider in the seat, so there is a lance at all) and a
+        // CAPTURE_FRAME somewhere in the first two seconds, which is how long the topple
+        // takes; later than that and the picture is of empty grid and settling dust.
+        //
+        // The craft is re-parked every frame, not just the first. The capture rig drives
+        // the craft forward the whole time it runs, and a collapse takes nearly two
+        // seconds — quite long enough for the building being photographed to leave the
+        // side of the frame while it falls.
+        if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FELL") != null
+            && _world!.Player.Spider is { } emitter)
+        {
+            if (_frame == 1)
+            {
+                float best = float.MaxValue;
+                foreach (var s in _world.Structures)
+                {
+                    if (s.Kind != World.StructureKind.Tower) continue;
+                    float d = Torus.DistanceSquared(s.Position, _world.Player.Position);
+                    if (d < best) { best = d; _fellTarget = s; }
+                }
+            }
+
+            if (_fellTarget != null)
+            {
+                // Stand off it at a distance that frames the whole building, and aim.
+                Vector2 away = Vector2.Normalize(
+                    Torus.Delta(_fellTarget.Position, _world.Player.Position)) * 42f;
+                _world.Player.Position = Torus.Wrap(_fellTarget.Position + away);
+                _world.Player.Heading = MathF.Atan2(-away.X, -away.Y);
+
+                if (_frame == 1)
+                {
+                    for (int i = 0; i < 120; i++) emitter.Hold((float)Config.FixedDt);
+                    _world.FireSpiderLanceForTest();
+                }
             }
         }
 

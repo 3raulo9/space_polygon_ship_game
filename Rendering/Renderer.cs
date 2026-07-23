@@ -175,6 +175,24 @@ public sealed class Renderer : IDisposable
     }
 
     /// <summary>
+    /// Where the idling camera sits on the UI screens: a slow, aimless creep over the
+    /// empty grid, with no player and no craft — just the machine ticking over.
+    ///
+    /// It travels a wide, very slow arc rather than the straight line it used to, and
+    /// that arc is deliberately kept well inside <see cref="World.StructureField.ClearRadius"/>.
+    /// Now that there is a city on this map, a drift heading off in one direction forever
+    /// eventually wanders into it and parks a forty-metre slab through the middle of the
+    /// title. Circling holds the skyline where it belongs — on the horizon, behind the
+    /// text — however long the player leaves the menu up.
+    /// </summary>
+    private static Vector2 IdleDrift(float elapsed)
+    {
+        const float Radius = 10f;
+        const float Rate = 0.07f;   // radians a second: roughly one lap a minute and a half
+        return new Vector2(MathF.Sin(elapsed * Rate), MathF.Cos(elapsed * Rate)) * Radius;
+    }
+
+    /// <summary>
     /// Renders the title menu into the low-res target so it shares the world's
     /// chunky pixels. A grid drifts slowly behind it — the void is still out
     /// there, waiting — with the UI drawn flat on top. Kept in the Renderer so
@@ -182,10 +200,7 @@ public sealed class Renderer : IDisposable
     /// </summary>
     public void DrawMenu(UI.Menu menu, float elapsed)
     {
-        // A slow, aimless drift over the empty grid. No player, no craft — just
-        // the machine idling. The eye creeps forward and pans a hair so the void
-        // reads as alive-but-indifferent rather than a frozen backdrop.
-        var pos = new Vector2(elapsed * 0.6f, elapsed * 1.4f);
+        var pos = IdleDrift(elapsed);
         float pan = MathF.Sin(elapsed * 0.05f) * 0.25f;
         var eye = new Vector3(pos.X, Config.CameraHeight + 1.5f, pos.Y);
         _camera.Position = eye;
@@ -197,6 +212,10 @@ public sealed class Renderer : IDisposable
 
         Raylib.BeginMode3D(_camera);
         GridRenderer.Draw(pos);
+        // The same dead city the run is fought in, drifting past behind the title. The
+        // skyline is a fixed feature of the torus, so this is not a backdrop made for
+        // the menu — it is the actual place, seen from wherever the idle drift has got to.
+        _entities.DrawStructures(eye);
         Raylib.EndMode3D();
 
         MenuRenderer.Draw(menu, elapsed);
@@ -210,7 +229,7 @@ public sealed class Renderer : IDisposable
     /// </summary>
     public void DrawSettings(UI.SettingsScreen screen, float elapsed)
     {
-        var pos = new Vector2(elapsed * 0.6f, elapsed * 1.4f);
+        var pos = IdleDrift(elapsed);
         float pan = MathF.Sin(elapsed * 0.05f) * 0.25f;
         var eye = new Vector3(pos.X, Config.CameraHeight + 1.5f, pos.Y);
         _camera.Position = eye;
@@ -222,6 +241,7 @@ public sealed class Renderer : IDisposable
 
         Raylib.BeginMode3D(_camera);
         GridRenderer.Draw(pos);
+        _entities.DrawStructures(eye);
         Raylib.EndMode3D();
 
         MenuRenderer.DrawSettings(screen, elapsed);

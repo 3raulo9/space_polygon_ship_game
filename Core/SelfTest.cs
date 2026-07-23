@@ -15,6 +15,10 @@ public static class SelfTest
     {
         int failures = 0;
         failures += Check("the world is a finite wrap-around torus", WorldIsAFiniteTorus);
+        failures += Check("the skyline is a city, not nine buildings", SkylineIsPopulated);
+        failures += Check("the skyline is solid to the craft", StructuresBlockThePlayer);
+        failures += Check("rounds stop at a wall and leave it standing", RoundsStopAtTheSkyline);
+        failures += Check("a beam cuts a tower down and clears the wreck", BeamsCutStructuresDown);
         failures += Check("player can destroy an enemy", PlayerKillsEnemy);
         failures += Check("enemy can damage the player", EnemyDamagesPlayer);
         failures += Check("ammo is finite", AmmoDepletes);
@@ -48,6 +52,155 @@ public static class SelfTest
             ? "SELFTEST: all checks passed"
             : $"SELFTEST: {failures} check(s) FAILED");
         return failures == 0 ? 0 : 1;
+    }
+
+    // --- The skyline -----------------------------------------------------------
+
+    /// <summary>
+    /// The field's rejection sampler is asked for hundreds of buildings and quietly
+    /// settles for whatever fits, so a spacing change that over-subscribes the torus
+    /// doesn't fail — it just returns a near-empty world that still runs and still
+    /// renders, and nobody notices until they look at the horizon. This pins a floor
+    /// under it. The numbers are a long way below what the field is asked for, so
+    /// ordinary retuning doesn't trip it and a collapse does.
+    /// </summary>
+    private static string? SkylineIsPopulated()
+    {
+        var field = StructureField.Create();
+        int towers = 0, arcs = 0;
+        foreach (var s in field)
+        {
+            if (s.Kind == StructureKind.Tower) towers++; else arcs++;
+        }
+
+        if (towers < 40) return $"only {towers} towers were placed";
+        if (arcs < 6) return $"only {arcs} arcs were placed";
+
+        // And nothing standing on the ground every screen opens on — the craft's start,
+        // the hangar's turntable and the title screen's idling camera all live in here.
+        foreach (var s in field)
+            if (s.Position.Length() < StructureField.ClearRadius)
+                return $"a structure stands {s.Position.Length():0.0} from the origin";
+
+        return null;
+    }
+
+    /// <summary>
+    /// A tower is a wall, not scenery: driving into one has to stop the craft entering
+    /// it, and — just as importantly — has to leave the craft somewhere legal rather
+    /// than jammed on the surface it was pushed out of.
+    /// </summary>
+    private static string? StructuresBlockThePlayer()
+    {
+        var world = new World.World();
+        var tower = FirstTower(world);
+        if (tower == null) return "no tower to drive into";
+
+        // Park the craft inside the footprint and let one tick resolve it.
+        world.Player.Position = tower.Position;
+        StepWithoutInput(world);
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        tower.Blockers(blockers);
+        float wanted = blockers[0].Radius + Entities.PlayerTank.Radius;
+        float got = Torus.Distance(world.Player.Position, blockers[0].At);
+        if (got < wanted - 0.01f)
+            return $"craft sits {got:0.00} into a footprint that reaches {wanted:0.00}";
+
+        // Steady state: another hundred ticks of the same resolution must not creep the
+        // craft anywhere, which is what would happen if the push-out overshot and the
+        // next tick pushed it back.
+        Vector2 settled = world.Player.Position;
+        for (int i = 0; i < 100; i++) StepWithoutInput(world);
+        if (Torus.Distance(settled, world.Player.Position) > 0.01f)
+            return "the craft drifts while resting against a wall";
+
+        return null;
+    }
+
+    /// <summary>
+    /// A round stops against a wall whoever fired it, and — just as load-bearing — the
+    /// wall is still standing afterwards. Bullets are what buildings are <em>for</em>;
+    /// only a beam takes one down, which the next check covers.
+    /// </summary>
+    private static string? RoundsStopAtTheSkyline()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        var tower = FirstTower(world);
+        if (tower == null) return "no tower to shoot at";
+
+        // Stand off the tower and aim square at it. Well outside its footprint, so the
+        // round has grid to cross and is genuinely stopped rather than born inside a wall.
+        Vector2 delta = Torus.Delta(tower.Position, world.Player.Position);
+        Vector2 away = Vector2.Normalize(delta) * 14f;
+        world.Player.Position = Torus.Wrap(tower.Position + away);
+        world.Player.Heading = MathF.Atan2(-away.X, -away.Y);
+
+        world.FirePlayerShot();
+        for (int i = 0; i < 120; i++)
+        {
+            StepWithoutInput(world);
+            if (!AnyProjectileActive(world)) break;
+        }
+
+        if (AnyProjectileActive(world)) return "the round never stopped";
+        if (tower.Falling) return "a plain round brought a tower down";
+
+        // And it stopped *at the wall*, not by flying past and expiring: something has to
+        // still be standing between the craft and where it was aiming.
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        if (tower.Blockers(blockers) == 0) return "the tower stopped being solid";
+
+        return null;
+    }
+
+    /// <summary>
+    /// A beam is not a round: the SPIDER's charged lance cuts a tower down and runs the
+    /// collapse to completion, after which the field has genuinely let it go.
+    /// </summary>
+    private static string? BeamsCutStructuresDown()
+    {
+        var loadout = new Loadout { Class = PlayerClass.Spider };
+        var world = new World.World(loadout) { DynamicSpawning = false };
+        var tower = FirstTower(world);
+        if (tower == null) return "no tower to cut";
+        if (world.Player.Spider == null) return "the spider chassis has no emitter";
+
+        Vector2 delta = Torus.Delta(tower.Position, world.Player.Position);
+        Vector2 away = Vector2.Normalize(delta) * 20f;
+        world.Player.Position = Torus.Wrap(tower.Position + away);
+        world.Player.Heading = MathF.Atan2(-away.X, -away.Y);
+
+        // Wind the lance to full and loose it down the line of the tower.
+        for (int i = 0; i < 200; i++) world.Player.Spider.Hold((float)Config.FixedDt);
+        world.FireSpiderLanceForTest();
+
+        if (!tower.Falling) return "the lance left the tower standing";
+
+        // The collapse has to actually finish and clear itself off the field, or a run
+        // long enough accumulates wreckage that is neither solid nor ever removed. The
+        // count is only checked for having dropped, not for having dropped by one: the
+        // lance is ninety units long and deliberately fells everything standing in it,
+        // so a shot that opens a road through three towers is correct behaviour.
+        int before = world.Structures.Count;
+        for (int i = 0; i < 60 * 6; i++) StepWithoutInput(world);
+        if (world.Structures.Contains(tower)) return "the wreck never left the field";
+        if (world.Structures.Count >= before) return "nothing was cleared off the field";
+
+        return null;
+    }
+
+    private static bool AnyProjectileActive(World.World world)
+    {
+        foreach (var p in world.Projectiles) if (p.Active) return true;
+        return false;
+    }
+
+    private static Structure? FirstTower(World.World world)
+    {
+        foreach (var s in world.Structures)
+            if (s.Kind == StructureKind.Tower) return s;
+        return null;
     }
 
     // --- The hangar: the loadout budget and the SPIDER chassis ------------------
