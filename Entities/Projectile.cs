@@ -40,6 +40,14 @@ public sealed class Projectile
     // rides along so the world can tell the two heavy rounds apart at detonation.
     public bool IsCrabBomb;
 
+    /// <summary>
+    /// A SPIDER laser rather than a cannon bolt. Purely cosmetic — it travels, collides
+    /// and damages exactly as an ordinary round does, because "the same damage as the
+    /// bullet" is the class's spec. The flag only tells the renderer to draw a short
+    /// neon streak instead of the flat-shaded octahedron.
+    /// </summary>
+    public bool IsLaser;
+
     private const float Speed = 90f;
     private const float GrenadeSpeed = 60f;   // heavier, so it lobs slower
     private const float MaxLife = 2.4f;
@@ -53,12 +61,14 @@ public sealed class Projectile
     // out near the horizon regardless of how high the jump was.
     private const float AirGlideTime = 2.6f;
 
-    public void Fire(Vector2 origin, Vector2 dir, bool fromPlayer, float launchHeight = BoltHeight)
+    public void Fire(Vector2 origin, Vector2 dir, bool fromPlayer, float launchHeight = BoltHeight,
+        bool laser = false)
     {
         Position = origin;
         Velocity = Vector2.Normalize(dir) * Speed;
         FromPlayer = fromPlayer;
         IsGrenade = false;
+        IsLaser = laser;
         IsCrabBomb = false;   // pooled slots are reused — clear the thrown-core flag or a
                               // plain bolt inherits it and detonates like one on expiry
         SplashRadius = 0f;
@@ -83,6 +93,7 @@ public sealed class Projectile
         FromPlayer = fromPlayer;
         IsGrenade = true;
         IsCrabBomb = false;
+        IsLaser = false;
         SplashRadius = GrenadeSplash;
         Height = 0.7f;          // the fatter slug rides a touch higher than a bolt
         _descentRate = 0f;
@@ -105,6 +116,7 @@ public sealed class Projectile
         FromPlayer = true;
         IsGrenade = true;       // reuse the fat-slug travel + splash-style handling
         IsCrabBomb = true;
+        IsLaser = false;
         SplashRadius = 0f;      // the beams carry the damage, not a splash sphere
         Height = 0.7f;
         _descentRate = 0f;

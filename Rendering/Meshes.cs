@@ -27,14 +27,9 @@ public static class Meshes
         var m = new PolyMesh();
 
         // Stepped tiers of the box-pyramid: each box is centred on the axis, wider
-        // and deeper at the bottom, shrinking as it climbs. (hw, hd, y0, y1)
-        (float hw, float hd, float y0, float y1)[] tiers =
-        {
-            (1.5f,  1.6f,  0.0f, 0.45f),  // base slab — the wide, grounded footing
-            (1.12f, 1.2f,  0.45f, 0.95f), // second step
-            (0.75f, 0.8f,  0.95f, 1.4f),  // third step
-        };
-        foreach (var (hw, hd, y0, y1) in tiers)
+        // and deeper at the bottom, shrinking as it climbs. (hw, hd, y0, y1) — shared
+        // with the player's paintable hull, see HullTiers.
+        foreach (var (hw, hd, y0, y1) in HullTiers)
             m.AddBox(fill, hw, hd, y0, y1);
 
         // Pyramidal cap: four hard facets rising from the top step to a single
@@ -60,6 +55,57 @@ public static class Meshes
 
         return m;
     }
+
+    // --- The player's tank, broken into paintable parts ------------------------
+    // Exactly the same geometry as Tank() above, split at its three natural seams so
+    // the hangar can paint each one on its own. Kept as three separate meshes rather
+    // than one multi-colour mesh because the colours are chosen at runtime and a
+    // PolyMesh bakes its face colours at build time — rebuilding a whole tank every
+    // time the player nudges a swatch would be silly, whereas re-tinting three parts
+    // at draw time costs nothing (PolyMesh.Draw already takes a per-instance tint).
+    // Every part is built white so that tint is the only thing deciding its colour.
+
+    /// <summary>The stepped ziggurat body: the three boxes of <see cref="Tank"/>.</summary>
+    public static PolyMesh TankHull(Color fill)
+    {
+        var m = new PolyMesh();
+        foreach (var (hw, hd, y0, y1) in HullTiers)
+            m.AddBox(fill, hw, hd, y0, y1);
+        return m;
+    }
+
+    /// <summary>The pyramidal cap that tops the stack.</summary>
+    public static PolyMesh TankCap(Color fill)
+    {
+        var m = new PolyMesh();
+        const float capHw = 0.75f, capHd = 0.8f, capY = 1.4f, apexY = 2.15f;
+        Vector3 fl = new(-capHw, capY, capHd), fr = new(capHw, capY, capHd);
+        Vector3 br = new(capHw, capY, -capHd), bl = new(-capHw, capY, -capHd);
+        Vector3 apex = new(0f, apexY, 0f);
+        m.AddFace(fill, fl, fr, apex);
+        m.AddFace(fill, fr, br, apex);
+        m.AddFace(fill, br, bl, apex);
+        m.AddFace(fill, bl, fl, apex);
+        return m;
+    }
+
+    /// <summary>The tapering gun jutting past the nose.</summary>
+    public static PolyMesh TankBarrel(Color fill)
+    {
+        var m = new PolyMesh();
+        AddTaperedBarrel(m, fill, 0.7f, 0.18f, 0.1f, 0.4f, 2.9f);
+        return m;
+    }
+
+    /// <summary>The hull's stepped tiers — the one definition <see cref="Tank"/> and
+    /// <see cref="TankHull"/> both build from, so the enemy and the player's craft can
+    /// never drift into being different shapes.</summary>
+    private static readonly (float hw, float hd, float y0, float y1)[] HullTiers =
+    {
+        (1.5f,  1.6f,  0.0f,  0.45f),
+        (1.12f, 1.2f,  0.45f, 0.95f),
+        (0.75f, 0.8f,  0.95f, 1.4f),
+    };
 
     /// <summary>
     /// A barrel as a tapering box along +Z: a square cross-section shrinking from

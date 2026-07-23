@@ -32,6 +32,13 @@ public sealed class EnemyTank
     private const float BaseRadius = 1.3f;   // hitbox on the unscaled mesh
     public const float Radius = BaseRadius * Scale;
 
+    /// <summary>How tall the hull stands, in world units — the mesh's pyramid apex
+    /// carried through the same <see cref="Scale"/>. Only anything that has to care
+    /// about height reads it (the SPIDER's lance, which passes over a grounded tank
+    /// when it is loosed from the top of a jump); the ordinary bolt-vs-tank test is
+    /// still a flat planar one.</summary>
+    public const float BodyHeight = 2.15f * Scale;
+
     public EnemyTank(Vector2 start, bool elite, int shieldBonus = 0)
     {
         Position = start;

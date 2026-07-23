@@ -15,6 +15,12 @@ namespace VoidTanks.World;
 public sealed class World
 {
     public readonly PlayerTank Player;
+
+    /// <summary>The hangar build this stage was spun up for — the chassis, its point
+    /// spend and its paint job. Read by the renderer to colour the craft's own parts,
+    /// and by nothing in the sim: the stats were baked into the player at construction.</summary>
+    public readonly Loadout Loadout;
+
     public readonly List<EnemyTank> Enemies = new();
     public readonly DebrisSystem Debris = new();
 
@@ -119,9 +125,15 @@ public sealed class World
     private const float MawSpawnChance = 0.11f;
     private float _mawTimer;
 
-    public World()
+    /// <summary>
+    /// Builds a stage for the given hangar build. A null loadout is the standard TANK
+    /// on a straight 5/5/5 — the craft this game had before the hangar existed — which
+    /// is what the headless self-test and the capture harness both want.
+    /// </summary>
+    public World(Loadout? loadout = null)
     {
-        Player = new PlayerTank(Vector2.Zero);
+        Loadout = loadout ?? new Loadout();
+        Player = new PlayerTank(Vector2.Zero, 0f, Loadout);
 
         _projectiles = new Projectile[MaxProjectiles];
         for (int i = 0; i < _projectiles.Length; i++)
@@ -214,6 +226,8 @@ public sealed class World
             {
                 if (InputMap.Fire || InputMap.Grenade) FirePlayerShot();
             }
+            else if (Player.Spider is { } spider)
+                UpdateSpiderTriggers(spider, dt);
             else if (InputMap.Grenade)
                 FirePlayerGrenade();
             else if (InputMap.Fire)
@@ -221,6 +235,15 @@ public sealed class World
 
             if (InputMap.HyperspacePressed)
                 Player.TryHyperspace();
+        }
+        else
+        {
+            // The panel is up and the mouse belongs to it. Drop any part-wound lance
+            // rather than letting it sit charged (and the craft rooted) behind an
+            // overlay the player is busy dragging items around in.
+            Player.Spider?.Cancel();
+            if (Player.Spider != null) Audio.SetLanceCharge(false, 0f);
+            Player.Rooted = false;
         }
 
         StepForTest(dt);
@@ -775,7 +798,14 @@ public sealed class World
     /// swallowed does not come with free bullets, and the cooldown is what makes the
     /// escape take a few seconds of being chewed rather than one panicked trigger pull.
     /// </summary>
-    public void FirePlayerShot()
+    public void FirePlayerShot() => FirePlayerShot(laser: false);
+
+    /// <summary>
+    /// The player's ordinary trigger pull. <paramref name="laser"/> only changes what
+    /// the round is drawn as (the SPIDER's emitter throws neon streaks where the tank
+    /// throws bolts) — the ammo cost, the cooldown and the damage are the same round.
+    /// </summary>
+    public void FirePlayerShot(bool laser)
     {
         // The Crab-Core's seizure is a cutscene, not a trap: there is no shooting your
         // way out of it, so the trigger is dead for its duration and the round isn't
@@ -796,7 +826,163 @@ public sealed class World
             return;
         }
 
-        SpawnProjectile(origin, dir, fromPlayer: true, launchHeight: launchHeight);
+        SpawnProjectile(origin, dir, fromPlayer: true, launchHeight: launchHeight, laser: laser);
+    }
+
+    // --- The SPIDER chassis -----------------------------------------------------
+
+    /// <summary>
+    /// Reads the spider's two triggers. Left is the emitter's ordinary fire, routed
+    /// straight through the craft's cannon so it costs and cools identically. Right
+    /// winds the lance: while it is held the craft is rooted, and the frame it is let go
+    /// the meter is spent as a beam.
+    ///
+    /// The order matters. The release is handled before the laser so that letting go of
+    /// the right button on the same frame the left one is down fires the lance rather
+    /// than swallowing it — a player mashing both should get the expensive shot, not
+    /// silently lose the charge they spent two seconds standing still for.
+    /// </summary>
+    private void UpdateSpiderTriggers(SpiderWeapon spider, float dt)
+    {
+        // A cinematic has hold of the craft: nothing is charging and nothing is rooted,
+        // and any wound-up meter is dropped rather than fired into a claw.
+        if (Seizure is { Held: true })
+        {
+            spider.Cancel();
+            Audio.SetLanceCharge(false, 0f);
+            Player.Rooted = false;
+            return;
+        }
+
+        if (InputMap.Grenade)
+        {
+            spider.Hold(dt);
+            Player.Rooted = true;
+            // The whine climbs with the meter, so the player can hear how loaded the
+            // shot is while they are busy watching the thing that is walking at them.
+            Audio.SetLanceCharge(true, spider.ChargeFraction);
+            return;
+        }
+
+        Audio.SetLanceCharge(false, 0f);
+        Player.Rooted = false;
+
+        if (spider.Charging)
+        {
+            FireSpiderLance(spider);
+            return;
+        }
+
+        if (InputMap.Fire) FirePlayerShot(laser: true);
+    }
+
+    /// <summary>
+    /// Looses the charged lance: spends rounds in proportion to the meter, raises the
+    /// beam, and bites everything standing on the shaft. The damage is applied once,
+    /// here — the beam that burns for the next half second is the picture of a shot that
+    /// has already happened, not a lingering hazard, so a target can't be billed twice
+    /// for one trigger pull.
+    ///
+    /// Refused outright when the magazine can't cover the bill, and the charge is
+    /// dropped either way: an empty craft can't fire a lance any more than it can fire
+    /// a cannon.
+    /// </summary>
+    private void FireSpiderLance(SpiderWeapon spider)
+    {
+        int cost = spider.AmmoCost;
+        float damage = spider.Damage;
+
+        Vector2 fwd = Player.Forward;
+        Vector2 muzzleXZ = Player.Position + fwd * SpiderWeapon.MuzzleForward;
+        var origin = new Vector3(muzzleXZ.X, SpiderWeapon.MuzzleHeight + Player.Height, muzzleXZ.Y);
+        var dir = new Vector3(fwd.X, 0f, fwd.Y);
+
+        if (Player.Ammo < cost)
+        {
+            spider.Cancel();   // the meter is spent whether or not a shot comes out
+            return;
+        }
+
+        if (!spider.Release(origin, dir, out _)) return;
+
+        Player.Ammo -= cost;
+        Audio.PlayLanceFire();
+        BurnSpiderLance(spider, damage);
+    }
+
+    /// <summary>
+    /// Looses whatever is wound into the spider's meter, without waiting on a trigger
+    /// edge — the headless self-test's way in, since it has no mouse. Silently does
+    /// nothing on a chassis with no emitter.
+    /// </summary>
+    public void FireSpiderLanceForTest()
+    {
+        if (Player.Spider is { } spider) FireSpiderLance(spider);
+    }
+
+    /// <summary>
+    /// Applies a fired lance to everything on its axis. Enemies are tested against the
+    /// shaft directly (it pierces — one beam rakes a whole line of hunters); the two
+    /// monsters' weak points are found by walking the ray and asking each of them the
+    /// same question an ordinary bolt asks, so what the lance can hit is exactly what a
+    /// round flying down the same line could hit, and no new geometry has to agree with
+    /// the old geometry about where a core is.
+    /// </summary>
+    private void BurnSpiderLance(SpiderWeapon spider, float damage)
+    {
+        var originXZ = new Vector2(spider.BeamOrigin.X, spider.BeamOrigin.Z);
+
+        // A hunter is treated as the standing block it is drawn as, not as a point:
+        // the shaft has to pass within its planar radius *and* be somewhere between the
+        // grid and the top of its hull where it does so. Which is what makes the two
+        // ways of firing the lance genuinely different — a grounded beam rakes a whole
+        // line of tanks, and a beam loosed at the top of a jump sails clean over them
+        // on its way to something's core.
+        var dirXZ = new Vector2(spider.BeamDirection.X, spider.BeamDirection.Z);
+        float planar = dirXZ.Length();
+        if (planar > 1e-4f) dirXZ /= planar;
+        float slope = planar > 1e-4f ? spider.BeamDirection.Y / planar : 0f;
+
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive) continue;
+            // Nearest image across the torus, so a beam fired near the seam still burns
+            // the hunter standing just over it.
+            Vector2 near = Torus.NearestImage(e.Position, originXZ);
+            float along = Math.Clamp(Vector2.Dot(near - originXZ, dirXZ), 0f, SpiderWeapon.BeamLength);
+            if (Vector2.Distance(near, originXZ + dirXZ * along)
+                > SpiderWeapon.BeamRadius + EnemyTank.Radius) continue;
+
+            float beamY = spider.BeamOrigin.Y + slope * along;
+            if (beamY < -SpiderWeapon.BeamRadius
+                || beamY > EnemyTank.BodyHeight + SpiderWeapon.BeamRadius) continue;
+
+            DamageEnemy(e, damage);
+        }
+
+        // Step down the shaft looking for the two crystals. A one-unit stride is well
+        // finer than either weak point's own reach, so nothing can sit between samples.
+        const float step = 1f;
+        bool hitCore = false, hitCrystal = false;
+        for (float d = 0f; d <= SpiderWeapon.BeamLength && !(hitCore && hitCrystal); d += step)
+        {
+            Vector3 at = spider.BeamOrigin + spider.BeamDirection * d;
+            var xz = new Vector2(at.X, at.Z);
+
+            if (!hitCore && Boss is { } boss && boss.HitsCore(xz, at.Y))
+            {
+                hitCore = true;
+                if (boss.DamageCore(damage)) DestroyBoss(boss);
+                else Audio.PlayCoreHit(1f - boss.CoreFraction);
+            }
+
+            if (!hitCrystal && Maw is { } maw && maw.HitsCrystal(xz, at.Y))
+            {
+                hitCrystal = true;
+                if (maw.DamageCrystal(damage)) DestroyMaw(maw);
+                else Audio.PlayMawHurt(1f - maw.CrystalFraction);
+            }
+        }
     }
 
     /// <summary>Requests a heavy grenade; honoured only if off cooldown with 10 ammo.</summary>
@@ -830,18 +1016,21 @@ public sealed class World
 
     private void SpawnProjectile(Vector2 origin, Vector2 dir, bool fromPlayer,
         bool grenade = false, bool crabBomb = false,
-        float launchHeight = Projectile.BoltHeight)
+        float launchHeight = Projectile.BoltHeight, bool laser = false)
     {
         foreach (var p in _projectiles)
         {
             if (p.Active) continue;
             if (crabBomb) p.FireCrabBomb(origin, dir);
             else if (grenade) p.FireGrenade(origin, dir, fromPlayer);
-            else p.Fire(origin, dir, fromPlayer, launchHeight);
+            else p.Fire(origin, dir, fromPlayer, launchHeight, laser);
             // The report of a barrel firing — same clip for player and enemy
             // shots, since both spawn through here. The thrown core gets a heavier
-            // launch thud instead of the light bolt report.
+            // launch thud instead of the light bolt report, and the SPIDER's laser its
+            // own dry zap: the cannon clip has enough body that a stream of them at the
+            // emitter's cadence stacks into a continuous roar.
             if (crabBomb) Audio.PlayThrowWhoosh();
+            else if (laser) Audio.PlayLaser();
             else Audio.PlayDetonation();
             return;
         }

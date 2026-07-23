@@ -31,6 +31,22 @@ public sealed class PlayerTank
     private const float Drag = 22f;         // coast-down when no input
     private const float ReverseFactor = 0.55f;
 
+    /// <summary>
+    /// The hangar's speed track, as a multiplier on both top speed and how hard the
+    /// engine pushes toward it. Scaling acceleration alongside the ceiling is the whole
+    /// difference between a fast craft and a craft that eventually gets fast: leaving
+    /// Accel alone would give a speed-10 build the same sluggish half-second of
+    /// wind-up, which is exactly the feel the track is supposed to buy out of.
+    ///
+    /// Note the boss's pursuit speed keys off the <em>const</em> MaxSpeed above, not
+    /// off this — the Stalker Protocol runs at the standard craft's walking pace, so a
+    /// player who spent points on speed can genuinely outrun it and one who spent them
+    /// elsewhere genuinely cannot. That asymmetry is the point of the track.
+    /// </summary>
+    private float _speedScale = 1f;
+
+    public float TopSpeed => MaxSpeed * _speedScale;
+
     private const float MaxTurn = 2.1f;     // rad/s
     private const float TurnAccel = 6.5f;
     private const float TurnDrag = 8.0f;
@@ -60,6 +76,27 @@ public sealed class PlayerTank
     public int Ammo = 40;
     public bool Alive => Shield > 0f || Lives > 0;
 
+    /// <summary>Which chassis the hangar sent out. Drives which trigger does what —
+    /// see <see cref="World.World.Update"/> — and nothing about the physics, which are
+    /// the same heavy momentum whatever you are piloting.</summary>
+    public PlayerClass Class { get; private set; } = PlayerClass.Tank;
+
+    /// <summary>
+    /// The SPIDER's emitter, or null on every other chassis. Held here rather than in
+    /// the world because it is part of the craft: it cools on the craft's clock and it
+    /// is what roots the craft while it charges.
+    /// </summary>
+    public SpiderWeapon? Spider { get; private set; }
+
+    /// <summary>
+    /// True while something is holding the craft in place but leaving it otherwise in
+    /// control — currently only the SPIDER winding its lance. Distinct from
+    /// <see cref="Captured"/>: a rooted craft still runs its own physics (so it coasts
+    /// to a stop rather than stopping dead), still cools its guns, still falls if it was
+    /// airborne. It simply stops accepting drive and turn input.
+    /// </summary>
+    public bool Rooted;
+
     // Hyper Engine: the reserve for tactical moves. Slowly refills on its own,
     // so jumping and hyperspacing are rationed, not free. Jump takes a quarter of
     // the bar; hyperspace drains almost all of it to panic-warp across the map.
@@ -83,10 +120,23 @@ public sealed class PlayerTank
     // Collision radius on the plane, shared by shots and tank-tank checks.
     public const float Radius = 1.3f;
 
-    public PlayerTank(Vector2 start, float heading = 0f)
+    public PlayerTank(Vector2 start, float heading = 0f, Loadout? loadout = null)
     {
         Position = start;
         Heading = heading;
+
+        // No loadout means the caller doesn't care (the headless self-test, the capture
+        // harness): fall back to the standard chassis on a straight 5/5/5, which is
+        // exactly the craft this game shipped with before the hangar existed.
+        loadout ??= new Loadout();
+        Class = loadout.Class;
+        MaxShield = loadout.MaxShield;
+        MaxAmmo = loadout.MaxAmmo;
+        _speedScale = loadout.SpeedScale;
+        // Open on four fifths of the magazine, as the craft always has.
+        Ammo = (int)MathF.Round(MaxAmmo * 0.8f);
+        if (Class == PlayerClass.Spider) Spider = new SpiderWeapon();
+
         Shield = MaxShield;
         Hyper = MaxHyper;
     }
@@ -128,6 +178,10 @@ public sealed class PlayerTank
         // they have. Whether a trigger pull is honoured at all is the world's call
         // (see World.FirePlayerShot) — this only keeps the gun alive.
         if (_fireCooldown > 0f) _fireCooldown -= dt;
+        // Same reasoning for the spider's emitter: its laser cools and its beam burns
+        // out on the weapon's own clock, not on whether the craft is currently allowed
+        // to drive.
+        Spider?.Update(dt);
 
         // A cinematic has the wheel: it writes the transform itself this tick.
         if (Captured) return;
@@ -257,8 +311,11 @@ public sealed class PlayerTank
         // actually look left, TurnLeft must *increase* heading and TurnRight
         // decrease it — hence left is +1 here.
         float input = 0f;
-        if (InputMap.TurnLeft) input += 1f;
-        if (InputMap.TurnRight) input -= 1f;
+        // Rooted (the spider winding its lance): no steering. The turn rate still
+        // bleeds off below, so a craft that was mid-turn settles rather than locking
+        // the instant the trigger goes down.
+        if (!Rooted && InputMap.TurnLeft) input += 1f;
+        if (!Rooted && InputMap.TurnRight) input -= 1f;
 
         if (input != 0f)
             _turnRate += input * TurnAccel * dt;
@@ -272,24 +329,26 @@ public sealed class PlayerTank
     private void UpdateDrive(float dt)
     {
         float input = 0f;
-        if (InputMap.Forward) input += 1f;
-        if (InputMap.Back) input -= 1f;
+        if (!Rooted && InputMap.Forward) input += 1f;
+        if (!Rooted && InputMap.Back) input -= 1f;
 
         if (input > 0f)
-            _speed += Accel * dt;
+            _speed += Accel * _speedScale * dt;
         else if (input < 0f)
-            _speed -= Accel * ReverseFactor * dt;
+            _speed -= Accel * _speedScale * ReverseFactor * dt;
         else
             _speed = MoveToward(_speed, 0f, Drag * dt);
 
-        _speed = Math.Clamp(_speed, -MaxSpeed * ReverseFactor, MaxSpeed);
+        float top = TopSpeed;
+        _speed = Math.Clamp(_speed, -top * ReverseFactor, top);
     }
 
     private void UpdateJump(float dt)
     {
         // Jumping is a Hyper move now: it costs a quarter of the bar and is
         // simply refused if the reserve is too low to pay for it.
-        if (InputMap.JumpPressed && !IsAirborne && Hyper >= JumpHyperCost)
+        // Rooted craft don't leap either — the lance is charged with both feet planted.
+        if (!Rooted && InputMap.JumpPressed && !IsAirborne && Hyper >= JumpHyperCost)
         {
             _verticalVel = JumpVel;
             Hyper -= JumpHyperCost;
@@ -319,7 +378,7 @@ public sealed class PlayerTank
     public Vector2 Forward => new(MathF.Sin(Heading), MathF.Cos(Heading));
 
     /// <summary>0..1 speed fraction — drives engine-hum pitch later (Doc 04).</summary>
-    public float SpeedFraction => Math.Abs(_speed) / MaxSpeed;
+    public float SpeedFraction => Math.Abs(_speed) / TopSpeed;
 
     // --- 0..1 fractions for the HUD bars ---
     public float ShieldFraction => MaxShield > 0f ? Math.Clamp(Shield / MaxShield, 0f, 1f) : 0f;

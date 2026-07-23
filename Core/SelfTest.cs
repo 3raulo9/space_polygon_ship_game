@@ -38,11 +38,133 @@ public static class SelfTest
         failures += Check("three shots from inside break the maw's hold", MawReleasesOnThreeShots);
         failures += Check("digestion bites 15% a time until you escape", MawDigestionBites);
         failures += Check("a swallowed player can shoot their way out for real", MawEscapeThroughTheGun);
+        failures += Check("the loadout budget refuses an eleventh point", BudgetRefusesOverspend);
+        failures += Check("a 5/5/5 build is exactly the historical craft", DefaultBuildIsTheOldCraft);
+        failures += Check("loadout points reach the player's live stats", LoadoutDrivesPlayerStats);
+        failures += Check("the spider's lance costs rounds and burns a line", SpiderLanceKills);
+        failures += Check("charging the spider's lance roots the craft", SpiderChargeRootsTheCraft);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
             : $"SELFTEST: {failures} check(s) FAILED");
         return failures == 0 ? 0 : 1;
+    }
+
+    // --- The hangar: the loadout budget and the SPIDER chassis ------------------
+
+    private static string? BudgetRefusesOverspend()
+    {
+        var lo = new Loadout();
+
+        // A track can only climb into points that are actually free, so maxing one out
+        // from the even opening spread means selling the other two down first. That the
+        // climb stalls until you do is itself the rule under test.
+        while (lo.Adjust(Loadout.Stat.Shield, +1)) { }
+        if (lo.Shield != 6) return $"shield climbed to {lo.Shield} on one spare point";
+
+        while (lo.Adjust(Loadout.Stat.Speed, -1)) { }
+        while (lo.Adjust(Loadout.Stat.Ammo, -1)) { }
+        while (lo.Adjust(Loadout.Stat.Shield, +1)) { }
+        if (lo.Shield != Loadout.StatMax) return $"shield capped at {lo.Shield}, want 10";
+
+        while (lo.Adjust(Loadout.Stat.Speed, +1)) { }
+        if (lo.Speed != 5) return $"second track reached {lo.Speed}, want 5";
+
+        if (lo.Adjust(Loadout.Stat.Ammo, +1))
+            return $"third track climbed to {lo.Ammo} with the budget spent";
+        if (lo.Ammo != Loadout.StatMin) return $"third track sits at {lo.Ammo}, want 1";
+        if (lo.Spent != Loadout.Budget) return $"spent {lo.Spent}, want {Loadout.Budget}";
+
+        // ...and an even spread is legal, with a point left over.
+        var even = new Loadout();
+        if (even.Spent != 15 || even.Remaining != 1)
+            return $"5/5/5 spends {even.Spent} of {Loadout.Budget}";
+        return null;
+    }
+
+    private static string? DefaultBuildIsTheOldCraft()
+    {
+        var lo = new Loadout();
+        if (MathF.Abs(lo.MaxShield - 100f) > 0.01f) return $"shield {lo.MaxShield}, want 100";
+        if (MathF.Abs(lo.SpeedScale - 1f) > 0.001f) return $"speed scale {lo.SpeedScale}, want 1";
+        if (lo.MaxAmmo != 50) return $"magazine {lo.MaxAmmo}, want 50";
+        return null;
+    }
+
+    private static string? LoadoutDrivesPlayerStats()
+    {
+        var lo = new Loadout();
+        while (lo.Adjust(Loadout.Stat.Ammo, +1)) { }        // ammo to 10, the rest starve
+        var world = new World.World(lo);
+
+        if (world.Player.MaxAmmo != lo.MaxAmmo)
+            return $"magazine {world.Player.MaxAmmo}, loadout says {lo.MaxAmmo}";
+        if (MathF.Abs(world.Player.MaxShield - lo.MaxShield) > 0.01f)
+            return $"shield {world.Player.MaxShield}, loadout says {lo.MaxShield}";
+        if (MathF.Abs(world.Player.TopSpeed - PlayerTankMaxSpeed * lo.SpeedScale) > 0.01f)
+            return $"top speed {world.Player.TopSpeed} doesn't match the speed track";
+        if (world.Player.Ammo > world.Player.MaxAmmo)
+            return "opened with more rounds than the magazine holds";
+        return null;
+    }
+
+    private static float PlayerTankMaxSpeed => Entities.PlayerTank.MaxSpeed;
+
+    private static string? SpiderLanceKills()
+    {
+        var lo = new Loadout { Class = PlayerClass.Spider };
+        var world = new World.World(lo);
+        if (world.Player.Spider is not { } spider) return "spider chassis has no emitter";
+
+        world.Enemies.Clear();
+        // Two hunters strung out along the craft's forward axis (+Z at heading 0), so a
+        // single shaft has to rake through both — the lance pierces, it doesn't stop at
+        // the first thing it touches.
+        var near = new Entities.EnemyTank(new Vector2(0f, 20f), elite: false);
+        var far = new Entities.EnemyTank(new Vector2(0f, 40f), elite: false);
+        world.Enemies.Add(near);
+        world.Enemies.Add(far);
+
+        int ammo0 = world.Player.Ammo;
+
+        // Wind the meter to full, then let go. Both calls go through the world's own
+        // trigger handler, so this exercises the same path a held right-click does.
+        for (int i = 0; i < 200 && spider.Charge < Entities.SpiderWeapon.MaxCharge; i++)
+            spider.Hold((float)Config.FixedDt);
+        world.FireSpiderLanceForTest();
+
+        if (near.Alive || far.Alive)
+            return $"lance left hunters standing (near {near.Alive}, far {far.Alive})";
+        if (world.Player.Ammo >= ammo0)
+            return "a full-charge lance cost no rounds";
+        if (spider.Charge != 0f) return $"meter kept {spider.Charge} after firing";
+        return null;
+    }
+
+    private static string? SpiderChargeRootsTheCraft()
+    {
+        var lo = new Loadout { Class = PlayerClass.Spider };
+        var world = new World.World(lo);
+        if (world.Player.Spider is not { } spider) return "spider chassis has no emitter";
+
+        // Root the craft and shove it: a rooted craft ignores drive input, so with no
+        // momentum carried in it must not travel. (StepWithoutInput doesn't press
+        // anything anyway — what's under test is that Rooted survives a step and that
+        // the charge climbs while it's set.)
+        world.Player.Rooted = true;
+        Vector2 start = world.Player.Position;
+        for (int i = 0; i < 30; i++)
+        {
+            spider.Hold((float)Config.FixedDt);
+            StepWithoutInput(world);
+        }
+
+        if (Vector2.Distance(world.Player.Position, start) > 0.01f)
+            return "a rooted craft drifted while charging";
+        if (spider.Charge <= 0f) return "the meter never filled";
+        if (spider.Charge > Entities.SpiderWeapon.MaxCharge)
+            return $"the meter overran its ceiling ({spider.Charge})";
+        return null;
     }
 
     private static int Check(string name, Func<string?> test)
