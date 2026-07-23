@@ -82,11 +82,37 @@ public sealed class Projectile
     // out near the horizon regardless of how high the jump was.
     private const float AirGlideTime = 2.6f;
 
+    /// <summary>
+    /// The pull on an <em>elevated</em> cannon shell — the TANK's, once it can crane its
+    /// gun. It exists for exactly one reason and is tuned around exactly one number: the
+    /// Maw-Core hangs its crystal at <see cref="MawRig.CrystalWorldY"/> so the class has
+    /// to leave the ground to hurt it, and a shell that simply flew straight up the gun's
+    /// new elevation would sail into that band from thirty metres away and quietly turn
+    /// the tank into an anti-air gun. Arced instead, a full-elevation round tops out around
+    /// five metres — a real lob you can drop behind cover, and a ceiling comfortably under
+    /// the crystal's strike band whatever the range. A level shot (<paramref name="pitch"/>
+    /// ≈ 0) gets none of this and flies flat at barrel height exactly as it always has, and
+    /// neither does the SPIDER's laser, which is a straight beam with the full reach its
+    /// exposed-core chassis is meant to trade for.
+    /// </summary>
+    private const float CannonArcGravity = 60f;
+
+    private float _gravity;   // downward pull on _climb, 0 for everything that doesn't arc
+
+    /// <summary>
+    /// The ordinary bolt — the cannon and the SPIDER's laser. <paramref name="pitch"/> is
+    /// the elevation it leaves at, in radians: zero for the flat shot every gun has always
+    /// fired, and non-zero once a chassis can aim its head up or down. An elevated round
+    /// carries a genuine climb, so a shot loosed at the sky rises and one aimed at the
+    /// grid comes down and goes off where it was pointed.
+    /// </summary>
     public void Fire(Vector2 origin, Vector2 dir, bool fromPlayer, float launchHeight = BoltHeight,
-        bool laser = false)
+        bool laser = false, float pitch = 0f)
     {
+        Vector2 d = Vector2.Normalize(dir);
+        float cp = MathF.Cos(pitch);
         Position = origin;
-        Velocity = Vector2.Normalize(dir) * Speed;
+        Velocity = d * Speed * cp;
         FromPlayer = fromPlayer;
         IsGrenade = false;
         IsLaser = laser;
@@ -94,17 +120,27 @@ public sealed class Projectile
                               // plain bolt inherits it and detonates like one on expiry
         IsRocket = false;
         IsTracer = false;
-        _climb = 0f;
+        _climb = MathF.Sin(pitch) * Speed;
         SplashRadius = 0f;
         Height = launchHeight;
         JustExpired = false;
 
-        // Anything launched appreciably above barrel height is an air shot: it holds
-        // that height, sinks toward the floor over the glide, and lives long enough
-        // to get there before fizzling.
-        IsAirShot = launchHeight > BoltHeight + 0.5f;
+        // The air shot is the flat leaping shot and only that: fired appreciably above
+        // barrel height while level, it holds its height and sinks toward the floor over
+        // the glide — the arc that reaches the boss's raised core at a jump's apex. A
+        // round with a launch pitch instead carries its own climb (above) and must not
+        // also be handed the glide's descent, or the two fight over its height.
+        bool level = MathF.Abs(pitch) < 0.02f;
+        IsAirShot = level && launchHeight > BoltHeight + 0.5f;
         _descentRate = IsAirShot ? launchHeight / AirGlideTime : 0f;
         Life = IsAirShot ? AirGlideTime + 0.2f : MaxLife;
+
+        // Only the player's elevated cannon shell arcs, and for one reason — keeping the
+        // Maw-Core's crystal out of reach from the grid (see CannonArcGravity). A level
+        // shot rides its barrel height flat as ever; a laser is a straight line however it
+        // is aimed; and an enemy round flies straight at the height it was elevated to, so
+        // a hunter shooting up at a leaping player actually reaches them.
+        _gravity = (level || laser || !fromPlayer) ? 0f : CannonArcGravity;
         Active = true;
     }
 
@@ -124,6 +160,7 @@ public sealed class Projectile
         Height = 0.7f;          // the fatter slug rides a touch higher than a bolt
         _descentRate = 0f;
         _climb = 0f;
+        _gravity = 0f;
         IsAirShot = false;
         JustExpired = false;
         Active = true;
@@ -150,6 +187,7 @@ public sealed class Projectile
         Height = 0.7f;
         _descentRate = 0f;
         _climb = 0f;
+        _gravity = 0f;
         IsAirShot = false;
         JustExpired = false;
         Active = true;
@@ -173,6 +211,7 @@ public sealed class Projectile
         Height = MathF.Max(0.05f, origin.Y);
         _descentRate = 0f;
         _climb = d.Y * speed;
+        _gravity = 0f;   // the rifle and the rocket fly the line they were given, straight
 
         FromPlayer = true;
         IsRocket = rocket;
@@ -215,6 +254,9 @@ public sealed class Projectile
         JustExpired = false;
         Position += Velocity * dt;
         if (_descentRate != 0f) Height -= _descentRate * dt;
+        // An arced shell loses climb to gravity every tick, so it rises, tops out and
+        // comes down — the tank's lob. Everything else has _gravity 0 and holds its line.
+        if (_gravity != 0f) _climb -= _gravity * dt;
         if (_climb != 0f) Height += _climb * dt;
         Life -= dt;
 

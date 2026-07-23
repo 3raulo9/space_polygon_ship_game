@@ -256,7 +256,7 @@ public sealed class Game : IDisposable
     }
 
     /// <summary>True while the pointer is captured — locked to the window and feeding
-    /// relative movement to the SOLDIER's look.</summary>
+    /// relative movement to whichever chassis's look is on the mouse.</summary>
     private bool _mouseCaptured;
 
     /// <summary>
@@ -268,18 +268,19 @@ public sealed class Game : IDisposable
     /// low-res target instead, so the pointer is made of the same fat pixels as the rest
     /// of the picture rather than sitting crisply on top of it.
     ///
-    /// The two mouse-aimed chassis — the SOLDIER and the FISH — additionally need the
-    /// pointer <em>captured</em>: their look is driven by relative mouse movement, which
-    /// means the real cursor has to be locked to the window centre or it walks off the edge
-    /// of the screen mid-swing and the head stops turning. Captured only while one of them
-    /// is actually driving — the pause panel, the pack and every menu hand the mouse back.
+    /// Every chassis now looks with the mouse — the SOLDIER and the FISH turn their whole
+    /// body, the TANK and the SPIDER swing a head on top of a hull — and all of them need
+    /// the pointer <em>captured</em> for it: relative mouse movement only reports while the
+    /// real cursor is locked to the window centre, or it walks off the edge of the screen
+    /// mid-look and the view stops turning. Captured only while the world is actually being
+    /// driven — the pause panel, the pack and every menu hand the mouse back.
     /// </summary>
     private void SyncCursor()
     {
         bool wantCapture = _state == GameState.Playing
                         && !_inventoryOpen
                         && !_fading
-                        && (_world?.Player.Soldier != null || _world?.Player.Fish != null);
+                        && _world != null;
 
         if (wantCapture == _mouseCaptured)
         {

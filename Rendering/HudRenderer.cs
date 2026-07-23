@@ -49,13 +49,16 @@ internal static class HudRenderer
         DrawBars(p);
         DrawWeaponSlots(world.Inventory);
         DrawRadar(world, p);
-        DrawAimGuide(p);
+        // The firing sight sits dead centre, where the mouse aims the gun, and only on the
+        // two machines: the SOLDIER and the FISH draw their own centre reticles (which
+        // bloom into brackets and read the water), so a second one here would double up.
+        if (p.IsMachine) DrawCrosshair(p);
         if (p.Spider is { } spider) DrawChargeMeter(spider, p);
 
         // The SOLDIER keeps every one of the above — the same vitals, the same equip
-        // row, the same radar and the same firing scope, because it is the same run and
-        // the same craft's worth of information — and then adds the handful of things
-        // that only exist on a chassis hanging off two cables. See SoldierHud.
+        // row and the same radar, because it is the same run and the same craft's worth
+        // of information — and then adds the handful of things that only exist on a
+        // chassis hanging off two cables, its own crosshair among them. See SoldierHud.
         if (p.Soldier is { } rig) SoldierHud.DrawOverlay(world, rig, p);
 
         // Same arrangement for the FISH, whose additions are all about the one axis this
@@ -152,34 +155,33 @@ internal static class HudRenderer
         }
     }
 
-    // --- Aim guide: a small firing scope at the bottom-centre ---
+    // --- Crosshair: the firing sight, dead centre ---
 
-    // A low, flat aim guide near the bottom of the screen: a short horizontal
-    // baseline with two shallow lines slanting inward to the centre — the line of
-    // fire, drawn wide and low so it never fights the top HUD strip and reads as
-    // "shots go straight ahead". Kept deliberately short in height.
-    private const int AimY = H - 12;     // the flat baseline's height
-    private const int AimHalf = 34;      // half-width of the baseline
-    private const int AimRise = 7;       // how far the inner slants climb (kept low)
-    private const int AimGap = 5;        // half-gap left open at the centre
+    // Four short ticks around an open centre, with a single lit pixel in the middle —
+    // small and precise, sitting exactly where the mouse points the gun so the player
+    // aims at the thing rather than at a scope low on the dashboard. The camera looks
+    // straight down the gun line on these two chassis (the standing tilt is dropped for
+    // them), so screen centre really is where the round leaves.
+    private const int AimGap = 3;    // half-gap of clear space around the centre point
+    private const int AimTick = 5;   // length of each tick beyond the gap
 
-    private static void DrawAimGuide(PlayerTank p)
+    private static void DrawCrosshair(PlayerTank p)
     {
-        int cx = W / 2;
+        int cx = W / 2, cy = H / 2;
 
-        // Rounds run dry — dim the guide so it reads as "can't fire" rather than
-        // lying about a shot that won't happen.
+        // Rounds run dry — dim the sight so it reads as "can't fire" rather than lying
+        // about a shot that won't happen.
         Color line = p.Ammo > 0 ? new Color(235, 245, 255, 210)
                                  : new Color(235, 245, 255, 70);
 
-        // The flat baseline, split by a small gap at the centre.
-        Raylib.DrawLine(cx - AimHalf, AimY, cx - AimGap, AimY, line);
-        Raylib.DrawLine(cx + AimGap, AimY, cx + AimHalf, AimY, line);
+        // Four ticks: left, right, up, down, each held off the exact centre by the gap.
+        Raylib.DrawLine(cx - AimGap - AimTick, cy, cx - AimGap, cy, line);
+        Raylib.DrawLine(cx + AimGap, cy, cx + AimGap + AimTick, cy, line);
+        Raylib.DrawLine(cx, cy - AimGap - AimTick, cx, cy - AimGap, line);
+        Raylib.DrawLine(cx, cy + AimGap, cx, cy + AimGap + AimTick, line);
 
-        // Two shallow slants rising from the baseline's inner ends toward the
-        // centre — pointing the eye at the line of fire without standing tall.
-        Raylib.DrawLine(cx - AimGap, AimY, cx, AimY - AimRise, line);
-        Raylib.DrawLine(cx + AimGap, AimY, cx, AimY - AimRise, line);
+        // A single centre pixel — the actual point of aim.
+        Raylib.DrawRectangle(cx, cy, 1, 1, line);
     }
 
     // --- Vital bars: three vertical gauges, letter-labelled S / A / H ---
@@ -237,10 +239,10 @@ internal static class HudRenderer
         Raylib.DrawLine(cx, y0 + 1, cx, y0 + RadarSize - 1, grid);
         Raylib.DrawLine(x0 + 1, cy, x0 + RadarSize - 1, cy, grid);
 
-        // The view rotates with the player so "up" on the radar is always where the
-        // craft is pointing. World forward is (sin h, cos h), so projecting an offset
-        // onto the craft's right/forward axes is a rotation by +heading — rotating by
-        // -heading (as before) only lines up facing north and flips once you turn.
+        // The view rotates with the player so "up" on the radar is always where the craft
+        // is pointing — which the mouse now aims. World forward is (sin h, cos h), so
+        // projecting an offset onto the craft's right/forward axes is a rotation by
+        // +heading — rotating by -heading only lines up facing north.
         float c = MathF.Cos(p.Heading);
         float s = MathF.Sin(p.Heading);
         float scale = (RadarSize * 0.5f - 2f) / RadarWorldRange;

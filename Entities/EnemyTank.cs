@@ -39,6 +39,15 @@ public sealed class EnemyTank
     /// still a flat planar one.</summary>
     public const float BodyHeight = 2.15f * Scale;
 
+    /// <summary>
+    /// How high up the player's column a hunter aims — the craft's body centre above its
+    /// feet, so a shot arrives at the middle of the hull rather than at its ankles. Shared
+    /// with the world's hit test (see <c>World.EnemyHitVertical</c>) so the height the
+    /// enemy elevates to and the height the world scores a hit at are the same number, the
+    /// way the Maw-Core's crystal geometry is shared between aiming and hitting.
+    /// </summary>
+    public const float AimHeight = 1.4f;
+
     public EnemyTank(Vector2 start, bool elite, int shieldBonus = 0)
     {
         Position = start;
@@ -65,13 +74,19 @@ public sealed class EnemyTank
     }
 
     /// <summary>
-    /// Steps the AI. Returns true (with a firing solution) when it looses a shot
-    /// this tick, so the caller can spawn the projectile from the enemy pool.
+    /// Steps the AI. Returns true (with a firing solution) when it looses a shot this
+    /// tick, so the caller can spawn the projectile from the enemy pool.
+    /// <paramref name="playerHeight"/> is how far off the grid the player currently is;
+    /// the hunter elevates its shot to reach a leaping or hanging craft rather than firing
+    /// dead flat and passing underneath. <paramref name="firePitch"/> is that elevation in
+    /// radians, positive up.
     /// </summary>
-    public bool Update(float dt, Vector2 playerPos, out Vector2 fireOrigin, out Vector2 fireDir)
+    public bool Update(float dt, Vector2 playerPos, float playerHeight,
+        out Vector2 fireOrigin, out Vector2 fireDir, out float firePitch)
     {
         fireOrigin = default;
         fireDir = default;
+        firePitch = 0f;
 
         // Chase across the seam the short way: work against the player's nearest image
         // on the torus, not their raw coordinates, so a hunter by the world's edge homes
@@ -111,6 +126,13 @@ public sealed class EnemyTank
             _fireCooldown = _fireInterval;
             fireDir = dirToPlayer;
             fireOrigin = Position + dirToPlayer * (Radius + 0.6f);
+
+            // Elevate onto the craft's body centre. Straight-line aim at where the player
+            // is right now: no lead, so a craft that keeps climbing or falling through the
+            // shot's flight still slips it — the jump goes on being a dodge, it just isn't
+            // a free one any more. The muzzle rides at barrel height like every flat shot.
+            float rise = playerHeight + AimHeight - Projectile.BoltHeight;
+            firePitch = MathF.Atan2(rise, dist);
             return true;
         }
         return false;

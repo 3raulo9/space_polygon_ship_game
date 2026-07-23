@@ -21,6 +21,7 @@ public static class SelfTest
         failures += Check("a beam cuts a tower down and clears the wreck", BeamsCutStructuresDown);
         failures += Check("player can destroy an enemy", PlayerKillsEnemy);
         failures += Check("enemy can damage the player", EnemyDamagesPlayer);
+        failures += Check("enemies elevate onto a player in the air", EnemyReachesPlayerInTheAir);
         failures += Check("ammo is finite", AmmoDepletes);
         failures += Check("salvage stows into the inventory, doesn't auto-charge", BatteryStowsThenCharges);
         failures += Check("bullet salvage stows a random handful of rounds", AmmoStowsThenLoads);
@@ -47,6 +48,11 @@ public static class SelfTest
         failures += Check("loadout points reach the player's live stats", LoadoutDrivesPlayerStats);
         failures += Check("the spider's lance costs rounds and burns a line", SpiderLanceKills);
         failures += Check("charging the spider's lance roots the craft", SpiderChargeRootsTheCraft);
+        failures += Check("the mouse turns the whole craft, not a turret", MouseTurnsTheWholeCraft);
+        failures += Check("the tank's gun is stopped short of the sky", TankGunElevationIsShallow);
+        failures += Check("the spider's gun cranes the full way up", SpiderGunCranesAllTheWay);
+        failures += Check("the cannon fires where the craft is aimed", CannonFollowsTheAim);
+        failures += Check("a raised tank gun still can't reach the maw's crystal", TankGunStaysUnderTheMaw);
         failures += Check("a soldier opens within a cable's throw of the city", SoldierStartsAtAnAnchor);
         failures += Check("the high jump clears fifteen metres and costs gas", SoldierJumpClearsTheCity);
         failures += Check("a hook bites the building it was aimed at", SoldierHookBites);
@@ -340,6 +346,130 @@ public static class SelfTest
         return null;
     }
 
+    // --- The machines: TANK and SPIDER aim ---------------------------------------
+
+    /// <summary>
+    /// The mouse turns the whole craft — the thing the player asked for after a turret
+    /// that swung the view one way while A/D swung the body another read as disorienting.
+    /// A yaw of half a radian has to move the shared heading by exactly that, on both
+    /// machines, with nothing left held off to the side.
+    /// </summary>
+    private static string? MouseTurnsTheWholeCraft()
+    {
+        foreach (var kind in new[] { PlayerClass.Tank, PlayerClass.Spider })
+        {
+            var p = new Entities.PlayerTank(Vector2.Zero, heading: 0.7f,
+                loadout: new Loadout { Class = kind });
+            if (!p.IsMachine) return $"{kind} isn't treated as a machine";
+
+            float before = p.Heading;
+            p.Look(0.5f, 0f);
+            if (MathF.Abs(p.Heading - (before + 0.5f)) > 1e-4f)
+                return $"{kind}: a 0.5 rad mouse yaw moved the heading {p.Heading - before:0.000}";
+            // And the craft's forward — what it drives and fires along — comes round with it.
+            var want = new Vector2(MathF.Sin(before + 0.5f), MathF.Cos(before + 0.5f));
+            if (Vector2.Distance(p.Forward, want) > 1e-4f)
+                return $"{kind}: forward didn't follow the turned heading";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The tank's gun is stopped short of the sky — fifteen degrees either way. This is
+    /// the number that keeps the Maw-Core honest (see <see cref="TankGunStaysUnderTheMaw"/>),
+    /// so the elevation clamp is checked here in isolation before the shot that depends on it.
+    /// </summary>
+    private static string? TankGunElevationIsShallow()
+    {
+        var p = new Entities.PlayerTank(Vector2.Zero);
+
+        for (int i = 0; i < 200; i++) p.Look(0f, 0.1f);    // crane hard up
+        if (p.Pitch > Entities.PlayerTank.TurretElevation + 1e-4f)
+            return $"the gun elevated to {p.Pitch:0.00}, past its {Entities.PlayerTank.TurretElevation:0.00} stop";
+        if (p.Pitch < Entities.PlayerTank.TurretElevation - 1e-4f)
+            return $"the gun stalled at {p.Pitch:0.00} short of its stop";
+        if (p.GunElevation > Entities.PlayerTank.TurretElevation + 1e-4f)
+            return "the shot's elevation runs past the gun's stop";
+
+        for (int i = 0; i < 200; i++) p.Look(0f, -0.1f);   // and hard down
+        if (p.Pitch < -Entities.PlayerTank.TurretElevation - 1e-4f)
+            return $"the gun depressed to {p.Pitch:0.00}, past its stop";
+        return null;
+    }
+
+    /// <summary>
+    /// The SPIDER's ring, unlike the tank's gun, cranes the full way up — nearly to
+    /// vertical, the Crab-Core's own reach. It pays for that with an exposed core, not by
+    /// being stopped short.
+    /// </summary>
+    private static string? SpiderGunCranesAllTheWay()
+    {
+        var p = new Entities.PlayerTank(Vector2.Zero,
+            loadout: new Loadout { Class = PlayerClass.Spider });
+
+        for (int i = 0; i < 400; i++) p.Look(0f, 0.1f);
+        if (p.Pitch < Entities.PlayerTank.MaxPitch - 0.05f)
+            return $"the spider's ring only craned to {p.Pitch:0.00}, not near vertical";
+        if (p.GunElevation < Entities.PlayerTank.MaxPitch - 0.05f)
+            return "the spider's shot elevation is capped below its look";
+        return null;
+    }
+
+    /// <summary>
+    /// The cannon leaves along the craft's heading, which the mouse aims: turn the craft
+    /// and the bolt turns with it. If the shot went along a stale facing, the free look
+    /// would be a lie the first round exposes.
+    /// </summary>
+    private static string? CannonFollowsTheAim()
+    {
+        var p = new Entities.PlayerTank(Vector2.Zero, heading: 0.3f);
+        p.Look(0.8f, 0f);   // swing the craft round with the mouse
+
+        if (!p.TryFire(out _, out Vector2 dir, out _))
+            return "the cannon refused to fire";
+
+        if (Vector2.Distance(Vector2.Normalize(dir), p.Forward) > 1e-3f)
+            return "the bolt left along something other than the aimed heading";
+        return null;
+    }
+
+    /// <summary>
+    /// The load-bearing limit. The Maw-Core hangs its crystal at the top of a jump so the
+    /// class has to leave the ground to hurt it; the tank's new elevation must not quietly
+    /// hand it an anti-air gun that snipes the gem from the deck. So the gun's own stop is
+    /// checked to be genuinely shallow, and — the real test — a bolt fired up it from the
+    /// grid is walked its whole life and must never once pass through the crystal's strike
+    /// band while it is anywhere near the maw's column.
+    /// </summary>
+    private static string? TankGunStaysUnderTheMaw()
+    {
+        var p = new Entities.PlayerTank(Vector2.Zero);
+        // Crane the gun as far up as it goes, harder than any hand could.
+        for (int i = 0; i < 200; i++) p.Look(0f, 0.1f);
+        if (p.GunElevation > Entities.PlayerTank.TurretElevation + 1e-4f)
+            return $"the gun elevated to {p.GunElevation:0.00}, past its {Entities.PlayerTank.TurretElevation:0.00} stop";
+
+        // Stand the maw out along the shot and fire up the raised gun. Walk the round its
+        // whole flight; if it ever satisfies HitsCrystal, a grounded tank could kill it.
+        float band = Entities.MawRig.CrystalWorldY;
+        for (float range = 8f; range <= 60f; range += 2f)
+        {
+            var maw = new Entities.MawCore(new Vector2(0f, range));
+            var round = new Entities.Projectile();
+            // Straight down +Z, up the gun's own elevation, from the barrel.
+            round.Fire(Vector2.Zero, new Vector2(0f, 1f), fromPlayer: true,
+                launchHeight: Entities.Projectile.BoltHeight, pitch: p.GunElevation);
+            for (int i = 0; i < 240 && round.Active; i++)
+            {
+                round.Update((float)Config.FixedDt);
+                if (maw.HitsCrystal(round.Position, round.Height))
+                    return $"a grounded tank bolt reached the crystal at range {range:0} "
+                         + $"(height {round.Height:0.0}, band {band:0.0})";
+            }
+        }
+        return null;
+    }
+
     private static int Check(string name, Func<string?> test)
     {
         string? err = test();
@@ -413,6 +543,34 @@ public static class SelfTest
         return world.Player.Shield < startShield
             ? null
             : "player took no damage in 15s under fire";
+    }
+
+    /// <summary>
+    /// A leaping craft used to be untouchable — enemy fire passed clean underneath the
+    /// moment a wheel left the grid. Now the hunters elevate onto the craft's height, so a
+    /// player held up in the air still takes fire. Same setup as
+    /// <see cref="EnemyDamagesPlayer"/>, but the craft is pinned six metres up: if the old
+    /// blanket immunity were still in force nothing here would ever land.
+    /// </summary>
+    private static string? EnemyReachesPlayerInTheAir()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        float startShield = world.Player.Shield;
+        const float altitude = 6f;
+
+        for (int i = 0; i < 60 * 15; i++)
+        {
+            // Hold it aloft before the step (so the hunters aim up at it) and again after
+            // (so the jump physics inside the step don't quietly bring it back down).
+            world.Player.Height = altitude;
+            AimPlayerAtFirstEnemy(world);
+            StepWithoutInput(world);
+            world.Player.Height = altitude;
+            if (world.Player.Shield < startShield) break;
+        }
+        return world.Player.Shield < startShield
+            ? null
+            : "an airborne player took no damage in 15s under fire";
     }
 
     private static string? AmmoDepletes()
