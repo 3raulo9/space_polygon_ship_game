@@ -112,6 +112,12 @@ public sealed class Renderer : IDisposable
         // Same band again — these are things happening to a body the player is only borrowing.
         if (player.Virus is { Shake: > 0f } corrupted)
             amp = MathF.Max(amp, 0.16f * corrupted.Shake);
+        // A TANK lurching off its tracks or slamming a hunter throws the hull the same way. The
+        // Shake lives on the craft itself (only the tank ever raises it), so this reads it
+        // straight — same band as the bodies above, since it is a jolt to a machine, not a set
+        // piece taking the wheel.
+        if (player.Shake > 0f)
+            amp = MathF.Max(amp, 0.16f * player.Shake);
 
         Vector3 rumble = Vector3.Zero, rattle = Vector3.Zero;
         if (amp > 0f)

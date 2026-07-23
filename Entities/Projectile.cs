@@ -57,10 +57,32 @@ public sealed class Projectile
     /// </summary>
     public bool IsRocket;
 
+    /// <summary>
+    /// The TANK's AP slug: a heavy round that punches straight through a whole line of hunters
+    /// — and through the skyline itself — rather than stopping at the first thing it meets.
+    /// The world's projectile pass reads this to keep the round alive past a hit and to wave
+    /// it through cover; <see cref="PierceLast"/> stops it billing one body twice as it crosses.
+    /// </summary>
+    public bool IsPiercing;
+
+    /// <summary>The last hunter an AP slug bit, so a fast round crossing one body over a couple
+    /// of ticks scores it exactly once. Null on every round that isn't piercing.</summary>
+    public EnemyTank? PierceLast;
+
     private const float Speed = 90f;
     private const float GrenadeSpeed = 60f;   // heavier, so it lobs slower
     private const float MaxLife = 2.4f;
     public const float GrenadeSplash = 7f;    // blast radius in world units
+
+    // The mortar: the TANK's heavy round is not a flat slug any more but a genuine lob. It
+    // leaves slower over the ground, climbs against its own gravity, tops out well above head
+    // height and comes back down — so it clears low cover and the hunters standing in front of
+    // a target and drops the burst behind them. Solved apex ≈ Climb²/(2·Gravity) ≈ 10m, which
+    // sails over an arch's legs and a hunter's hull but stays honestly under the towers.
+    private const float MortarSpeed = 34f;
+    private const float MortarClimb = 22f;
+    private const float MortarGravity = 24f;
+    public const float MortarLaunchHeight = 1.0f;
 
     /// <summary>How fast a rocket travels. Slow enough to watch leave, and slow enough
     /// that firing one at a wall you are swinging toward is a real gamble.</summary>
@@ -107,7 +129,7 @@ public sealed class Projectile
     /// grid comes down and goes off where it was pointed.
     /// </summary>
     public void Fire(Vector2 origin, Vector2 dir, bool fromPlayer, float launchHeight = BoltHeight,
-        bool laser = false, float pitch = 0f)
+        bool laser = false, float pitch = 0f, bool piercing = false)
     {
         Vector2 d = Vector2.Normalize(dir);
         float cp = MathF.Cos(pitch);
@@ -121,6 +143,8 @@ public sealed class Projectile
         IsRocket = false;
         IsTracer = false;
         IsAcid = false;
+        IsPiercing = piercing;
+        PierceLast = null;
         _climb = MathF.Sin(pitch) * Speed;
         SplashRadius = 0f;
         Height = launchHeight;
@@ -145,11 +169,18 @@ public sealed class Projectile
         Active = true;
     }
 
-    /// <summary>Launches the heavy splash round (Button B).</summary>
+    /// <summary>
+    /// Launches the heavy round — the TANK's mortar. Unlike every other bolt it does not skim
+    /// the plane: it lobs, climbing against <see cref="MortarGravity"/> and coming back down,
+    /// so it clears an arch's legs and the hunters massed in front of a target and drops its
+    /// burst behind them. The world detonates it where it lands (see the ground-strike path in
+    /// <c>UpdateProjectiles</c>). Aimed flat along the craft's heading — the loft is fixed, so
+    /// where the nose points is where the shell comes down, an honest piece of indirect fire.
+    /// </summary>
     public void FireGrenade(Vector2 origin, Vector2 dir, bool fromPlayer)
     {
         Position = origin;
-        Velocity = Vector2.Normalize(dir) * GrenadeSpeed;
+        Velocity = Vector2.Normalize(dir) * MortarSpeed;
         Life = MaxLife;
         FromPlayer = fromPlayer;
         IsGrenade = true;
@@ -158,11 +189,13 @@ public sealed class Projectile
         IsRocket = false;
         IsTracer = false;
         IsAcid = false;
+        IsPiercing = false;
+        PierceLast = null;
         SplashRadius = GrenadeSplash;
-        Height = 0.7f;          // the fatter slug rides a touch higher than a bolt
+        Height = MortarLaunchHeight;   // leaves the muzzle low and climbs from there
         _descentRate = 0f;
-        _climb = 0f;
-        _gravity = 0f;
+        _climb = MortarClimb;          // the lob: up first...
+        _gravity = MortarGravity;      // ...then pulled back down onto the target
         IsAirShot = false;
         JustExpired = false;
         Active = true;
@@ -180,16 +213,18 @@ public sealed class Projectile
         Velocity = Vector2.Normalize(dir) * GrenadeSpeed;
         Life = 0.9f;            // detonates a short throw out in front
         FromPlayer = true;
-        IsGrenade = true;       // reuse the fat-slug travel + splash-style handling
+        IsGrenade = true;       // reuse the splash-style handling
         IsCrabBomb = true;
         IsLaser = false;
         IsRocket = false;
         IsTracer = false;
         IsAcid = false;
+        IsPiercing = false;
+        PierceLast = null;
         SplashRadius = 0f;      // the beams carry the damage, not a splash sphere
         Height = 0.7f;
         _descentRate = 0f;
-        _climb = 0f;
+        _climb = 0f;            // a thrown core skims flat and short, not lobbed like the mortar
         _gravity = 0f;
         IsAirShot = false;
         JustExpired = false;
@@ -224,6 +259,8 @@ public sealed class Projectile
         IsGrenade = false;      // a rocket carries its own splash; it is not the heavy round
         IsCrabBomb = false;
         IsLaser = false;
+        IsPiercing = false;
+        PierceLast = null;
         IsAirShot = false;
         SplashRadius = rocket ? RocketSplash : 0f;
         Life = rocket ? MaxLife : 1.6f;

@@ -54,6 +54,9 @@ internal static class HudRenderer
         // bloom into brackets and read the water), so a second one here would double up.
         if (p.IsMachine) DrawCrosshair(p);
         if (p.Spider is { } spider) DrawChargeMeter(spider, p);
+        // The TANK's siege readouts: the three timed/stateful pieces of its kit the vital
+        // bars don't already cover. Only on that chassis — nothing else plants, smokes or slugs.
+        if (p.Class == PlayerClass.Tank) DrawTankStatus(p);
 
         // The SOLDIER keeps every one of the above — the same vitals, the same equip
         // row and the same radar, because it is the same run and the same craft's worth
@@ -159,6 +162,37 @@ internal static class HudRenderer
             PixelFont.DrawCentered(letters[i].ToString(), x + WSlot / 2, WTop + WSlot + 1, 1,
                 Scale(Palette.HudChrome, 0.9f));
         }
+    }
+
+    // --- The TANK's siege readouts ---
+    // A tight stack in the bottom-left corner, out of the way of the top strip and the centre
+    // sight. Three lines: whether the plant is down, whether the dischargers have cooled (with a
+    // sliver that fills as they do), and whether the magazine can pay for an AP slug. Each is lit
+    // when its move is live and dimmed to a ghost when it isn't, so the row reads at a glance.
+    private static void DrawTankStatus(PlayerTank p)
+    {
+        int x = 6;
+        int y = H - 34;
+
+        // SIEGE — boxed and lit teal while dug in, a dim ghost when rolling.
+        bool planted = p.Planted;
+        if (planted) Raylib.DrawRectangle(x - 2, y - 2, 34, 9, new Color(10, 30, 34, 210));
+        PixelFont.Draw("SIEGE", x, y, 1, planted ? Palette.GridNear : Scale(Palette.HudChrome, 0.4f));
+
+        // SMK — lit when ready, with a thin bar refilling while the dischargers cool.
+        y += 11;
+        bool smk = p.SmokeReady;
+        PixelFont.Draw("SMK", x, y, 1, smk ? Palette.HudChrome : Scale(Palette.HudChrome, 0.4f));
+        int barX = x + 18, barW = 14;
+        Raylib.DrawRectangle(barX, y + 1, barW, 3, new Color(10, 20, 24, 220));
+        int fill = (int)MathF.Round(barW * p.SmokeCooldownFraction);
+        if (fill > 0)
+            Raylib.DrawRectangle(barX, y + 1, fill, 3, smk ? Palette.GridNear : Scale(Palette.HudChrome, 0.7f));
+
+        // AP — lit flag-yellow when the magazine can cover the slug's cost.
+        y += 11;
+        bool ap = p.Ammo >= PlayerTank.SlugAmmoCost;
+        PixelFont.Draw("AP", x, y, 1, ap ? Palette.Flag : Scale(Palette.HudChrome, 0.4f));
     }
 
     // --- Crosshair: the firing sight, dead centre ---

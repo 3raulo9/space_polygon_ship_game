@@ -6,8 +6,9 @@ namespace VoidTanks.Entities;
 
 /// <summary>
 /// The player's craft. Movement is heavy and a half-second behind intent
-/// (Doc 03): momentum on drive, inertia on turn, an awkward jump for dodging.
-/// You are piloting a machine, not a cursor. No strafing.
+/// (Doc 03): momentum on drive, inertia on turn, an awkward hop for dodging —
+/// the SPIDER's hop, that is. The TANK is refused it outright (see TryJump):
+/// treads never leave the grid. You are piloting a machine, not a cursor.
 /// </summary>
 public sealed class PlayerTank
 {
@@ -56,7 +57,7 @@ public sealed class PlayerTank
     /// <summary>How far the eye — and the gun with it — can crane up or down. The TANK's
     /// gun is stopped short at <see cref="TurretElevation"/>; everything else looks the
     /// full way, since a spider's ring, a soldier's neck and a fish's whole body all can.</summary>
-    public float LookElevation => IsMachine && Spider == null ? TurretElevation : MaxPitch;
+    public float LookElevation => IsMachine && Spider == null && !Planted ? TurretElevation : MaxPitch;
 
     /// <summary>
     /// Turns the craft by a mouse frame's worth of yaw and pitch, both in radians — the
@@ -210,9 +211,81 @@ public sealed class PlayerTank
     /// </summary>
     public bool Rooted;
 
+    // --- The TANK's siege kit ---------------------------------------------------
+    // Everything the heavy chassis gained the day it gave up the jump. A tank never
+    // leaves the grid, so it owns the grid instead: it digs in, it lurches, it crushes,
+    // it blinds the field with smoke and it punches through cover. Every piece is gated
+    // on Class == Tank at its own entry point; the state lives here because it is part of
+    // the craft's own clock — a plant holds, a lurch decays and the dischargers cool
+    // whether or not anyone is watching the HUD.
+
+    /// <summary>
+    /// Dug in: tracks locked, gun craning the full way up, front plate turned to the
+    /// threat. A firing stance the tank trades all of its mobility for — and, being
+    /// anchored, one the Crab-Core is too weak to lift (see <see cref="CrabSeizure.CanSeize"/>).
+    /// Tank-only; toggled by <see cref="TogglePlant"/>, force-dropped by <see cref="Unplant"/>.
+    /// </summary>
+    public bool Planted { get; private set; }
+
+    /// <summary>Broadband view shake, 0..1 — a lurch kicking off, a ram connecting. Read by
+    /// the Renderer exactly as the FISH's and SOLDIER's Shake are, and rung down here on the
+    /// craft's own clock so it settles whatever the camera is otherwise doing.</summary>
+    public float Shake { get; private set; }
+    public void Jolt(float amount) => Shake = MathF.Min(1f, MathF.Max(Shake, amount));
+
+    // The lurch: a violent track-boost dodge, paid for out of the same Hyper the jump used
+    // to cost. Carried as its own decaying world velocity rather than folded into _speed, so
+    // it can briefly throw the craft well past its own top speed and can't be clamped away
+    // by the drive governor. This is the tank's dodge now the air is closed to it.
+    private Vector2 _lurchVel;
+    private float _lurchTime;
+    private const float LurchSpeed = 68f;     // peak surge — well over TopSpeed
+    private const float LurchTime = 0.34f;    // how long it lasts
+    private const float LurchDecay = 3f;      // gentle bleed so the dash eases rather than stops dead
+    private const float LurchHyperCost = JumpHyperCost;   // a quarter-bar, the old jump's price
+
+    // Smoke dischargers: a bank of screening smoke vented to blind the field. Not a Hyper
+    // move — its own slow cooldown, because it is a break-contact tool and sharing the lurch's
+    // meter would force a choice between dodging and hiding that neither should have to make.
+    private float _smokeCooldown;
+    public const float SmokeInterval = 9f;
+    public bool SmokeReady => _smokeCooldown <= 0f;
+    public float SmokeCooldownFraction => Math.Clamp(1f - _smokeCooldown / SmokeInterval, 0f, 1f);
+
+    // The AP slug: a heavy piercing round that eats a fistful of the magazine at once and
+    // rides a longer cooldown, so firing one is a decision the way the soldier's rockets are.
+    public const int SlugAmmoCost = 5;
+    private const float SlugInterval = 1.1f;
+
+    /// <summary>The velocity the craft actually travelled this tick, world units a second —
+    /// drive plus strafe plus any live lurch. The world reads it for the ram: the hull only
+    /// crushes what it is genuinely driving into. Meaningful on the machine chassis; left at
+    /// whatever it was on the bodies, which never ram.</summary>
+    public Vector2 DriveVelocity { get; private set; }
+
+    /// <summary>The ram's speed floor: below this the hull just bumps, above it it crushes.
+    /// Keyed off the <em>const</em> top speed rather than the build's, so a committed charge or
+    /// any lurch always rams while an idle roll never does — and a slow build still rams,
+    /// because its lurch clears this easily.</summary>
+    public float RamThreshold => MaxSpeed * 0.6f;
+
+    /// <summary>How much faster the tank reloads while planted — a dug-in gun crew working the
+    /// breech instead of driving. Folded into every one of the chassis's cooldowns.</summary>
+    private float ReloadScale => Planted ? PlantedReloadScale : 1f;
+    private const float PlantedReloadScale = 0.6f;
+
+    // Directional armour: the tank's passive. A sloped glacis turns a frontal shot, the flanks
+    // take it square, and the thin rear plate takes it worse — so which way the hull is facing
+    // when a round arrives is the whole difference between builds. Planting turns the front
+    // harder still. Applied only to attributable fire (see World.ArmorMultiplierFromShot).
+    private const float FrontArmor = 0.55f;
+    private const float FrontArmorPlanted = 0.35f;
+    private const float RearArmor = 1.5f;
+
     // Hyper Engine: the reserve for tactical moves. Slowly refills on its own,
     // so jumping and hyperspacing are rationed, not free. Jump takes a quarter of
-    // the bar; hyperspace drains almost all of it to panic-warp across the map.
+    // the bar (the SPIDER's move — a TANK cannot jump at all); hyperspace drains
+    // almost all of it to panic-warp across the map.
     public float MaxHyper = 100f;
     public float Hyper;
     private const float HyperRegen = 6f;        // points/sec, a slow trickle
@@ -374,17 +447,22 @@ public sealed class PlayerTank
 
         UpdateDrive(dt);
         UpdateJump(dt);
+        UpdateSiege(dt);   // plant hold, lurch decay, discharger cooldown, shake ring-down
 
         // The Hyper reserve creeps back up when it isn't being spent.
         if (Hyper < MaxHyper)
             Hyper = MathF.Min(MaxHyper, Hyper + HyperRegen * dt);
 
-        // Planar motion: forward along the heading the mouse aims, plus a sideways step
-        // from the strafe. The heading itself is turned by the mouse (see Look), so there
-        // is no turn integration here any more — only the two throttles.
+        // Planar motion: forward along the heading the mouse aims, a sideways step from the
+        // strafe, and — on the tank — whatever a live lurch is throwing on top. The heading
+        // itself is turned by the mouse (see Look), so there is no turn integration here any
+        // more. The resulting velocity is stashed for the ram, which only bites when the hull
+        // is genuinely moving into something.
         Vector2 fwd = Forward;                    // (sin h, cos h)
         var right = new Vector2(-fwd.Y, fwd.X);   // screen-right on the plane, as the soldier uses it
-        Position += (fwd * _speed + right * _strafe) * dt;
+        Vector2 velocity = fwd * _speed + right * _strafe + _lurchVel;
+        DriveVelocity = velocity;
+        Position += velocity * dt;
 
         // The world is a torus: drive off one edge and you come back on the opposite
         // one. Fold the craft back into the wrap window every tick — the jump drift
@@ -413,7 +491,7 @@ public sealed class PlayerTank
         // and sails out at that height — the airborne shot that can reach the boss's
         // raised core.
         launchHeight = Projectile.BoltHeight + Height;
-        _fireCooldown = FireInterval;
+        _fireCooldown = FireInterval * ReloadScale;
         Ammo--;
         return true;
     }
@@ -431,9 +509,124 @@ public sealed class PlayerTank
 
         direction = Forward;
         origin = Position + direction * (Radius + 0.6f);
-        _fireCooldown = GrenadeInterval;
+        _fireCooldown = GrenadeInterval * ReloadScale;
         Ammo -= GrenadeAmmoCost;
         return true;
+    }
+
+    // --- The TANK's siege triggers ---------------------------------------------
+
+    /// <summary>
+    /// Toggles the siege plant. Tank-only, and refused off the grid (a tank has no air of
+    /// its own, but a cinematic can loft one). Planting kills all momentum and locks the
+    /// tracks; unplanting hands the drive back and re-clamps the gun to its shallow stop so
+    /// a shot fired on the way out can't leave at an angle the moving chassis can't hold.
+    /// Returns the resulting state so the caller can voice the clank.
+    /// </summary>
+    public bool TogglePlant()
+    {
+        if (Class != PlayerClass.Tank || IsAirborne) return Planted;
+        Planted = !Planted;
+        if (Planted)
+        {
+            _speed = 0f;
+            _strafe = 0f;
+            _lurchTime = 0f;
+            _lurchVel = Vector2.Zero;
+        }
+        else
+        {
+            Pitch = Math.Clamp(Pitch, -TurretElevation, TurretElevation);
+        }
+        return Planted;
+    }
+
+    /// <summary>Force-drops the plant — what opening the crafting panel does, so a player
+    /// can't leave a stance locked behind an overlay they're busy dragging items around in.</summary>
+    public void Unplant()
+    {
+        if (!Planted) return;
+        Planted = false;
+        Pitch = Math.Clamp(Pitch, -TurretElevation, TurretElevation);
+    }
+
+    /// <summary>
+    /// Fires the lurch: a track-boost dash in the current drive direction (straight ahead
+    /// with no input), paid for out of the Hyper reserve. Tank-only, grounded-only, and
+    /// refused while planted, already lurching, or too drained. Returns true when it kicks,
+    /// so the world can shove the hull and sound the thrust.
+    /// </summary>
+    public bool TryLurch()
+    {
+        if (Class != PlayerClass.Tank || Planted || IsAirborne) return false;
+        if (_lurchTime > 0f || Hyper < LurchHyperCost) return false;
+
+        // Direction off the live drive keys, in world space; default straight ahead.
+        Vector2 fwd = Forward;
+        var right = new Vector2(-fwd.Y, fwd.X);
+        Vector2 dir = Vector2.Zero;
+        if (InputMap.Forward) dir += fwd;
+        if (InputMap.Back) dir -= fwd;
+        if (InputMap.TurnRight) dir += right;
+        if (InputMap.TurnLeft) dir -= right;
+        if (dir.LengthSquared() < 1e-4f) dir = fwd;
+        dir = Vector2.Normalize(dir);
+
+        _lurchVel = dir * LurchSpeed;
+        _lurchTime = LurchTime;
+        Hyper -= LurchHyperCost;
+        Jolt(0.5f);
+        return true;
+    }
+
+    /// <summary>Vents the smoke dischargers if they've cooled. Tank-only. Returns true when a
+    /// screen is actually laid, so the world can place the clouds and sound the hiss; the
+    /// clouds themselves are the world's to age. Spends the cooldown on success.</summary>
+    public bool TryDeploySmoke()
+    {
+        if (Class != PlayerClass.Tank || _smokeCooldown > 0f) return false;
+        _smokeCooldown = SmokeInterval;
+        return true;
+    }
+
+    /// <summary>
+    /// The AP slug: a heavy piercing round down the gun line. Costs <see cref="SlugAmmoCost"/>
+    /// from the magazine at once and paces on a longer cooldown than the cannon. Tank-only.
+    /// The piercing and the wall-punch live in the world's projectile pass — this only meters
+    /// the shot and hands back the muzzle line, along the same <see cref="GunElevation"/> the
+    /// cannon uses (so a planted tank lobs its slug up the full crane like everything else).
+    /// </summary>
+    public bool TryFireSlug(out Vector2 origin, out Vector2 direction, out float launchHeight)
+    {
+        origin = default;
+        direction = Forward;
+        launchHeight = Projectile.BoltHeight + Height;
+        if (Class != PlayerClass.Tank || _fireCooldown > 0f || Ammo < SlugAmmoCost) return false;
+        origin = Position + direction * (Radius + 0.6f);
+        _fireCooldown = SlugInterval * ReloadScale;
+        Ammo -= SlugAmmoCost;
+        return true;
+    }
+
+    /// <summary>
+    /// The tank's plating multiplier for a shot travelling along <paramref name="shotVelocity"/>.
+    /// A sloped glacis shrugs a frontal hit down, the flanks take it in full, and the thin
+    /// rear plate takes it worse; planting turns the front harder still. Non-tank chassis have
+    /// no plating and always take the whole blow (returns 1). This is why facing is the tank's
+    /// discipline: a hull that keeps its nose to the threat is a different amount of alive from
+    /// one caught from behind.
+    /// </summary>
+    public float ArmorMultiplierFromShot(Vector2 shotVelocity)
+    {
+        if (Class != PlayerClass.Tank) return 1f;
+        if (shotVelocity.LengthSquared() < 1e-6f) return 1f;
+        // The round travels toward the hull, so the plate it meets faces back up the incoming
+        // line — the source direction is the negated velocity.
+        Vector2 srcDir = Vector2.Normalize(-shotVelocity);
+        float align = Vector2.Dot(srcDir, Forward);   // +1 dead ahead, -1 dead behind
+        if (align > 0.5f) return Planted ? FrontArmorPlanted : FrontArmor;
+        if (align < -0.5f) return RearArmor;
+        return 1f;
     }
 
     // --- The SOLDIER's two triggers -------------------------------------------
@@ -538,7 +731,8 @@ public sealed class PlayerTank
     /// </summary>
     public bool TryHyperspace()
     {
-        if (Hyper < HyperspaceCost || IsAirborne) return false;
+        // A dug-in tank can't warp — you're anchored, not mobile. Unplant first.
+        if (Hyper < HyperspaceCost || IsAirborne || Planted) return false;
 
         // Random bearing and distance — a genuine gamble, not a controlled blink.
         float angle = Random.Shared.NextSingle() * MathF.Tau;
@@ -596,10 +790,14 @@ public sealed class PlayerTank
     /// </summary>
     private void UpdateDrive(float dt)
     {
+        // Rooted (the spider winding its lance) and planted (the tank dug in) both refuse
+        // the throttle — the craft coasts to a stop under the drag below and takes no drive.
+        bool locked = Rooted || Planted;
+
         // Forward / back.
         float fwd = 0f;
-        if (!Rooted && InputMap.Forward) fwd += 1f;
-        if (!Rooted && InputMap.Back) fwd -= 1f;
+        if (!locked && InputMap.Forward) fwd += 1f;
+        if (!locked && InputMap.Back) fwd -= 1f;
 
         if (fwd > 0f)
             _speed += Accel * _speedScale * dt;
@@ -616,8 +814,8 @@ public sealed class PlayerTank
         // Left steps toward the craft's screen-right-negated side; the sign matches the
         // (-fwd.Y, fwd.X) right axis the integrator applies it along, so D is right.
         float lat = 0f;
-        if (!Rooted && InputMap.TurnRight) lat += 1f;
-        if (!Rooted && InputMap.TurnLeft) lat -= 1f;
+        if (!locked && InputMap.TurnRight) lat += 1f;
+        if (!locked && InputMap.TurnLeft) lat -= 1f;
 
         if (lat != 0f)
             _strafe += lat * Accel * _speedScale * dt;
@@ -628,16 +826,28 @@ public sealed class PlayerTank
         _strafe = Math.Clamp(_strafe, -topLat, topLat);
     }
 
+    /// <summary>
+    /// Attempts the machine hop: refused while rooted, airborne or too drained to pay
+    /// for it — and refused outright on the TANK, which has no answer to gravity.
+    /// Treads never leave the grid, and the class reads better for admitting it: its
+    /// escape is the hyperspace gamble, not a leap. The SPIDER keeps the hop — legs
+    /// are legs. The falling half of the arc below stays live for every chassis,
+    /// because a cinematic can still put a tank in the air and it has to come down.
+    /// </summary>
+    public bool TryJump()
+    {
+        if (Class == PlayerClass.Tank) return false;
+        if (Rooted || IsAirborne || Hyper < JumpHyperCost) return false;
+        _verticalVel = JumpVel;
+        Hyper -= JumpHyperCost;
+        return true;
+    }
+
     private void UpdateJump(float dt)
     {
-        // Jumping is a Hyper move now: it costs a quarter of the bar and is
-        // simply refused if the reserve is too low to pay for it.
-        // Rooted craft don't leap either — the lance is charged with both feet planted.
-        if (!Rooted && InputMap.JumpPressed && !IsAirborne && Hyper >= JumpHyperCost)
-        {
-            _verticalVel = JumpVel;
-            Hyper -= JumpHyperCost;
-        }
+        // Jumping is a Hyper move: a quarter of the bar, and simply refused if the
+        // reserve can't pay — or if the chassis is a TANK, which never can. See TryJump.
+        if (InputMap.JumpPressed) TryJump();
 
         if (IsAirborne || _verticalVel > 0f)
         {
@@ -656,6 +866,29 @@ public sealed class PlayerTank
                 Height = 0f;
                 _verticalVel = 0f;
             }
+        }
+    }
+
+    /// <summary>
+    /// Runs the tank's siege clocks: the discharger cooldown, the shake ring-down, and the
+    /// lurch — which bleeds its surge out over its short life so the dash eases rather than
+    /// stopping dead. All harmless no-ops on a craft that never plants, lurches or rams, so
+    /// it costs nothing to run for the SPIDER that shares this integrator.
+    /// </summary>
+    private void UpdateSiege(float dt)
+    {
+        if (_smokeCooldown > 0f) _smokeCooldown -= dt;
+        if (Shake > 0f)
+        {
+            Shake -= dt * 4f;
+            if (Shake < 0f) Shake = 0f;
+        }
+
+        if (_lurchTime > 0f)
+        {
+            _lurchTime -= dt;
+            _lurchVel *= MathF.Exp(-LurchDecay * dt);
+            if (_lurchTime <= 0f) _lurchVel = Vector2.Zero;
         }
     }
 
