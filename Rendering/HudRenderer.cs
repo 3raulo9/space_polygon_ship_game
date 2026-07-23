@@ -51,6 +51,12 @@ internal static class HudRenderer
         DrawRadar(world, p);
         DrawAimGuide(p);
         if (p.Spider is { } spider) DrawChargeMeter(spider, p);
+
+        // The SOLDIER keeps every one of the above — the same vitals, the same equip
+        // row, the same radar and the same firing scope, because it is the same run and
+        // the same craft's worth of information — and then adds the handful of things
+        // that only exist on a chassis hanging off two cables. See SoldierHud.
+        if (p.Soldier is { } rig) SoldierHud.DrawOverlay(world, rig, p);
     }
 
     // --- The SPIDER's lance meter: 0..100 down the right-hand edge ---

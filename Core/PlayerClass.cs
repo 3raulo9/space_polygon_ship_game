@@ -85,11 +85,20 @@ public static class ClassCatalog
 
         new ClassArchetype(
             PlayerClass.Soldier, "SOLDIER",
-            "NO BUILD DATA",
-            new[] { "THE MACHINE HAS NO PATTERN FOR THIS CHASSIS." },
-            Available: false,
-            PartNames: Array.Empty<string>(),
-            DefaultSwatches: Array.Empty<int>()),
+            "TWIN CABLE RIG",
+            new[]
+            {
+                "NO CHASSIS - A PERSON ON FOOT WITH TWO GAS-FIRED",
+                "GRAPPLING HOOKS. SPACE JUMPS, MOUSE LOOKS, E AND Q",
+                "THROW AND RELEASE THE HOOKS. ANCHORED, WASD IS",
+                "CABLE TENSION. LEFT SHOOTS, RIGHT ROCKETS. PACK-F",
+            },
+            Available: true,
+            PartNames: new[] { "FATIGUES", "HARNESS", "LAUNCHERS", "CABLE" },
+            // Deep field-drab under a gunmetal harness, with the steel left bare: this
+            // is the only chassis on the roster that is a person, and it should read as
+            // equipment worn rather than as a machine painted.
+            DefaultSwatches: new[] { 6, 10, 0, 9 }),
     };
 
     public static ClassArchetype Get(PlayerClass kind) => All[(int)kind];

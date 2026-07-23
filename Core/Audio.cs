@@ -70,6 +70,14 @@ public static class Audio
         // charge has no fixed length, so no one-shot envelope could ever match it.
         _lanceCharge.Load(SfxSynth.RenderWav(SfxSynth.LanceCharge(_sfxRng)));
 
+        // And the SOLDIER's two: the gas jet under a reel, and the wind. Beds for the
+        // same reason — neither has a length. A swing lasts as long as it lasts, and the
+        // one thing audio has to do on that chassis is carry the sense of speed
+        // continuously rather than in events.
+        _reelJet.Load(SfxSynth.RenderWav(SfxSynth.ReelJet(_sfxRng)));
+        _wind.Load(SfxSynth.RenderWav(SfxSynth.WindRush(_sfxRng)));
+        _cableStrain.Load(SfxSynth.RenderWav(SfxSynth.CableStrain(_sfxRng)));
+
         _enabled = true;
     }
 
@@ -741,6 +749,9 @@ public static class Audio
         _hum.Service(dt);
         _mawHover.Service(dt);
         _lanceCharge.Service(dt);
+        _reelJet.Service(dt);
+        _wind.Service(dt);
+        _cableStrain.Service(dt);
 
         // The lance bed is fed-or-it-dies, unlike the two monster beds. Those are
         // driven from the world's own step, which runs whenever their owner exists;
@@ -751,6 +762,12 @@ public static class Audio
         // lets it fade out on its own, rather than leaving a charge humming behind the
         // pause panel forever.
         _lanceCharge.Set(false, 0f, 0f);
+        // The soldier's two beds are driven from the same player-side code and want the
+        // same treatment: a paused game, a bail to the menu or a cinematic taking the
+        // rig away all simply stop asking, and both fade rather than hanging.
+        _reelJet.Set(false, 0f, 0f);
+        _wind.Set(false, 0f, 0f);
+        _cableStrain.Set(false, 0f, 0f);
     }
 
     /// <summary>Moves <paramref name="v"/> toward <paramref name="target"/> by at
@@ -930,6 +947,180 @@ public static class Audio
     /// </summary>
     public static void PlayMawDeath() => PlayBossDeath();
 
+    // --- The SOLDIER's rig ----------------------------------------------------
+    // Audio carries the entire sense of speed on this chassis. There is no engine note
+    // to ride and no chassis to hear: what the player has is a gas bottle, two steel
+    // cables and the air. So the bank below is deliberately mechanical and dry —
+    // pressure, metal and wind — with nothing sung or synthetic-sounding anywhere in it.
+
+    /// <summary>
+    /// The high jump: the signature whoosh, and the loudest thing this class does. A
+    /// hard pressurised release with a fabric-and-air rush layered over it, tailing into
+    /// wind as the player rises. Plays every single jump, at full level, because the
+    /// moment of leaving the ground is the moment the class is about.
+    ///
+    /// <paramref name="starvation"/> is how empty the reserve is, 0..1. As it rises the
+    /// burst thins toward a hiss — quieter, higher, shorter — which is how a player
+    /// learns they are nearly out of gas without ever reading the gauge.
+    /// </summary>
+    public static void PlayGasJump(float starvation)
+    {
+        if (!_enabled) return;
+        starvation = Math.Clamp(starvation, 0f, 1f);
+
+        PlaySynth(SfxSynth.GasBurst(_sfxRng, starvation), 1f - 0.45f * starvation);
+
+        // The air rush over the top of the release, cut short and opened up so it reads
+        // as the body accelerating rather than as the bottle emptying. Dropped entirely
+        // on a nearly-dry tank: a thin hiss with no rush behind it is exactly the sound
+        // of a jump that is about to not clear anything.
+        if (starvation > 0.85f) return;
+        var rush = SfxSynth.ThrowWhoosh(_sfxRng);
+        rush.Length *= 0.55f;
+        rush.Attack = 0.06f;
+        rush.Decay = 0.7f;
+        PlaySynth(rush, (1f - starvation) * 0.75f);
+    }
+
+    /// <summary>A hook leaving its launcher: a compressed-air pop with the cable's
+    /// whipping hiss rising behind it as the line pays out.</summary>
+    public static void PlayCableFire()
+    {
+        if (_enabled) PlaySynth(SfxSynth.CableLaunch(_sfxRng));
+    }
+
+    /// <summary>
+    /// Steel biting in. Hard, short and metallic, and the single most important cue on
+    /// the chassis — it is the difference between a swing and a fall, and the player has
+    /// to know which they are in without looking at the HUD.
+    ///
+    /// <paramref name="distance"/> is how far off the bite landed, which only thins it a
+    /// little: an anchor eighty metres away is still a thing that just happened to you.
+    /// </summary>
+    public static void PlayAnchorBite(float distance)
+    {
+        if (!_enabled) return;
+        float vol = Math.Clamp(1f - distance / (SoldierAudioRange * 2f), 0.45f, 1f);
+        PlaySynth(SfxSynth.AnchorClank(_sfxRng), vol);
+    }
+
+    /// <summary>A cable coming home: the fast metallic zip of the line retracting and
+    /// the click of the hook seating in its launcher. Also what a shot at open sky
+    /// sounds like, which is the point — a miss should be audible as a miss.</summary>
+    public static void PlayCableZip()
+    {
+        if (_enabled) PlaySynth(SfxSynth.CableZip(_sfxRng));
+    }
+
+    /// <summary>An anchor tearing out of weak material: a splintering crack, and the
+    /// sound of the ground getting closer. Deliberately unlike every other cue here —
+    /// nothing else in the rig's bank splinters.</summary>
+    public static void PlayAnchorTear()
+    {
+        if (!_enabled) return;
+        PlaySynth(SfxSynth.AnchorTear(_sfxRng));
+        PlaySynth(SfxSynth.CableZip(_sfxRng), 0.6f);
+    }
+
+    /// <summary>A rifle round: a sharp dry crack with none of the cannon's body. The
+    /// cadence is 600 a minute, so anything with weight to it stacks into a roar within
+    /// half a second.</summary>
+    public static void PlayRifleShot()
+    {
+        if (_enabled) PlaySynth(SfxSynth.RifleCrack(_sfxRng));
+    }
+
+    /// <summary>A rocket leaving the tube: the motor lighting, then tearing away.</summary>
+    public static void PlayRocketLaunch()
+    {
+        if (_enabled) PlaySynth(SfxSynth.RocketLaunch(_sfxRng));
+    }
+
+    /// <summary>
+    /// A rocket going off. The bank's own blast clip carries the body — it is the
+    /// heaviest thing in the bank and this is the heaviest thing the class does — under
+    /// a bass-first synthesised concussion, both falling away with range.
+    /// </summary>
+    public static void PlayRocketBlast(float distance)
+    {
+        if (!_enabled) return;
+        float vol = Math.Clamp(1f - distance / 160f, 0.15f, 1f);
+        Raylib.SetSoundVolume(_explosion, vol);
+        Raylib.PlaySound(_explosion);
+        PlaySynth(SfxSynth.LandThud(_sfxRng), vol * 0.9f);
+    }
+
+    /// <summary>Past this the rig's own cues thin out. Generous: these are things
+    /// happening to the player, not to something across the arena.</summary>
+    private const float SoldierAudioRange = 90f;
+
+    /// <summary>The gas jet under a reel. Ranged at 1 unit and fed a distance of 0 like
+    /// the lance charge — it is on the player's own hips, so distance is not an axis it
+    /// varies on. Its rate rides the reserve's pressure, which is what makes a starved
+    /// reel audibly sag rather than merely pull less hard.</summary>
+    private static readonly Bed _reelJet = new(wokenPitch: 1.9f, range: 1f, maxVolume: 0.45f);
+
+    /// <summary>The air. Light rustle building to a roaring buffet — the single cue
+    /// carrying most of the sense of speed, so it is the loudest bed in the game.</summary>
+    private static readonly Bed _wind = new(wokenPitch: 2.2f, range: 1f, maxVolume: 0.55f);
+
+    /// <summary>Steel under load: a low creak with a fine vibration hum in it. Quiet by
+    /// design — it should be felt through the other two rather than heard over them, the
+    /// way you notice a rope you are hanging from without listening to it.</summary>
+    private static readonly Bed _cableStrain = new(wokenPitch: 1.6f, range: 1f, maxVolume: 0.3f);
+
+    /// <summary>
+    /// The cables taking weight. <paramref name="loaded"/> is whether either is actually
+    /// taut and <paramref name="tension"/> (0..1) is how hard the harder-working of the
+    /// two is pulling — the creak tightens with it, so a player at the bottom of a fast
+    /// arc can hear how much the rig is being asked for.
+    /// </summary>
+    public static void SetCableStrain(bool loaded, float tension)
+    {
+        if (_enabled) _cableStrain.Set(loaded, 0f, tension);
+    }
+
+    /// <summary>
+    /// The reserve running dry: a small warning tick, rate-limited here rather than by
+    /// the caller so it can safely be asked for every tick the gauge is low. Deliberately
+    /// tiny — the sag in the reel and the thinning of the jump are what actually tell the
+    /// player, and this only confirms it.
+    /// </summary>
+    public static void PlayGasLow()
+    {
+        if (!_enabled) return;
+
+        double now = Raylib.GetTime();
+        if (now < _nextGasTick) return;
+        _nextGasTick = now + GasTickGap;
+
+        PlaySynth(SfxSynth.WarningBeep(_sfxRng, 0), 0.35f);
+    }
+
+    private static double _nextGasTick;
+    private const double GasTickGap = 1.1;
+
+    /// <summary>
+    /// The reel's gas jet for this frame. <paramref name="reeling"/> is whether the
+    /// player is actually pulling on a cable and <paramref name="pressure"/> is how much
+    /// is left in the bottle, 0..1 — the roar climbs with it, so a dry reel is heard as
+    /// a weak one before it is felt as one. Fed every tick; stopping feeding it fades it.
+    /// </summary>
+    public static void SetReel(bool reeling, float pressure)
+    {
+        if (_enabled) _reelJet.Set(reeling, 0f, pressure);
+    }
+
+    /// <summary>
+    /// The wind past the ears. <paramref name="fast"/> gates it on at all and
+    /// <paramref name="intensity"/> (0..1) drives it from a light rustle to a roaring
+    /// buffet. Same contract as the reel: fed every tick, fades on its own.
+    /// </summary>
+    public static void SetWind(bool fast, float intensity)
+    {
+        if (_enabled) _wind.Set(fast, 0f, intensity);
+    }
+
     /// <summary>
     /// A pickup being absorbed — a battery cell or stray round. Reuses the menu
     /// blip (the only bright, non-combat transient in the bank) so the collect
@@ -958,6 +1149,9 @@ public static class Audio
         _hum.Unload();
         _mawHover.Unload();
         _lanceCharge.Unload();
+        _reelJet.Unload();
+        _wind.Unload();
+        _cableStrain.Unload();
         // Aliases first: they borrow their source clips' samples, so they must all
         // be released before the clips that own those samples go.
         for (int i = 0; i < BossBoomCount; i++) Raylib.UnloadSoundAlias(_bossBooms[i]);

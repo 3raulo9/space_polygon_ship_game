@@ -301,17 +301,39 @@ public sealed class InventoryScreen
                 // leaving the overflow in the stack — right-clicking 12 bullets into a
                 // 40/50 magazine loads 10 and leaves 2 behind. A magazine already at
                 // the cap takes nothing and buzzes like a full bar.
+                //
+                // A soldier's rockets come out of the same salvage: every ten rounds
+                // loaded also seats one, up to what the rig can carry. They have to come
+                // from somewhere — the six carried are otherwise gone twenty seconds into
+                // a run and never come back — and the alternative is a second kind of
+                // pickup for one chassis, which is a whole item for one build.
                 int room = player.MaxAmmo - player.Ammo;
-                if (room <= 0) { Audio.PlayFull(); break; }
-                int loaded = Math.Min(room, slot.Count);
+                if (room <= 0 && player.Rockets >= player.MaxRockets) { Audio.PlayFull(); break; }
+                int loaded = Math.Min(Math.Max(room, 0), slot.Count);
                 player.Ammo += loaded;
-                slot.Count -= loaded;
+                if (player.Soldier != null)
+                {
+                    // Charged off the whole stack, not just the part that fit in the
+                    // magazine, so a full-up soldier can still spend rounds on rockets.
+                    int rockets = slot.Count / RoundsPerRocket;
+                    if (rockets > 0)
+                    {
+                        int seated = Math.Min(rockets, player.MaxRockets - player.Rockets);
+                        player.RefillRockets(seated);
+                        loaded = Math.Max(loaded, seated * RoundsPerRocket);
+                    }
+                }
+                slot.Count -= Math.Min(loaded, slot.Count);
                 if (slot.IsEmpty) slot = ItemStack.Empty;
                 Audio.PlayPickup();
                 break;
             // Fragments and crafted cores aren't fuel — right-click does nothing.
         }
     }
+
+    /// <summary>What a rocket costs in bullet salvage. Dear enough that a soldier is
+    /// choosing between a full magazine and something that can take a building down.</summary>
+    private const int RoundsPerRocket = 10;
 
     // --- Slot addressing + rules ----------------------------------------------
 

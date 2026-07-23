@@ -47,6 +47,15 @@ public static class SelfTest
         failures += Check("loadout points reach the player's live stats", LoadoutDrivesPlayerStats);
         failures += Check("the spider's lance costs rounds and burns a line", SpiderLanceKills);
         failures += Check("charging the spider's lance roots the craft", SpiderChargeRootsTheCraft);
+        failures += Check("a soldier opens within a cable's throw of the city", SoldierStartsAtAnAnchor);
+        failures += Check("the high jump clears fifteen metres and costs gas", SoldierJumpClearsTheCity);
+        failures += Check("a hook bites the building it was aimed at", SoldierHookBites);
+        failures += Check("a taut cable swings the player instead of dropping them", SoldierCableSwings);
+        failures += Check("releasing at speed keeps every bit of the momentum", SoldierReleaseKeepsMomentum);
+        failures += Check("reeling in costs gas and gains speed", SoldierReelBurnsGas);
+        failures += Check("rifle rounds fly exactly where the crosshair points", SoldierRifleFliesTrue);
+        failures += Check("a felled building stops being an anchor", SoldierAnchorDiesWithItsTower);
+        failures += Check("weak material tears out from under a swing", SoldierWeakAnchorTears);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1041,6 +1050,347 @@ public static class SelfTest
             if (maw.JustCaught) return (maw, player);
         }
         return (null, null);
+    }
+
+    // --- The SOLDIER -----------------------------------------------------------
+
+    /// <summary>
+    /// Every other chassis opens at the origin, which the skyline is deliberately kept
+    /// out of. That start is useless to this one: its whole loop is anchors, and there
+    /// is nothing to anchor to inside the clearing. So the check is not "does it stand
+    /// somewhere sensible" but the thing the player actually experiences — on frame one,
+    /// with nothing touched, is there something the crosshair can bite?
+    /// </summary>
+    private static string? SoldierStartsAtAnAnchor()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+
+        if (p.Soldier == null) return "the soldier loadout produced a craft with no rig";
+
+        float toCity = float.MaxValue;
+        foreach (var s in world.Structures)
+            toCity = MathF.Min(toCity, Torus.Distance(s.Position, p.Position));
+        if (toCity > Entities.SoldierRig.MaxRange)
+            return $"opens {toCity:0} units from the nearest building — past a cable's {Entities.SoldierRig.MaxRange:0}";
+
+        if (!world.TryFindAnchor(p.Eye, p.Forward3, out Vector3 at, out _))
+            return "the opening view has no anchor in it at all";
+
+        float range = Vector3.Distance(p.Eye, at);
+        if (range > Entities.SoldierRig.MaxRange)
+            return $"the anchor in sight is {range:0} out, past the rig's reach";
+        return null;
+    }
+
+    /// <summary>
+    /// The opener. It has to clear enough to matter (the spec asks for 12 to 18 metres),
+    /// take about 1.2 seconds getting there, and cost a visible chunk of the bottle —
+    /// a jump that were free would make the reserve meaningless.
+    /// </summary>
+    private static string? SoldierJumpClearsTheCity()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+        var rig = p.Soldier!;
+
+        float gas0 = p.Hyper;
+        if (!rig.Jump(p)) return "a standing soldier refused to jump on a full reserve";
+        if (p.Hyper >= gas0) return "the jump cost no gas";
+
+        float peak = 0f;
+        float apexAt = 0f;
+        int nearPeak = 0;
+        for (int i = 0; i < 60 * 6; i++)
+        {
+            StepWithoutInput(world);
+            if (p.Height > peak) { peak = p.Height; apexAt = (i + 1) / 60f; }
+            // Frames spent within a metre of the top: the hang, counted.
+            if (peak > 0f && p.Height > peak - 1f) nearPeak++;
+            if (peak > 0f && p.Height <= 0f) break;
+        }
+
+        if (peak < 12f || peak > 18f) return $"the jump peaked at {peak:0.0}m, wanted 12-18";
+        if (apexAt < 1.05f || apexAt > 1.4f) return $"took {apexAt:0.00}s to the apex, wanted ~1.2";
+
+        // And the floaty hang at the top has to actually be there. Without it the apex
+        // is a corner rather than a beat, and the beat is where the player picks the
+        // anchor they are about to fire at.
+        float hang = nearPeak / 60f;
+        if (hang < 0.35f) return $"only {hang:0.00}s spent at the top — there is no hang";
+
+        if (p.Height > 0.01f) return "the soldier never came back down";
+        return null;
+    }
+
+    /// <summary>
+    /// The core of the class: aim at a building, press the key, and a second later be
+    /// hanging off it. Drives it exactly the way the player does — through the world's
+    /// own fire path, against a live raycast, stepping the sim between.
+    /// </summary>
+    private static string? SoldierHookBites()
+    {
+        var world = SoldierWorld();
+        var rig = world.Player.Soldier!;
+
+        if (!world.FireSoldierHookForTest(right: true))
+            return "nothing in the opening view to fire at";
+        if (rig.Right.State != Entities.HookState.Flying)
+            return "the hook never left the launcher";
+
+        for (int i = 0; i < 60 * 3 && !rig.Right.Anchored; i++) StepWithoutInput(world);
+
+        if (!rig.Right.Anchored) return "the hook flew but never bit anything";
+        if (rig.Right.Holding == null) return "the hook bit, but is holding nothing";
+
+        // And what it bit has to be where it was drawn to bite: on the surface of the
+        // thing, not floating in the air next to it or buried in its middle.
+        Structure s = rig.Right.Holding!;
+        float off = Torus.Distance(rig.Right.Tip, s.Position);
+        if (off > 12f) return $"the bite landed {off:0.0} units from the building it claims";
+        if (rig.Right.TipY < 0f) return "the bite landed underground";
+        return null;
+    }
+
+    /// <summary>
+    /// A cable is a hard constraint, not a rope that stretches: the player may never end
+    /// up further from the anchor than its length, and gravity acting on a body held at
+    /// a fixed radius has to produce a <em>swing</em> — lateral travel — rather than a
+    /// fall. Both halves matter. A constraint that held but killed all momentum would
+    /// pass the first and make the class unplayable.
+    /// </summary>
+    private static string? SoldierCableSwings()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+        var rig = p.Soldier!;
+
+        // Up into the air first, so there is somewhere to swing to.
+        rig.Jump(p);
+        for (int i = 0; i < 45; i++) StepWithoutInput(world);
+
+        if (!world.FireSoldierHookForTest(right: true)) return "nothing to fire at";
+        for (int i = 0; i < 60 * 3 && !rig.Right.Anchored; i++) StepWithoutInput(world);
+        if (!rig.Right.Anchored) return "the hook never bit";
+
+        float length = rig.Right.Length;
+        float worstOver = 0f;
+        float travelled = 0f;
+        Vector2 was = p.Position;
+
+        for (int i = 0; i < 60 * 4; i++)
+        {
+            StepWithoutInput(world);
+            if (!rig.Right.Anchored) break;
+
+            var to = new Vector3(
+                Torus.Delta(p.Position, rig.Right.Tip).X,
+                rig.Right.TipY - p.Height - Entities.SoldierRig.ShoulderHeight,
+                Torus.Delta(p.Position, rig.Right.Tip).Y);
+            worstOver = MathF.Max(worstOver, to.Length() - rig.Right.Length);
+
+            travelled += Torus.Distance(was, p.Position);
+            was = p.Position;
+        }
+
+        // A centimetre of overshoot inside one step is the solver settling; a metre is
+        // a rope made of elastic.
+        if (worstOver > 0.25f)
+            return $"the cable stretched {worstOver:0.00} past its length";
+        if (travelled < length * 0.5f)
+            return $"hanging on a {length:0}m cable only moved the player {travelled:0.0}m — it is not swinging";
+        return null;
+    }
+
+    /// <summary>
+    /// The slingshot. Letting go has to do <em>nothing</em> — no impulse, no damping,
+    /// no snap — because everything the player built in the arc is theirs and the whole
+    /// expressive ceiling of the class is choosing the moment to stop being attached.
+    /// </summary>
+    private static string? SoldierReleaseKeepsMomentum()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+        var rig = p.Soldier!;
+
+        rig.Jump(p);
+        for (int i = 0; i < 45; i++) StepWithoutInput(world);
+        if (!world.FireSoldierHookForTest(right: true)) return "nothing to fire at";
+        for (int i = 0; i < 60 * 3 && !rig.Right.Anchored; i++) StepWithoutInput(world);
+        if (!rig.Right.Anchored) return "the hook never bit";
+
+        // Swing until there is real speed on the clock.
+        for (int i = 0; i < 60 * 3 && rig.PlanarSpeed < 8f; i++) StepWithoutInput(world);
+        if (rig.PlanarSpeed < 8f) return "the swing never built any speed to keep";
+
+        Vector3 before = rig.Velocity;
+        rig.ReleaseHook(right: true);
+        if (rig.Velocity != before)
+            return "letting go of the cable changed the player's momentum";
+
+        // And one step later it should differ only by gravity — nothing else may touch it.
+        StepWithoutInput(world);
+        var planarBefore = new Vector2(before.X, before.Z);
+        var planarAfter = new Vector2(rig.Velocity.X, rig.Velocity.Z);
+        if (Vector2.Distance(planarBefore, planarAfter) > 0.5f)
+            return "the released player's planar momentum was damped";
+        return null;
+    }
+
+    /// <summary>
+    /// Reeling is the engine: it has to convert gas into speed. If it costs nothing the
+    /// reserve is decoration, and if it produces nothing the cables are a tether rather
+    /// than a way to travel.
+    /// </summary>
+    private static string? SoldierReelBurnsGas()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+        var rig = p.Soldier!;
+
+        rig.Jump(p);
+        for (int i = 0; i < 45; i++) StepWithoutInput(world);
+        if (!world.FireSoldierHookForTest(right: true)) return "nothing to fire at";
+        for (int i = 0; i < 60 * 3 && !rig.Right.Anchored; i++) StepWithoutInput(world);
+        if (!rig.Right.Anchored) return "the hook never bit";
+
+        float gas0 = p.Hyper;
+        float length0 = rig.Right.Length;
+        float speed0 = rig.Speed;
+
+        // Hold W for a second, which is what a player crossing a gap does.
+        rig.MoveInput = new Vector2(0f, 1f);
+        for (int i = 0; i < 60; i++) StepWithoutInput(world);
+        rig.MoveInput = Vector2.Zero;
+
+        if (p.Hyper >= gas0) return "a second of reeling cost no gas";
+        if (rig.Right.Length >= length0) return "reeling didn't shorten the cable";
+        if (rig.Speed <= speed0) return "reeling didn't accelerate the player";
+        if (!rig.Right.Anchored) return "reeling shook the hook loose";
+        return null;
+    }
+
+    /// <summary>
+    /// The single most important property of a mouse-aimed weapon: the round goes where
+    /// the crosshair is. On every other chassis the gun points where the chassis points
+    /// and there is nothing to get wrong; here the aim, the eye, the muzzle offset and
+    /// the round's own climb are four separate pieces of arithmetic, and any one of them
+    /// being off by a few degrees is invisible standing still and infuriating in a fight.
+    ///
+    /// Checked at several pitches, including steep ones, because the failure this is
+    /// really guarding against — treating a look <em>slope</em> as a look <em>angle</em>
+    /// — is nearly exact at level and badly wrong the moment the player looks up.
+    /// </summary>
+    private static string? SoldierRifleFliesTrue()
+    {
+        foreach (float pitch in new[] { 0f, 0.22f, -0.4f, 0.9f })
+        {
+            var world = SoldierWorld();
+            var p = world.Player;
+            p.Pitch = pitch;
+            // Fired from the air, which is where this chassis actually shoots from — and
+            // is also the only way a steeply downward shot has any flight to measure
+            // before it correctly buries itself in the grid a metre and a half below.
+            p.Height = 40f;
+
+            Vector3 eye = p.Eye;
+            Vector3 aim = p.Forward3;
+
+            world.FireSoldierRifleForTest();
+            // Two steps, so the round has genuinely travelled and any per-step error has
+            // had a chance to accumulate rather than hiding in the launch offset.
+            StepWithoutInput(world);
+            StepWithoutInput(world);
+
+            Entities.Projectile? round = null;
+            foreach (var q in world.Projectiles)
+                if (q.Active && q.IsTracer) { round = q; break; }
+            if (round == null) return $"no round in the air at pitch {pitch:0.00}";
+
+            var at = new Vector3(round.Position.X, round.Height, round.Position.Y);
+            Vector3 fromEye = at - eye;
+            float along = Vector3.Dot(fromEye, aim);
+            if (along < 1f) return $"the round went nowhere at pitch {pitch:0.00}";
+
+            // How far off the line of sight it is, as an angle — which is the number a
+            // player actually experiences, and the one that stays meaningful whatever
+            // the range happens to be.
+            float off = Vector3.Distance(fromEye, aim * along);
+            float error = MathF.Atan2(off, along);
+            if (error > 0.02f)
+                return $"at pitch {pitch:0.00} the round flies {error:0.000} rad off the aim";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// A rocket takes the building down, and anything hanging from it goes with it. This
+    /// is the one rule that makes the rockets frightening rather than free: the player is
+    /// entirely capable of shooting away the thing holding them up.
+    /// </summary>
+    private static string? SoldierAnchorDiesWithItsTower()
+    {
+        var world = SoldierWorld();
+        var rig = world.Player.Soldier!;
+
+        if (!world.FireSoldierHookForTest(right: true)) return "nothing to fire at";
+        for (int i = 0; i < 60 * 3 && !rig.Right.Anchored; i++) StepWithoutInput(world);
+        if (!rig.Right.Anchored) return "the hook never bit";
+
+        Structure held = rig.Right.Holding!;
+        held.Strike();   // whatever cut it down — a rocket, a lance, the sky falling
+
+        for (int i = 0; i < 60 && rig.Right.Anchored; i++) StepWithoutInput(world);
+
+        if (rig.Right.Anchored)
+            return "the player is still hanging from a building that is on its way down";
+        if (rig.Right.Holding != null)
+            return "the torn hook is still holding a reference to the wreck";
+        return null;
+    }
+
+    /// <summary>
+    /// Weak material gives way. The point is not the failure itself but that it is
+    /// <em>readable</em>: the same scale threshold the HUD warns on is the one that
+    /// tears, so a player who learns to distrust thin spires is learning something true.
+    /// </summary>
+    private static string? SoldierWeakAnchorTears()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+        var rig = p.Soldier!;
+
+        rig.Jump(p);
+        for (int i = 0; i < 45; i++) StepWithoutInput(world);
+        if (!world.FireSoldierHookForTest(right: true)) return "nothing to fire at";
+        for (int i = 0; i < 60 * 3 && !rig.Right.Anchored; i++) StepWithoutInput(world);
+        if (!rig.Right.Anchored) return "the hook never bit";
+
+        Structure held = rig.Right.Holding!;
+        bool weak = held.Scale < Entities.SoldierRig.WeakScale;
+
+        // Hang on it for comfortably longer than weak material is supposed to hold.
+        for (int i = 0; i < (int)(60 * (Entities.SoldierRig.TearTime + 1.5f)); i++)
+        {
+            StepWithoutInput(world);
+            if (!rig.Right.Anchored) break;
+        }
+
+        if (weak && rig.Right.Anchored)
+            return $"a scale-{held.Scale:0.00} anchor held for good — weak material never tears";
+        if (!weak && !rig.Right.Anchored)
+            return $"a scale-{held.Scale:0.00} anchor let go — solid material is failing";
+        return null;
+    }
+
+    /// <summary>A stage with a soldier in it and nothing else moving: no spawn director,
+    /// no hunters, so the checks above are measuring the rig and not a firefight.</summary>
+    private static World.World SoldierWorld()
+    {
+        var loadout = new Loadout { Class = PlayerClass.Soldier };
+        var world = new World.World(loadout) { DynamicSpawning = false };
+        world.Enemies.Clear();
+        return world;
     }
 
     // --- helpers: advance the sim without going through global input ---

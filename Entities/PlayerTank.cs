@@ -16,6 +16,19 @@ public sealed class PlayerTank
     public float Height;          // 0 = grounded; rises during a jump
     public float Heading;         // radians; 0 faces +Z (into the screen)
 
+    /// <summary>
+    /// Where the eye is aimed vertically, in radians — positive is up. Zero on every
+    /// chassis but the SOLDIER, which is the only one that owns its own look: the rest
+    /// hold the standing tilt in <see cref="Config.CameraLookLift"/> and never move off
+    /// it, because a tank's gun points where the tank points and nowhere else.
+    /// </summary>
+    public float Pitch;
+
+    /// <summary>How far the look can be thrown before it would tip past vertical. Kept
+    /// just short of a right angle so straight up and straight down are both reachable
+    /// and neither can flip the horizon over.</summary>
+    public const float MaxPitch = 1.45f;
+
     // Signed forward speed and angular velocity — carried between frames so
     // the craft eases into motion and coasts to a stop rather than snapping.
     private float _speed;
@@ -89,6 +102,31 @@ public sealed class PlayerTank
     public SpiderWeapon? Spider { get; private set; }
 
     /// <summary>
+    /// The SOLDIER's twin cable launcher, or null on every other chassis. Unlike the
+    /// spider's emitter this is not a weapon bolted onto the standard physics — it
+    /// <em>replaces</em> them. While it exists, <see cref="Update"/> hands the whole
+    /// transform to it: no heading momentum, no throttle, no jump arc, just a velocity
+    /// vector and two ropes.
+    /// </summary>
+    public SoldierRig? Soldier { get; private set; }
+
+    /// <summary>
+    /// How high the eye sits above the craft's own origin. A tank's camera rides up on
+    /// the hull; a soldier is a person standing on the grid, and dropping the eye to
+    /// head height is most of what makes the same city read as something you are small
+    /// inside rather than something you drive past.
+    /// </summary>
+    public float EyeHeight => Soldier != null ? SoldierRig.EyeHeight : Config.CameraHeight;
+
+    // --- Rockets: the SOLDIER's right trigger --------------------------------
+    // Carried, not drawn from the magazine, and deliberately few: a rocket is the only
+    // thing on this chassis that can take a building down, which means it is also the
+    // only thing that can take away the anchor the player is currently hanging from.
+
+    public int MaxRockets = 6;
+    public int Rockets;
+
+    /// <summary>
     /// True while something is holding the craft in place but leaving it otherwise in
     /// control — currently only the SPIDER winding its lance. Distinct from
     /// <see cref="Captured"/>: a rooted craft still runs its own physics (so it coasts
@@ -117,6 +155,26 @@ public sealed class PlayerTank
     private float _fireCooldown;
     private const float FireInterval = 0.35f;
 
+    /// <summary>
+    /// The SOLDIER's rifle cadence: 600 rounds a minute, against the cannon's roughly
+    /// 170. It is a different weapon on a different body — a person with a rifle, not a
+    /// craft with a gun — and firing it has to be usable mid-swing without breaking the
+    /// arc, which a third-of-a-second between shots simply is not.
+    /// </summary>
+    private const float RifleInterval = 0.1f;
+
+    /// <summary>What a rocket costs in reload time. Long enough that the six carried
+    /// rounds can't be emptied into one wall in a second.</summary>
+    private const float RocketInterval = 0.85f;
+
+    /// <summary>
+    /// How fast the gas reserve refills for a soldier. Faster than the tank's Hyper
+    /// trickle, because on this chassis the reserve is not a panic button held for
+    /// emergencies — it is the engine, and it is drained continuously by the thing the
+    /// player does every few seconds.
+    /// </summary>
+    private const float SoldierGasRegen = 11f;
+
     // Collision radius on the plane, shared by shots and tank-tank checks.
     public const float Radius = 1.3f;
 
@@ -136,6 +194,11 @@ public sealed class PlayerTank
         // Open on four fifths of the magazine, as the craft always has.
         Ammo = (int)MathF.Round(MaxAmmo * 0.8f);
         if (Class == PlayerClass.Spider) Spider = new SpiderWeapon();
+        if (Class == PlayerClass.Soldier)
+        {
+            Soldier = new SoldierRig();
+            Rockets = MaxRockets;
+        }
 
         Shield = MaxShield;
         Hyper = MaxHyper;
@@ -166,6 +229,14 @@ public sealed class PlayerTank
         _speed = 0f;
         _turnRate = 0f;
         _verticalVel = 0f;
+        // The soldier's momentum lives in the rig, and a cinematic that has just put the
+        // player back down must not hand them back a velocity from before it grabbed
+        // them. Both cables go with it: whatever they were holding is a long way away.
+        if (Soldier is { } rig)
+        {
+            rig.Velocity = Vector3.Zero;
+            rig.ReleaseBoth();
+        }
     }
 
     public void Update(float dt)
@@ -185,6 +256,17 @@ public sealed class PlayerTank
 
         // A cinematic has the wheel: it writes the transform itself this tick.
         if (Captured) return;
+
+        // The SOLDIER's rig owns the transform outright — it is a different set of
+        // physics, not a modifier on these ones. It wraps its own position and lands
+        // its own landings, so nothing below runs for that chassis.
+        if (Soldier is { } rig)
+        {
+            rig.Step(dt, this);
+            if (Hyper < MaxHyper)
+                Hyper = MathF.Min(MaxHyper, Hyper + SoldierGasRegen * dt);
+            return;
+        }
 
         UpdateTurn(dt);
         UpdateDrive(dt);
@@ -246,6 +328,49 @@ public sealed class PlayerTank
         Ammo -= GrenadeAmmoCost;
         return true;
     }
+
+    // --- The SOLDIER's two triggers -------------------------------------------
+    // Both fire along the eye's full 3D line rather than along a heading, because on
+    // this chassis the mouse is the aim and the aim is very often nothing like where
+    // the body is travelling. Both are usable mid-swing: nothing here touches the rig.
+
+    /// <summary>
+    /// A rifle round. Costs one from the magazine and paces itself at
+    /// <see cref="RifleInterval"/>. The origin is set out past the eye so the round
+    /// never spawns inside the player's own collision radius.
+    /// </summary>
+    public bool TryFireRifle(out Vector3 origin, out Vector3 direction)
+    {
+        origin = default;
+        direction = Forward3;
+        if (_fireCooldown > 0f || Ammo <= 0) return false;
+
+        origin = Eye + direction * (Radius + 0.4f);
+        _fireCooldown = RifleInterval;
+        Ammo--;
+        return true;
+    }
+
+    /// <summary>
+    /// A rocket. Spends one of the carried few — never magazine rounds, so a soldier out
+    /// of bullets still has the thing that opens a wall, and a soldier out of rockets
+    /// still has a gun.
+    /// </summary>
+    public bool TryFireRocket(out Vector3 origin, out Vector3 direction)
+    {
+        origin = default;
+        direction = Forward3;
+        if (_fireCooldown > 0f || Rockets <= 0) return false;
+
+        origin = Eye + direction * (Radius + 0.8f);
+        _fireCooldown = RocketInterval;
+        Rockets--;
+        return true;
+    }
+
+    /// <summary>Restocks rockets, capped at what the rig carries — what a supply point
+    /// and a battery cell top up alongside the reserve.</summary>
+    public void RefillRockets(int count) => Rockets = Math.Min(MaxRockets, Rockets + count);
 
     /// <summary>
     /// Panic-warp: drains the bulk of the Hyper reserve and flings the craft to a
@@ -377,8 +502,30 @@ public sealed class PlayerTank
     /// <summary>Normalized forward vector on the plane (X, Z).</summary>
     public Vector2 Forward => new(MathF.Sin(Heading), MathF.Cos(Heading));
 
-    /// <summary>0..1 speed fraction — drives engine-hum pitch later (Doc 04).</summary>
-    public float SpeedFraction => Math.Abs(_speed) / TopSpeed;
+    /// <summary>
+    /// The full look direction, pitch included. Identical to <see cref="Forward"/> laid
+    /// flat on every chassis but the SOLDIER, since nothing else can look up or down.
+    /// </summary>
+    public Vector3 Forward3
+    {
+        get
+        {
+            float cp = MathF.Cos(Pitch);
+            return new Vector3(MathF.Sin(Heading) * cp, MathF.Sin(Pitch), MathF.Cos(Heading) * cp);
+        }
+    }
+
+    /// <summary>Where the eye actually is in the world, which is where a first-person
+    /// weapon fires from and where a cable leaves the rig.</summary>
+    public Vector3 Eye => new(Position.X, EyeHeight + Height, Position.Y);
+
+    /// <summary>0..1 speed fraction — drives engine-hum pitch later (Doc 04). On a
+    /// soldier it reads the rig's real planar travel against the same ceiling, so the
+    /// number means the same thing on both chassis even though nothing about how it is
+    /// arrived at is shared.</summary>
+    public float SpeedFraction => Soldier is { } rig
+        ? Math.Clamp(rig.PlanarSpeed / TopSpeed, 0f, 1f)
+        : Math.Abs(_speed) / TopSpeed;
 
     // --- 0..1 fractions for the HUD bars ---
     public float ShieldFraction => MaxShield > 0f ? Math.Clamp(Shield / MaxShield, 0f, 1f) : 0f;
