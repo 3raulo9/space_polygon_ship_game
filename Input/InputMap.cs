@@ -103,6 +103,49 @@ public static class InputMap
         }
     }
 
+    // --- The FISH ------------------------------------------------------------
+    // Another scheme again, and the one difference from the soldier's that matters is
+    // that this chassis has no held movement key at all. W is an <em>event</em>: one
+    // press is one beat of the tail. Holding it does nothing, which is deliberate and is
+    // the first thing a player discovers about the class.
+
+    /// <summary>
+    /// One beat of the tail. W is the key the hand is already on; SPACE is here for the
+    /// same reason it is on the soldier — every hand that has played a first-person game
+    /// reaches for it to leave the ground, and this is the chassis that most needs the
+    /// player to succeed at that on their first try.
+    /// </summary>
+    public static bool BeatPressed
+        => Raylib.IsKeyPressed(KeyboardKey.W) || Raylib.IsKeyPressed(KeyboardKey.Space);
+
+    /// <summary>
+    /// A and D as a roll, -1..1. Not a strafe and not a turn: it puts the body on its
+    /// side, and the turn is what being on your side <em>earns</em> — see
+    /// <see cref="Entities.FishRig"/>.
+    /// </summary>
+    public static float RollInput
+    {
+        get
+        {
+            float x = 0f;
+            if (Raylib.IsKeyDown(KeyboardKey.D)) x += 1f;
+            if (Raylib.IsKeyDown(KeyboardKey.A)) x -= 1f;
+            return x;
+        }
+    }
+
+    /// <summary>S folds the fins: a brake, held. There is no reverse on this chassis —
+    /// turning round to leave is the same discipline the tank has always imposed.</summary>
+    public static bool BrakeDown => Raylib.IsKeyDown(KeyboardKey.S);
+
+    /// <summary>Left mouse: the spit. Held is fine — its own cadence paces it.</summary>
+    public static bool SpitDown => Raylib.IsMouseButtonDown(MouseButton.Left);
+
+    /// <summary>Right mouse: the strike. A press, not a hold — it commits the next second
+    /// and a half of the player's life, and that is not something to hold a button
+    /// through.</summary>
+    public static bool StrikePressed => Raylib.IsMouseButtonPressed(MouseButton.Right);
+
     /// <summary>
     /// The four equip slots, wired to the physical R / T / Y / U row above the
     /// movement keys. Returns which one was just pressed (0..3) or -1 for none — the

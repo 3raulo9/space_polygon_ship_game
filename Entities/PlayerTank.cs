@@ -111,12 +111,24 @@ public sealed class PlayerTank
     public SoldierRig? Soldier { get; private set; }
 
     /// <summary>
+    /// The FISH's body, or null on every other chassis. Replaces the physics outright the
+    /// way the soldier's rig does, and for a stronger reason: this chassis does not drive
+    /// on the grid at all. While it exists there is no heading momentum, no throttle and
+    /// no jump arc — only a velocity vector in water, and a body that has to keep beating
+    /// to stay in it.
+    /// </summary>
+    public FishRig? Fish { get; private set; }
+
+    /// <summary>
     /// How high the eye sits above the craft's own origin. A tank's camera rides up on
     /// the hull; a soldier is a person standing on the grid, and dropping the eye to
     /// head height is most of what makes the same city read as something you are small
-    /// inside rather than something you drive past.
+    /// inside rather than something you drive past. A fish is smaller still and its
+    /// position <em>is</em> its body, so the eye barely clears the origin at all.
     /// </summary>
-    public float EyeHeight => Soldier != null ? SoldierRig.EyeHeight : Config.CameraHeight;
+    public float EyeHeight => Soldier != null ? SoldierRig.EyeHeight
+                            : Fish != null ? FishRig.EyeHeight
+                            : Config.CameraHeight;
 
     // --- Rockets: the SOLDIER's right trigger --------------------------------
     // Carried, not drawn from the magazine, and deliberately few: a rocket is the only
@@ -199,6 +211,7 @@ public sealed class PlayerTank
             Soldier = new SoldierRig();
             Rockets = MaxRockets;
         }
+        if (Class == PlayerClass.Fish) Fish = new FishRig();
 
         Shield = MaxShield;
         Hyper = MaxHyper;
@@ -237,6 +250,10 @@ public sealed class PlayerTank
             rig.Velocity = Vector3.Zero;
             rig.ReleaseBoth();
         }
+        // Same for a fish, which carries all of its momentum in the water rather than in
+        // the fields above. A cinematic that has just put one back down must not hand it
+        // back the sprint it was in the middle of several seconds ago.
+        if (Fish is { } body) body.Velocity = Vector3.Zero;
     }
 
     public void Update(float dt)
@@ -265,6 +282,18 @@ public sealed class PlayerTank
             rig.Step(dt, this);
             if (Hyper < MaxHyper)
                 Hyper = MathF.Min(MaxHyper, Hyper + SoldierGasRegen * dt);
+            return;
+        }
+
+        // The FISH's body owns the transform for the same reason, and its reserve refills
+        // on a different rule from every other chassis: only while the tail is <em>not</em>
+        // beating. That one condition is what turns the class's movement into a rhythm —
+        // burst, coast, burst — instead of a key held down.
+        if (Fish is { } body)
+        {
+            body.Step(dt, this);
+            if (body.Recovering && Hyper < MaxHyper)
+                Hyper = MathF.Min(MaxHyper, Hyper + FishRig.GlideRegen * dt);
             return;
         }
 
@@ -371,6 +400,34 @@ public sealed class PlayerTank
     /// <summary>Restocks rockets, capped at what the rig carries — what a supply point
     /// and a battery cell top up alongside the reserve.</summary>
     public void RefillRockets(int count) => Rockets = Math.Min(MaxRockets, Rockets + count);
+
+    /// <summary>
+    /// The FISH's spit: a fast, weak round down the eye's line. It exists to be usable
+    /// <em>mid-carve</em> and for no other reason — the strike is where this chassis's
+    /// damage actually lives, and the spit is what keeps a player who is drifting through
+    /// a reef at thirty metres a second from being unarmed until they can line one up.
+    ///
+    /// Costs a magazine round like everything else, so the ammo track and the bullet
+    /// salvage go on meaning what they mean on every other chassis.
+    /// </summary>
+    public bool TryFireSpit(out Vector3 origin, out Vector3 direction)
+    {
+        origin = default;
+        direction = Forward3;
+        if (_fireCooldown > 0f || Ammo <= 0) return false;
+
+        origin = Eye + direction * (Radius + 0.4f);
+        _fireCooldown = SpitInterval;
+        Ammo--;
+        return true;
+    }
+
+    /// <summary>
+    /// Cadence of the spit — a shade slower than the soldier's rifle. It is a body doing
+    /// this rather than a weapon, and the class already has a heavy attack, so this one is
+    /// deliberately chip damage rather than a second kill button.
+    /// </summary>
+    private const float SpitInterval = 0.14f;
 
     /// <summary>
     /// Panic-warp: drains the bulk of the Hyper reserve and flings the craft to a
@@ -525,6 +582,8 @@ public sealed class PlayerTank
     /// arrived at is shared.</summary>
     public float SpeedFraction => Soldier is { } rig
         ? Math.Clamp(rig.PlanarSpeed / TopSpeed, 0f, 1f)
+        : Fish is { } body
+        ? Math.Clamp(body.PlanarSpeed / TopSpeed, 0f, 1f)
         : Math.Abs(_speed) / TopSpeed;
 
     // --- 0..1 fractions for the HUD bars ---

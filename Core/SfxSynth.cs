@@ -1914,6 +1914,93 @@ public static class SfxSynth
     /// Almost all attack and decay, with the low end filtered out entirely so what is
     /// left is the crack and nothing under it.
     /// </summary>
+    /// <summary>
+    /// The FISH's strike, and the one cue in this game that is unashamedly a piece of
+    /// <em>music</em> rather than a noise.
+    ///
+    /// Everything else in this bank is diegetic — machinery, weather, meat. This is a
+    /// distorted guitar stab, and it earns the exception because of what the moment is: the
+    /// strike is the only action in the game where the player commits everything on one
+    /// press and then has a second and a half in which they cannot do anything but watch.
+    /// That is a moment that wants a hook, not a report.
+    ///
+    /// It is built to the YM2612's own recipe, because that chip's distorted-guitar patch
+    /// is the exact sound in question and it was made out of parts this synth already has:
+    ///
+    /// <list type="bullet">
+    /// <item>A <b>saw</b>, which is the buzzy end of what an FM operator stack lands on.</item>
+    /// <item>A <b>fifth</b> in the detune. This is not a tuning trick — a root and a fifth
+    /// <em>is</em> a power chord, and it is the entire reason the sound reads as a guitar
+    /// rather than as a loud synth note.</item>
+    /// <item><b>Bit crush</b>, hard. The Mega Drive's 9-bit DAC is most of why its guitars
+    /// sound like that, and the grit is not a flaw being tolerated — it is the timbre.</item>
+    /// <item><b>Finger vibrato</b>: shallow, around six a second. A sustained note held
+    /// dead straight reads as an organ; the wobble is what makes it a played string.</item>
+    /// <item>A <b>filter snapping open</b> across the note, which is the pick attack and
+    /// the sense of the body accelerating away, in one move.</item>
+    /// </list>
+    ///
+    /// <paramref name="bass"/> renders the same riff an octave down and darker. The two are
+    /// layered — guitar over bass, exactly the way the console's own soundtracks did it —
+    /// because a single voice at this pitch is thin on the small speakers this game is
+    /// realistically played through.
+    /// </summary>
+    public static Params StrikeRiff(Random rng, bool bass = false)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        // E-ish, down where a guitar's low strings live. Rolled a little each time so a
+        // chain of strikes is a riff rather than the same stab on repeat.
+        float baseF = Range(158f, 176f) * (bass ? 0.5f : 1f);
+
+        return new Params
+        {
+            Wave = Osc.Saw,
+            // Rings a little past the lunge it accompanies, so the note is still decaying
+            // as the body comes out the far side of the attack.
+            Length = bass ? Range(0.58f, 0.66f) : Range(0.5f, 0.58f),
+
+            StartFreq = baseF,
+            // A shallow settle rather than a dive. A big glide here would read as a siren;
+            // holding near the root is what keeps it a *note*, and the small drop at the
+            // end is the string relaxing off the pick.
+            EndFreq = baseF * Range(0.86f, 0.92f),
+
+            // Straight in, held, then let go. No swell at all — a guitar stab that eased
+            // in would be a pad, and the whole job of this cue is to land on one frame.
+            Attack = 0.004f,
+            Sustain = Range(0.42f, 0.52f),
+            Decay = Range(0.46f, 0.56f),
+
+            // The power chord.
+            Detune = Range(1.49f, 1.51f),
+            DetuneGain = bass ? Range(0.3f, 0.4f) : Range(0.55f, 0.7f),
+
+            // Finger vibrato, and — under it — a fast amplitude chop that gives the note
+            // the growl of something mechanical driving it rather than a clean sustain.
+            VibratoDepth = Range(0.010f, 0.018f),
+            VibratoSpeed = Range(5.4f, 6.8f),
+            TremoloDepth = bass ? Range(0.06f, 0.12f) : Range(0.12f, 0.2f),
+            TremoloSpeed = Range(26f, 38f),
+
+            // Shut at the pick and torn open across the note: the attack and the
+            // acceleration in a single sweep.
+            LpCutoff = bass ? Range(0.18f, 0.28f) : Range(0.3f, 0.42f),
+            LpResonance = Range(0.45f, 0.68f),
+            LpSweep = 1f + Range(0.00002f, 0.00004f),
+            // The bass keeps every bit of its low end; the guitar has its mud stripped so
+            // the two stack instead of fighting over the same octave.
+            HpCutoff = bass ? 0f : Range(0.02f, 0.05f),
+
+            // The chip. Coarse on purpose — this is the grit, not damage to it.
+            CrushBits = rng.Next(4, 7),
+            CrushRate = rng.Next(1, 3),
+
+            Volume = bass ? 0.5f : 0.58f,
+            Seed = rng.Next(),
+        };
+    }
+
     public static Params RifleCrack(Random rng)
     {
         float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);

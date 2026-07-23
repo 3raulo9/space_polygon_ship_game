@@ -28,6 +28,11 @@ public sealed class Renderer : IDisposable
     /// same 20 m/s the vignette and the wind come in at, so the whole "this is fast now"
     /// language arrives as one change rather than three.</summary>
     private const float SoldierFovSpeed = 20f;
+
+    /// <summary>The same for the FISH, set to the same 22 m/s its murk and its bubbles
+    /// come in at, so that chassis's "this is fast now" language also arrives as one
+    /// change rather than three.</summary>
+    private const float FishFovSpeed = 22f;
     private Camera3D _camera;
     private readonly EntityRenderer _entities = new();
     // Renders the inventory's items as small rotating 3D models (see DrawInventory).
@@ -97,6 +102,10 @@ public sealed class Renderer : IDisposable
         // standing near a stalking crab, well short of being held in its claw.
         if (player.Soldier is { Shake: > 0f } jolted)
             amp = MathF.Max(amp, 0.16f * jolted.Shake);
+        // A fish spearing something, meeting a wall, or being chewed on by the bloom.
+        // Same band as the soldier's — these are things happening to a body, not to a hull.
+        if (player.Fish is { Shake: > 0f } struck)
+            amp = MathF.Max(amp, 0.16f * struck.Shake);
 
         Vector3 rumble = Vector3.Zero, rattle = Vector3.Zero;
         if (amp > 0f)
@@ -159,6 +168,25 @@ public sealed class Renderer : IDisposable
             fov *= 1f + 0.28f * fast * fast;
         }
 
+        // The FISH owns its camera in the same three ways and pushes two of them harder.
+        // The roll especially: on the soldier it is a readout of an arc the player has no
+        // direct say in, whereas here it is the steering itself, so the horizon going over
+        // is the player's own hand and it is allowed to go a lot further.
+        if (player.Fish is { } body)
+        {
+            lift = MathF.Tan(Math.Clamp(player.Pitch + body.Recoil,
+                -PlayerTank.MaxPitch, PlayerTank.MaxPitch));
+            roll += body.Bank;
+
+            // The surge: a beat of the tail shoves the eye forward for a third of a second.
+            // Applied to the field of view rather than to the position, because at this
+            // resolution translating the camera a few centimetres is invisible and
+            // widening the lens for the same third of a second is unmistakable — it is
+            // the one cue that makes an impulse feel like an impulse.
+            float fast = Math.Clamp((body.PlanarSpeed - FishFovSpeed) / 18f, 0f, 1f);
+            fov *= 1f + 0.30f * fast * fast + 0.05f * body.Surge;
+        }
+
         _camera.FovY = fov;
         _camera.Position = eye + rumble;
         // Pitch the eye up a touch so the horizon sits low on screen: that opens
@@ -174,8 +202,8 @@ public sealed class Renderer : IDisposable
         // itself rather than from the plane: with the eye near vertical, "the craft's
         // right on the plane" stops being perpendicular to where the camera is pointing
         // and the picture shears. The two agree exactly at level pitch — see the
-        // derivation below — so nothing but the soldier changes.
-        if (player.Soldier != null)
+        // derivation below — so nothing but the two mouse-aimed chassis changes.
+        if (player.Soldier != null || player.Fish != null)
         {
             Vector3 look = Vector3.Normalize(new Vector3(fwd.X, lift + pitch, fwd.Y));
             Vector3 side = Vector3.Normalize(Vector3.Cross(look, new Vector3(0f, 1f, 0f)));
@@ -217,6 +245,12 @@ public sealed class Renderer : IDisposable
         // The SOLDIER's speed effects: the vignette closing in, the wind streaking past.
         // Over the world and under the instruments, same as the glare.
         SoldierRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
+
+        // And the FISH's: the murk, the bubbles, the bloom staining down from the top of
+        // the frame, and the drained look of a body on the seabed. Only one of these two
+        // ever does anything on a given run — each returns immediately without its own
+        // chassis — so they cost nothing to have both here.
+        FishRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
 
         // Flat instrument panel over the scene: vital bars + radar along the top, plus
         // the R/T/Y/U equip slots showing their 3D item icons.
@@ -349,18 +383,30 @@ public sealed class Renderer : IDisposable
         // level, which is also the only way the launchers on its hips — the entire point
         // of the chassis — are big enough on screen to be seen at all.
         bool small = screen.Loadout.Class == PlayerClass.Soldier;
+        // ...and the fish is a third problem again. It is long and low — two and a half
+        // metres nose to fluke and under one tall — so the tank's framing wastes the whole
+        // upper half of the clear band on empty hangar while the tail runs off the side.
+        // It gets pulled in and looked at from slightly below, which is both how you read
+        // a long silhouette and the angle that keeps the lantern against the dark rather
+        // than against the grid.
+        bool finny = screen.Loadout.Class == PlayerClass.Fish;
 
         // How far it slides is per chassis for the same reason the framing is: the shift
         // is a distance in the world, and the soldier is looked at from a third of the
         // range, so the tank's 2.6 units throws it clean off the side of the frame.
-        float shift = screen.Customising ? (small ? -1.15f : -2.6f) : 0f;
+        float shift = screen.Customising ? (small ? -1.15f : finny ? -0.95f : -2.6f) : 0f;
         var eye = leggy ? new Vector3(shift, 4.8f, -13f)
                 : small ? new Vector3(shift, 1.75f, -4.1f)
+                : finny ? new Vector3(shift, 1.5f, -5.6f)
                 : new Vector3(shift, 3.6f, -9.2f);
         _camera.Position = eye;
         // Aimed below the craft's feet rather than at its middle, which lifts the whole
-        // model up the frame and clear of the briefing text along the bottom.
-        _camera.Target = new Vector3(shift, leggy ? -0.15f : small ? 0.22f : -0.35f, 0f);
+        // model up the frame and clear of the briefing text along the bottom. The fish
+        // needs the same trick for a different reason: it hangs a body's height off the
+        // plate rather than standing on it, so the aim goes under where it <em>floats</em>
+        // rather than under where it would stand.
+        _camera.Target = new Vector3(shift,
+            leggy ? -0.15f : small ? 0.22f : finny ? 0.42f : -0.35f, 0f);
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);
