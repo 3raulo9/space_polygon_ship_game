@@ -74,6 +74,8 @@ public sealed class Renderer : IDisposable
             player.EyeHeight + player.Height,
             player.Position.Y);
 
+        // The direction the eye looks down: the craft's own heading, which the mouse aims
+        // on every chassis now.
         var fwd = player.Forward;
 
         // The nearer an active Crab-Core stalks, the harder the whole rig judders —
@@ -187,6 +189,21 @@ public sealed class Renderer : IDisposable
             fov *= 1f + 0.30f * fast * fast + 0.05f * body.Surge;
         }
 
+        // The TANK and the SPIDER aim with the mouse now, so the eye looks straight down
+        // the gun — the crosshair at screen centre is where the round goes. That means
+        // dropping the standing tilt the tank used to sit behind: keeping it would push
+        // the horizon down and leave the centre sight aiming a good eight degrees over
+        // whatever it was on, which is exactly the misalignment the soldier drops its own
+        // tilt to avoid. The mouse tips the eye up and down from level, as far as the
+        // chassis can crane.
+        //
+        // Suppressed while a set piece owns the view: a seizure freezes the aim wherever
+        // the mouse last left it, and letting that frozen elevation leak into the
+        // cinematic would tilt the whole grab by however far up the player was looking
+        // when the claw closed.
+        else if (player.IsMachine && seizure == null)
+            lift = MathF.Tan(player.Pitch);
+
         _camera.FovY = fov;
         _camera.Position = eye + rumble;
         // Pitch the eye up a touch so the horizon sits low on screen: that opens
@@ -198,12 +215,15 @@ public sealed class Renderer : IDisposable
         // the craft's own right on the plane, so the horizon pivots about the centre
         // of the view rather than sliding sideways.
         //
-        // A chassis that can look straight up needs that axis derived from the look
-        // itself rather than from the plane: with the eye near vertical, "the craft's
+        // A chassis that can look steeply up or down needs that axis derived from the
+        // look itself rather than from the plane: with the eye near vertical, "the craft's
         // right on the plane" stops being perpendicular to where the camera is pointing
-        // and the picture shears. The two agree exactly at level pitch — see the
-        // derivation below — so nothing but the two mouse-aimed chassis changes.
-        if (player.Soldier != null || player.Fish != null)
+        // and the picture shears — and at dead vertical, a plane-based up parallel to the
+        // look degenerates the view outright. That is the two bodies and now the SPIDER,
+        // whose ring cranes the full way up. The two branches agree exactly at level pitch
+        // (see the derivation below), so the tank — pinned to a shallow gun — is
+        // unaffected whichever way it falls here.
+        if (player.Soldier != null || player.Fish != null || player.IsMachine)
         {
             Vector3 look = Vector3.Normalize(new Vector3(fwd.X, lift + pitch, fwd.Y));
             Vector3 side = Vector3.Normalize(Vector3.Cross(look, new Vector3(0f, 1f, 0f)));

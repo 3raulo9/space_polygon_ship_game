@@ -172,8 +172,10 @@ public sealed class EntityRenderer
         {
             if (spider.Charging || spider.BeamActive)
             {
-                Vector2 fwd = world.Player.Forward;
-                Vector2 muzzleXZ = world.Player.Position + fwd * SpiderWeapon.MuzzleForward;
+                // The live flare rides the craft's heading, and the shaft leaves along the
+                // full look line — up or down wherever the ring is aimed.
+                Vector2 look = world.Player.Forward;
+                Vector2 muzzleXZ = world.Player.Position + look * SpiderWeapon.MuzzleForward;
 
                 // While charging the flare rides the live craft; once fired the shaft
                 // stays where it was loosed from, so a player who turns mid-burn sees
@@ -184,7 +186,7 @@ public sealed class EntityRenderer
                         SpiderWeapon.MuzzleHeight + world.Player.Height, muzzleXZ.Y);
                 Vector3 dir = spider.BeamActive
                     ? spider.BeamDirection
-                    : new Vector3(fwd.X, 0f, fwd.Y);
+                    : world.Player.Forward3;
 
                 _crab.DrawLance(origin, dir,
                     spider.Charging ? spider.ChargeFraction : 0f,

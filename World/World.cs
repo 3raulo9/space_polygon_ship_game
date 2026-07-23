@@ -72,6 +72,12 @@ public sealed class World
     private const float GrenadeDamage = 4f;      // heavy round, dealt to all in the blast
     private const float EnemyShotDamage = 12f;   // vs player's 100-point shield
 
+    /// <summary>Half-height of the band an enemy shot has to arrive in to bite the player,
+    /// measured off the craft's body centre (<see cref="EnemyTank.AimHeight"/>). Wide
+    /// enough to cover the hull and forgive a per-tick step of the bolt, tight enough that
+    /// climbing or dropping a couple of metres through the shot's flight slips it.</summary>
+    private const float EnemyHitVertical = 1.6f;
+
     // Shield fraction at which the low-health alarm sounds. Crossing *down*
     // through this line fires warning.wav once — not once per frame below it.
     private const float LowShieldWarning = 0.45f;
@@ -254,6 +260,12 @@ public sealed class World
             if (acceptCombatInput && !Player.Captured) UpdateMouseLook();
         }
 
+        // The machines — the TANK and the SPIDER — read the same mouse to turn the whole
+        // craft, exactly as the two bodies above do. Their WASD is not touched here: it is
+        // read straight from the keys in the drive step (W/S throttle, A/D strafe), so only
+        // the look is the mouse's.
+        if (Player.IsMachine && acceptCombatInput && !Player.Captured) UpdateMouseLook();
+
         if (acceptCombatInput)
         {
             if (Digestion is { Held: true })
@@ -313,8 +325,12 @@ public sealed class World
         foreach (var e in Enemies)
         {
             if (!e.Alive) continue;
-            if (e.Update(dt, Player.Position, out Vector2 eOrigin, out Vector2 eDir))
-                SpawnProjectile(eOrigin, eDir, fromPlayer: false);
+            // Hand the hunter the player's height so it can elevate onto a craft off the
+            // grid; the pitch it hands back rides the enemy round up the same way the
+            // tank's cannon climbs on its own aim.
+            if (e.Update(dt, Player.Position, Player.Height,
+                out Vector2 eOrigin, out Vector2 eDir, out float ePitch))
+                SpawnProjectile(eOrigin, eDir, fromPlayer: false, pitch: ePitch);
         }
 
         // The boss stalks on its own clock; a true return means the carapace just
@@ -1111,7 +1127,11 @@ public sealed class World
             return;
         }
 
-        SpawnProjectile(origin, dir, fromPlayer: true, launchHeight: launchHeight, laser: laser);
+        // The vertical half of the head's aim. Flat on a hull that can't crane its gun —
+        // GunElevation is zero there — and up to the head's own stop on the two chassis
+        // that can, so the bolt climbs or dives to where the crosshair is resting.
+        SpawnProjectile(origin, dir, fromPlayer: true, launchHeight: launchHeight,
+            laser: laser, pitch: Player.GunElevation);
     }
 
     // --- The SPIDER chassis -----------------------------------------------------
@@ -1177,10 +1197,13 @@ public sealed class World
         int cost = spider.AmmoCost;
         float damage = spider.Damage;
 
-        Vector2 fwd = Player.Forward;
-        Vector2 muzzleXZ = Player.Position + fwd * SpiderWeapon.MuzzleForward;
+        // The emitter sits out past the carapace along the craft's heading, and the shaft
+        // leaves down the full look line — the SPIDER's ring aims anywhere, up the face of
+        // a tower or down at the grid, unlike the tank's stopped-short gun.
+        Vector2 look = Player.Forward;
+        Vector2 muzzleXZ = Player.Position + look * SpiderWeapon.MuzzleForward;
         var origin = new Vector3(muzzleXZ.X, SpiderWeapon.MuzzleHeight + Player.Height, muzzleXZ.Y);
-        var dir = new Vector3(fwd.X, 0f, fwd.Y);
+        Vector3 dir = Player.Forward3;
 
         if (Player.Ammo < cost)
         {
@@ -1343,14 +1366,16 @@ public sealed class World
     public bool AnchorIsWeak { get; private set; }
 
     /// <summary>
-    /// Mouse look. Yaw runs into the same <see cref="PlayerTank.Heading"/> every chassis
-    /// uses, so everything downstream — the radar, the aim, the renderer — keeps working
-    /// unchanged; pitch belongs to the two chassis that own their own eye, the SOLDIER
-    /// and the FISH.
+    /// Mouse look, for every chassis. The yaw turns the whole craft — it runs into the
+    /// shared <see cref="PlayerTank.Heading"/> the same way on a body and a machine alike
+    /// — and the pitch cranes the eye as far as that chassis allows (see
+    /// <see cref="PlayerTank.Look"/>). Everything downstream reads the same
+    /// <see cref="PlayerTank.Forward"/> and <see cref="PlayerTank.Forward3"/>.
     ///
-    /// The sign on yaw is the one thing here worth stating: the camera renders +X on the
+    /// The sign is the one thing here worth stating: the camera renders +X on the
     /// <em>left</em> of the screen, so a heading increase swings the view left, and
-    /// pushing the mouse right therefore has to <em>decrease</em> the heading.
+    /// pushing the mouse right therefore has to <em>decrease</em> it — hence both deltas
+    /// go in negated.
     /// </summary>
     private void UpdateMouseLook()
     {
@@ -1365,9 +1390,7 @@ public sealed class World
         // threshold sits well above a genuine fast flick.
         if (MathF.Abs(delta.X) > MaxLookJump || MathF.Abs(delta.Y) > MaxLookJump) return;
 
-        Player.Heading -= delta.X * LookSensitivity;
-        Player.Pitch = Math.Clamp(Player.Pitch - delta.Y * LookSensitivity,
-            -PlayerTank.MaxPitch, PlayerTank.MaxPitch);
+        Player.Look(-delta.X * LookSensitivity, -delta.Y * LookSensitivity);
     }
 
     /// <summary>
@@ -2107,14 +2130,14 @@ public sealed class World
 
     private void SpawnProjectile(Vector2 origin, Vector2 dir, bool fromPlayer,
         bool grenade = false, bool crabBomb = false,
-        float launchHeight = Projectile.BoltHeight, bool laser = false)
+        float launchHeight = Projectile.BoltHeight, bool laser = false, float pitch = 0f)
     {
         foreach (var p in _projectiles)
         {
             if (p.Active) continue;
             if (crabBomb) p.FireCrabBomb(origin, dir);
             else if (grenade) p.FireGrenade(origin, dir, fromPlayer);
-            else p.Fire(origin, dir, fromPlayer, launchHeight, laser);
+            else p.Fire(origin, dir, fromPlayer, launchHeight, laser, pitch);
             // The report of a barrel firing — same clip for player and enemy
             // shots, since both spawn through here. The thrown core gets a heavier
             // launch thud instead of the light bolt report, and the SPIDER's laser its
@@ -2231,10 +2254,21 @@ public sealed class World
             }
             else
             {
-                // Enemy shot vs player — only bites when the player is grounded;
-                // the jump is the dodge (Doc 03), so an airborne craft is spared.
-                if (!Player.IsAirborne &&
-                    WithinHit(p.Position, Player.Position, PlayerTank.Radius))
+                // Enemy shot vs player. The hunters elevate onto the craft's height now,
+                // so a leaping player is no longer simply spared — the round has to arrive
+                // at the right place on the plane *and* the right height up the column, the
+                // craft's body centre give or take its own height. The jump is still a
+                // dodge, but by out-moving the shot in flight (no lead) rather than by the
+                // old blanket immunity the instant a wheel left the grid.
+                //
+                // A captured player is the one exception. Being airborne used to be what
+                // spared them while a set piece had them helpless; now that height no
+                // longer grants immunity, the cinematic hold has to say so outright — a
+                // player who cannot act must not be shot at by anything else.
+                float aimH = Player.Height + EnemyTank.AimHeight;
+                if (!Player.Captured
+                    && WithinHit(p.Position, Player.Position, PlayerTank.Radius)
+                    && MathF.Abs(p.Height - aimH) < EnemyHitVertical)
                 {
                     DamagePlayer(EnemyShotDamage);
                     p.Active = false;

@@ -17,10 +17,9 @@ public sealed class PlayerTank
     public float Heading;         // radians; 0 faces +Z (into the screen)
 
     /// <summary>
-    /// Where the eye is aimed vertically, in radians — positive is up. Zero on every
-    /// chassis but the SOLDIER, which is the only one that owns its own look: the rest
-    /// hold the standing tilt in <see cref="Config.CameraLookLift"/> and never move off
-    /// it, because a tank's gun points where the tank points and nowhere else.
+    /// Where the eye is aimed vertically, in radians — positive is up. Every chassis owns
+    /// this now; what differs is how far it is allowed to go, which
+    /// <see cref="LookElevation"/> decides.
     /// </summary>
     public float Pitch;
 
@@ -29,10 +28,61 @@ public sealed class PlayerTank
     /// and neither can flip the horizon over.</summary>
     public const float MaxPitch = 1.45f;
 
-    // Signed forward speed and angular velocity — carried between frames so
-    // the craft eases into motion and coasts to a stop rather than snapping.
+    // --- Where the craft points -------------------------------------------------
+    // The mouse turns the whole craft, on every chassis. It used to move a turret on top
+    // of the tank and the spider while A and D turned the hull under it, and that split —
+    // the view swinging one way and the body another — read as disorienting rather than
+    // as a turret. So the head was folded back into the hull: the mouse is now the only
+    // thing that turns you, A and D strafe, and the class differences that remain are how
+    // far the gun can crane and how its rounds fly, not who owns the yaw.
+
+    /// <summary>
+    /// How far the TANK's gun elevates: fifteen degrees either way, about what a gun in a
+    /// ring does. It is also the number that keeps the Maw-Core honest — its crystal hangs
+    /// at the top of a jump, and at this stop an arced bolt from the grid tops out well
+    /// under the strike band, so leaping at it stays the answer and sniping it from
+    /// underneath is not one.
+    /// </summary>
+    public const float TurretElevation = 0.26f;
+
+    /// <summary>
+    /// True on the two chassis that are machines rather than bodies — the TANK and the
+    /// SPIDER. They drive on a throttle and strafe on A/D; the two bodies (SOLDIER, FISH)
+    /// run their own rigs instead. What it still gates: the shallow gun elevation and the
+    /// arced cannon shell, both of which are the tank's alone.
+    /// </summary>
+    public bool IsMachine => Soldier == null && Fish == null;
+
+    /// <summary>How far the eye — and the gun with it — can crane up or down. The TANK's
+    /// gun is stopped short at <see cref="TurretElevation"/>; everything else looks the
+    /// full way, since a spider's ring, a soldier's neck and a fish's whole body all can.</summary>
+    public float LookElevation => IsMachine && Spider == null ? TurretElevation : MaxPitch;
+
+    /// <summary>
+    /// Turns the craft by a mouse frame's worth of yaw and pitch, both in radians — the
+    /// whole craft, on every chassis, since the mouse is now the only thing that steers.
+    /// Yaw runs straight into the shared <see cref="Heading"/> and pitch into the eye,
+    /// clamped to whatever this chassis can crane to.
+    /// </summary>
+    public void Look(float yaw, float pitch)
+    {
+        Heading += yaw;
+        Pitch = Math.Clamp(Pitch + pitch, -LookElevation, LookElevation);
+    }
+
+    /// <summary>
+    /// The elevation a round actually leaves at. Identical to <see cref="Pitch"/> in
+    /// ordinary play — you look and shoot along the same line — and clamped here anyway
+    /// because a cinematic writes <see cref="Pitch"/> outright and must not be able to
+    /// loose a shot at an angle the chassis cannot hold.
+    /// </summary>
+    public float GunElevation => Math.Clamp(Pitch, -LookElevation, LookElevation);
+
+    // Signed forward and lateral speed — carried between frames so the craft eases into
+    // motion and coasts to a stop rather than snapping. Strafe is the newer of the two:
+    // now that the mouse owns the turn, A and D step sideways instead of steering.
     private float _speed;
-    private float _turnRate;
+    private float _strafe;
     private float _verticalVel;
 
     // --- Feel tuning (units per second) ---
@@ -60,9 +110,11 @@ public sealed class PlayerTank
 
     public float TopSpeed => MaxSpeed * _speedScale;
 
-    private const float MaxTurn = 2.1f;     // rad/s
-    private const float TurnAccel = 6.5f;
-    private const float TurnDrag = 8.0f;
+    /// <summary>How much slower the craft steps sideways than it drives forward. A tank
+    /// on its tracks is happiest going where it points, so a strafe is a shove off to the
+    /// side rather than a second full-speed gear — enough to sidestep a shot, not enough
+    /// to circle-strafe a hunter the way a soldier can.</summary>
+    private const float StrafeFactor = 0.7f;
 
     private const float JumpVel = 17f;      // initial upward kick — a taller leap still
     private const float Gravity = 18f;      // upward pull → the rise still slows crisply
@@ -240,7 +292,7 @@ public sealed class PlayerTank
     public void ResetMomentum()
     {
         _speed = 0f;
-        _turnRate = 0f;
+        _strafe = 0f;
         _verticalVel = 0f;
         // The soldier's momentum lives in the rig, and a cinematic that has just put the
         // player back down must not hand them back a velocity from before it grabbed
@@ -297,7 +349,6 @@ public sealed class PlayerTank
             return;
         }
 
-        UpdateTurn(dt);
         UpdateDrive(dt);
         UpdateJump(dt);
 
@@ -305,10 +356,12 @@ public sealed class PlayerTank
         if (Hyper < MaxHyper)
             Hyper = MathF.Min(MaxHyper, Hyper + HyperRegen * dt);
 
-        // Apply planar motion along the current heading (no strafe: motion is
-        // always along the facing axis).
-        var dir = new Vector2(MathF.Sin(Heading), MathF.Cos(Heading));
-        Position += dir * _speed * dt;
+        // Planar motion: forward along the heading the mouse aims, plus a sideways step
+        // from the strafe. The heading itself is turned by the mouse (see Look), so there
+        // is no turn integration here any more — only the two throttles.
+        Vector2 fwd = Forward;                    // (sin h, cos h)
+        var right = new Vector2(-fwd.Y, fwd.X);   // screen-right on the plane, as the soldier uses it
+        Position += (fwd * _speed + right * _strafe) * dt;
 
         // The world is a torus: drive off one edge and you come back on the opposite
         // one. Fold the craft back into the wrap window every tick — the jump drift
@@ -329,8 +382,10 @@ public sealed class PlayerTank
         launchHeight = Projectile.BoltHeight;
         if (_fireCooldown > 0f || Ammo <= 0) return false;
 
+        // Along the craft's own heading, which the mouse now aims — the caller pairs this
+        // with GunElevation for the vertical half of the same look.
         direction = Forward;
-        origin = Position + direction * (Radius + 0.6f); // out past the nose
+        origin = Position + direction * (Radius + 0.6f); // out past the muzzle
         // Fired mid-jump, the bolt leaves the barrel level with the leaping craft
         // and sails out at that height — the airborne shot that can reach the boss's
         // raised core.
@@ -445,7 +500,7 @@ public sealed class PlayerTank
 
         Hyper -= HyperspaceCost;
         _speed = 0f;        // the warp kills momentum — you arrive dead-stopped
-        _turnRate = 0f;
+        _strafe = 0f;
         return true;
     }
 
@@ -486,43 +541,44 @@ public sealed class PlayerTank
         }
     }
 
-    private void UpdateTurn(float dt)
-    {
-        // Note the sign: the camera renders +X on the *left* of the screen, so a
-        // heading increase (toward +X) swings the view left. To make "turn left"
-        // actually look left, TurnLeft must *increase* heading and TurnRight
-        // decrease it — hence left is +1 here.
-        float input = 0f;
-        // Rooted (the spider winding its lance): no steering. The turn rate still
-        // bleeds off below, so a craft that was mid-turn settles rather than locking
-        // the instant the trigger goes down.
-        if (!Rooted && InputMap.TurnLeft) input += 1f;
-        if (!Rooted && InputMap.TurnRight) input -= 1f;
-
-        if (input != 0f)
-            _turnRate += input * TurnAccel * dt;
-        else
-            _turnRate = MoveToward(_turnRate, 0f, TurnDrag * dt);
-
-        _turnRate = Math.Clamp(_turnRate, -MaxTurn, MaxTurn);
-        Heading += _turnRate * dt;
-    }
-
+    /// <summary>
+    /// The two throttles: W/S along the heading, A/D across it. The heading itself is the
+    /// mouse's now, so nothing here turns the craft — A and D that used to steer step the
+    /// hull sideways instead. Both carry momentum, so the craft leans into a move and
+    /// coasts out of it rather than snapping, which is the whole of how the class drives.
+    /// </summary>
     private void UpdateDrive(float dt)
     {
-        float input = 0f;
-        if (!Rooted && InputMap.Forward) input += 1f;
-        if (!Rooted && InputMap.Back) input -= 1f;
+        // Forward / back.
+        float fwd = 0f;
+        if (!Rooted && InputMap.Forward) fwd += 1f;
+        if (!Rooted && InputMap.Back) fwd -= 1f;
 
-        if (input > 0f)
+        if (fwd > 0f)
             _speed += Accel * _speedScale * dt;
-        else if (input < 0f)
+        else if (fwd < 0f)
             _speed -= Accel * _speedScale * ReverseFactor * dt;
         else
             _speed = MoveToward(_speed, 0f, Drag * dt);
 
         float top = TopSpeed;
         _speed = Math.Clamp(_speed, -top * ReverseFactor, top);
+
+        // Strafe. The keys that once turned the craft — TurnLeft/TurnRight, so a rebind
+        // or a turn-swap still moves the hand the player expects — now shove it sideways.
+        // Left steps toward the craft's screen-right-negated side; the sign matches the
+        // (-fwd.Y, fwd.X) right axis the integrator applies it along, so D is right.
+        float lat = 0f;
+        if (!Rooted && InputMap.TurnRight) lat += 1f;
+        if (!Rooted && InputMap.TurnLeft) lat -= 1f;
+
+        if (lat != 0f)
+            _strafe += lat * Accel * _speedScale * dt;
+        else
+            _strafe = MoveToward(_strafe, 0f, Drag * dt);
+
+        float topLat = top * StrafeFactor;
+        _strafe = Math.Clamp(_strafe, -topLat, topLat);
     }
 
     private void UpdateJump(float dt)
@@ -560,8 +616,9 @@ public sealed class PlayerTank
     public Vector2 Forward => new(MathF.Sin(Heading), MathF.Cos(Heading));
 
     /// <summary>
-    /// The full look direction, pitch included. Identical to <see cref="Forward"/> laid
-    /// flat on every chassis but the SOLDIER, since nothing else can look up or down.
+    /// The full look direction, pitch included — the craft's heading laid over its eye
+    /// elevation. Everything that fires down the eye rather than flat along the plane
+    /// leaves along this.
     /// </summary>
     public Vector3 Forward3
     {
