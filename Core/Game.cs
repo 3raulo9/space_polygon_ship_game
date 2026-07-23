@@ -692,6 +692,65 @@ public sealed class Game : IDisposable
             if (swim == "spit" && _frame >= 6) _world.FireFishSpitForTest();
         }
 
+        // VIRUS capture. The exposed mote needs no staging — the naked frame is the picture
+        // — but every hosted state only exists after a possession, which in play means
+        // flying into a body. VOIDTANKS_CAPTURE_VIRUS picks the beat:
+        //   host   a hunter parked on the player on the first frame, worn by the second —
+        //          the decay meter full and the veins just starting in
+        //   rot    the same, with the meter drained low so the failing-host tear and the
+        //          OVERLOAD OR HOP shout can be photographed
+        //   crab   a Crab-Core raised and the mote flown into its gem, so the worn-crab
+        //          state (the CRAB meter, the high eye) can be photographed
+        //   lance  the same, with the broken lance fired — the only way to photograph the
+        //          shafts, which burn for half a second
+        //   maw    a Maw-Core raised and the mote flown into its crystal — the hovering
+        //          host, photographed at its own height
+        // Pair with VOIDTANKS_CLASS_INDEX=2 (which is what puts a virus in the seat).
+        string? virusBeat = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_VIRUS");
+        if (virusBeat != null && _world!.Player.Virus is { } virusRig)
+        {
+            if (virusBeat is "host" or "rot")
+            {
+                if (_frame == 1)
+                    _world.Enemies.Add(new EnemyTank(_world.Player.Position, elite: false));
+
+                // Drained through the same soak the sim bills damage through, a chunk a
+                // frame, so the meter the picture shows is one real fire could produce.
+                if (virusBeat == "rot" && virusRig.Hosted && virusRig.Decay > 0.22f)
+                    virusRig.AbsorbDamage(20f);
+            }
+
+            // The two monsters: raised on the first frame, entered on the second by
+            // standing the mote in the core — the possession itself runs through the same
+            // contact test play uses.
+            if (virusBeat is "crab" or "lance")
+            {
+                if (_frame == 1) _world.SpawnCrabAhead();
+                if (_frame == 2 && _world.Boss is { } crab)
+                {
+                    _world.Player.Position = crab.Position;
+                    _world.Player.Height = CrabCore.CoreHitHeight;
+                }
+                // Fired once the body has settled, angled down so at least the aimed
+                // shaft visibly meets the grid — the breaks go where they go.
+                if (virusBeat == "lance" && _frame == 30)
+                {
+                    _world.Player.Pitch = -0.2f;
+                    _world.FireVirusLanceForTest();
+                }
+            }
+
+            if (virusBeat == "maw")
+            {
+                if (_frame == 1) _world.SpawnMawAhead();
+                if (_frame == 2 && _world.Maw is { } mouth)
+                {
+                    _world.Player.Position = mouth.Position;
+                    _world.Player.Height = MawRig.CrystalWorldY;
+                }
+            }
+        }
+
         // Blast cinematic capture: stage a CRAB CORE detonation dead ahead on the first
         // frame, then grab it mid-swell (pair with VOIDTANKS_CAPTURE_FRAME≈40).
         if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_BLAST") != null && _frame == 1)

@@ -72,6 +72,15 @@ public sealed class World
     private const float GrenadeDamage = 4f;      // heavy round, dealt to all in the blast
     private const float EnemyShotDamage = 12f;   // vs player's 100-point shield
 
+    /// <summary>
+    /// How much harder a hit lands on a naked VIRUS mote than on a body. This is the price
+    /// of the whole class stated as one number: unhosted, the payload is fragile enough that
+    /// a single hunter's round is most of a life, which is what makes reaching the next body
+    /// a matter of survival rather than convenience. Ignored while a host is worn — there the
+    /// husk soaks the blow instead (see <see cref="Entities.VirusRig.AbsorbDamage"/>).
+    /// </summary>
+    public const float MoteVulnerability = 2.2f;
+
     /// <summary>Half-height of the band an enemy shot has to arrive in to bite the player,
     /// measured off the craft's body centre (<see cref="EnemyTank.AimHeight"/>). Wide
     /// enough to cover the hull and forgive a per-tick step of the bolt, tight enough that
@@ -100,12 +109,15 @@ public sealed class World
     private const float SpawnMinRange = 72f;
     private const float SpawnMaxRange = 120f;
 
-    // Hunters: keep at most this many on the field. Rolls come at a slow cadence, and
+    // Hunters: keep at most this many on the field. Rolls come at a brisk cadence, and
     // when the field is already full the farthest hunter (drifted off into the fog) is
     // let go so a fresh one can always resolve on the horizon — spawning never stalls.
-    private const int MaxEnemies = 4;
-    private const float EnemySpawnInterval = 9f;
-    private const float EnemySpawnChance = 0.5f;
+    // The field runs denser than it used to across the board: partly for the fight, and
+    // partly because one chassis now eats bodies to live — a VIRUS in a starved arena is
+    // a corpse with a timer.
+    private const int MaxEnemies = 6;
+    private const float EnemySpawnInterval = 6f;
+    private const float EnemySpawnChance = 0.7f;
     private const float EliteChance = 0.22f;
     private float _enemyTimer;
 
@@ -117,18 +129,21 @@ public sealed class World
     private const float BatteryShare = 0.6f;   // this fraction of new salvage is batteries
     private float _pickupTimer;
 
-    // The Crab-Core is rare: while none stalks the field, roll infrequently for one
-    // to rise out of the fog at a random bearing — never at a fixed spot.
-    private const float BossSpawnInterval = 18f;
-    private const float BossSpawnChance = 0.14f;
+    // The Crab-Core is no longer a rare boss — it is a regular inhabitant of the field:
+    // while none stalks it, roll often for one to rise out of the fog at a random
+    // bearing. Still only ever one at a time, because everything that reads a crab (the
+    // beam, the seizure, the renderer) reads *the* crab — the demotion is in how often
+    // it shows up, not in what it is.
+    private const float BossSpawnInterval = 10f;
+    private const float BossSpawnChance = 0.4f;
     private float _bossTimer;
 
     // The Maw-Core rolls on its own clock, independent of the crab's — the two are
     // different threats occupying different space (one on the grid, one in the air
-    // over it) and meeting both at once is a legitimate, if unkind, situation. Rarer
-    // than a crab: a thing that eats you should not be routine.
-    private const float MawSpawnInterval = 22f;
-    private const float MawSpawnChance = 0.11f;
+    // over it) and meeting both at once is now simply an ordinary evening. Like the
+    // crab it has stopped being an event and started being a neighbour.
+    private const float MawSpawnInterval = 11f;
+    private const float MawSpawnChance = 0.35f;
     private float _mawTimer;
 
     /// <summary>
@@ -260,6 +275,15 @@ public sealed class World
             if (acceptCombatInput && !Player.Captured) UpdateMouseLook();
         }
 
+        // The VIRUS is the same arrangement again: WASD is its movement — the mote's flight
+        // and the worn host's drive both read it — and the mouse is the look, the whole way
+        // up and down since the mote flies where it points.
+        if (Player.Virus is { } payload)
+        {
+            payload.MoveInput = ScriptedVirusMove ?? InputMap.VirusMove;
+            if (acceptCombatInput && !Player.Captured) UpdateMouseLook();
+        }
+
         // The machines — the TANK and the SPIDER — read the same mouse to turn the whole
         // craft, exactly as the two bodies above do. Their WASD is not touched here: it is
         // read straight from the keys in the drive step (W/S throttle, A/D strafe), so only
@@ -278,6 +302,8 @@ public sealed class World
                 UpdateSoldierTriggers(soldier, dt);
             else if (Player.Fish is { } swimmer)
                 UpdateFishTriggers(swimmer);
+            else if (Player.Virus is { } virusRig)
+                UpdateVirusTriggers(virusRig);
             else if (InputMap.Grenade)
                 FirePlayerGrenade();
             else if (InputMap.Fire)
@@ -299,7 +325,7 @@ public sealed class World
         // A soldier reading the crafting panel is not reeling, whatever the keys say, and
         // a fish reading it is not tearing through the water. The beds fade themselves out
         // the moment nothing feeds them.
-        if (!acceptCombatInput && (Player.Soldier != null || Player.Fish != null))
+        if (!acceptCombatInput && (Player.Soldier != null || Player.Fish != null || Player.Virus != null))
         {
             Audio.SetReel(false, 0f);
             Audio.SetWind(false, 0f);
@@ -321,6 +347,7 @@ public sealed class World
         // being drained rather than something that happens a tick later.
         if (Player.Soldier is { } rig) UpdateSoldierEvents(rig, dt);
         if (Player.Fish is { } body) UpdateFishEvents(body);
+        if (Player.Virus is { } payload) UpdateVirusEvents(payload);
 
         foreach (var e in Enemies)
         {
@@ -1237,25 +1264,34 @@ public sealed class World
     /// the old geometry about where a core is.
     /// </summary>
     private void BurnSpiderLance(SpiderWeapon spider, float damage)
-    {
-        var originXZ = new Vector2(spider.BeamOrigin.X, spider.BeamOrigin.Z);
+        => BurnBeamAlong(spider.BeamOrigin, spider.BeamDirection,
+            SpiderWeapon.BeamLength, SpiderWeapon.BeamRadius, damage);
 
-        // The emitter's charged beam is a lance, not a round: what it meets, it fells.
-        // Which is the payoff for standing rooted for two seconds while something walks
-        // at you — the SPIDER is the one chassis that can open a road through the city.
-        CutStructuresAlong(spider.BeamOrigin, spider.BeamDirection,
-            SpiderWeapon.BeamLength, SpiderWeapon.BeamRadius);
+    /// <summary>
+    /// Applies one fired beam of any owner's making to the world — the SPIDER's charged
+    /// lance and each shaft of the worn crab's broken one both come through here, so what a
+    /// beam can do is decided in exactly one place.
+    /// </summary>
+    private void BurnBeamAlong(Vector3 origin, Vector3 direction, float length, float radius,
+        float damage)
+    {
+        var originXZ = new Vector2(origin.X, origin.Z);
+
+        // A charged beam is a lance, not a round: what it meets, it fells. Which is the
+        // payoff for whatever the shot cost — two seconds rooted in the open, or a slice
+        // of the body the emitter is running on.
+        CutStructuresAlong(origin, direction, length, radius);
 
         // A hunter is treated as the standing block it is drawn as, not as a point:
         // the shaft has to pass within its planar radius *and* be somewhere between the
         // grid and the top of its hull where it does so. Which is what makes the two
-        // ways of firing the lance genuinely different — a grounded beam rakes a whole
-        // line of tanks, and a beam loosed at the top of a jump sails clean over them
-        // on its way to something's core.
-        var dirXZ = new Vector2(spider.BeamDirection.X, spider.BeamDirection.Z);
+        // ways of firing a lance genuinely different — a grounded beam rakes a whole
+        // line of tanks, and a beam loosed from height sails clean over them on its way
+        // to something's core.
+        var dirXZ = new Vector2(direction.X, direction.Z);
         float planar = dirXZ.Length();
         if (planar > 1e-4f) dirXZ /= planar;
-        float slope = planar > 1e-4f ? spider.BeamDirection.Y / planar : 0f;
+        float slope = planar > 1e-4f ? direction.Y / planar : 0f;
 
         foreach (var e in Enemies)
         {
@@ -1263,13 +1299,13 @@ public sealed class World
             // Nearest image across the torus, so a beam fired near the seam still burns
             // the hunter standing just over it.
             Vector2 near = Torus.NearestImage(e.Position, originXZ);
-            float along = Math.Clamp(Vector2.Dot(near - originXZ, dirXZ), 0f, SpiderWeapon.BeamLength);
+            float along = Math.Clamp(Vector2.Dot(near - originXZ, dirXZ), 0f, length);
             if (Vector2.Distance(near, originXZ + dirXZ * along)
-                > SpiderWeapon.BeamRadius + EnemyTank.Radius) continue;
+                > radius + EnemyTank.Radius) continue;
 
-            float beamY = spider.BeamOrigin.Y + slope * along;
-            if (beamY < -SpiderWeapon.BeamRadius
-                || beamY > EnemyTank.BodyHeight + SpiderWeapon.BeamRadius) continue;
+            float beamY = origin.Y + slope * along;
+            if (beamY < -radius
+                || beamY > EnemyTank.BodyHeight + radius) continue;
 
             DamageEnemy(e, damage);
         }
@@ -1278,9 +1314,9 @@ public sealed class World
         // finer than either weak point's own reach, so nothing can sit between samples.
         const float step = 1f;
         bool hitCore = false, hitCrystal = false;
-        for (float d = 0f; d <= SpiderWeapon.BeamLength && !(hitCore && hitCrystal); d += step)
+        for (float d = 0f; d <= length && !(hitCore && hitCrystal); d += step)
         {
-            Vector3 at = spider.BeamOrigin + spider.BeamDirection * d;
+            Vector3 at = origin + direction * d;
             var xz = new Vector2(at.X, at.Z);
 
             if (!hitCore && Boss is { } boss && boss.HitsCore(xz, at.Y))
@@ -1739,12 +1775,13 @@ public sealed class World
         Audio.PlayRocketLaunch();
     }
 
-    private void SpawnDirected(Vector3 origin, Vector3 dir, float speed, bool rocket)
+    private void SpawnDirected(Vector3 origin, Vector3 dir, float speed, bool rocket,
+        bool acid = false)
     {
         foreach (var p in _projectiles)
         {
             if (p.Active) continue;
-            p.FireDirected(origin, dir, speed, rocket);
+            p.FireDirected(origin, dir, speed, rocket, acid);
             return;
         }
     }
@@ -2030,6 +2067,333 @@ public sealed class World
     /// <summary>And for the spit.</summary>
     public void FireFishSpitForTest() => FireFishSpit();
 
+    // --- The VIRUS --------------------------------------------------------------
+
+    /// <summary>
+    /// The VIRUS's two triggers. Left fires whatever the current body fires — the mote's
+    /// and a worn hunter's corruption bolt, the worn maw's acid spit, or the worn crab's
+    /// broken lance. Right overloads the host into a bomb, and takes precedence on a frame
+    /// both are down: the committed spend wins, exactly as the grenade beats the cannon and
+    /// the strike beats the spit.
+    /// </summary>
+    private void UpdateVirusTriggers(VirusRig mote)
+    {
+        if (Player.Captured) return;
+
+        if (mote.Hosted && InputMap.VirusOverloadPressed)
+        {
+            OverloadVirus(mote);
+            return;   // it ejected — nothing else fires from a body that no longer exists
+        }
+
+        if (!InputMap.VirusFireDown) return;
+
+        if (mote.HostKind == VirusHost.Crab) FireVirusLance(mote);
+        else FireVirusRound(mote);
+    }
+
+    /// <summary>
+    /// A virus round down the eye's line. Cheap, fast, and usable in the middle of a dart or
+    /// a drive — nothing here touches the rig, so firing never breaks the flight. Routed
+    /// through the same directed-round path the soldier's rifle and the fish's spit use, so
+    /// it is blocked by the skyline, bites hunters and finds the two crystals identically.
+    /// Fired out of a worn maw it leaves as the mouth's own acid bolt instead — slower, and
+    /// unmistakably the monster's ordnance rather than a re-tinted rifle.
+    /// </summary>
+    private void FireVirusRound(VirusRig mote)
+    {
+        if (Seizure is { Held: true }) return;
+        if (!Player.TryFireVirus(out Vector3 origin, out Vector3 dir)) return;
+
+        // Inside the Maw-Core's throat every trigger is the escape trigger — there is
+        // nothing to aim at in a mouth.
+        if (Digestion is { } digestion && digestion.Held)
+        {
+            digestion.RegisterShot();
+            Audio.PlayLaser();
+            return;
+        }
+
+        bool acid = mote.HostKind == VirusHost.Maw;
+        SpawnDirected(origin, dir, acid ? AcidSpitSpeed : Projectile.RifleSpeed,
+            rocket: false, acid: acid);
+        Audio.PlayLaser();          // a dry corruption zap, the SPIDER's emitter clip
+        mote.Jolt(0.05f);
+    }
+
+    /// <summary>How fast a worn maw's acid bolt travels. Well under the rifle's ninety —
+    /// the monster's own spit has always been slow enough to walk away from, and its
+    /// stolen version keeps the family resemblance while staying usable as a weapon.</summary>
+    private const float AcidSpitSpeed = 48f;
+
+    /// <summary>
+    /// The stolen lance. The Crab-Core's own beam, fired by whatever is wearing the crab —
+    /// and it did not survive the theft intact. A corrupted core cannot hold a line, so one
+    /// trigger pull leaves as a main shaft thrown roughly (only roughly) where it was aimed
+    /// plus a spray of breaks in directions nobody chose, every one of them a genuine beam:
+    /// it cuts buildings down, rakes hunters, and finds the two crystals, exactly as the
+    /// intact weapon would. The bill is paid in the host itself — each discharge burns a
+    /// slice of the decay meter, and the rig lets a shot on the last of it finish the body.
+    /// </summary>
+    private void FireVirusLance(VirusRig mote)
+    {
+        if (Seizure is { Held: true } || Digestion is { Held: true }) return;
+        if (!mote.TryLance()) return;
+
+        Vector3 aim = Player.Forward3;
+
+        // The aimed shaft plus 2..4 breaks. The main one is jittered a touch off true —
+        // even the shot you meant is not quite the shot you get — and the breaks are
+        // thrown well off it, each on its own random axis.
+        //
+        // Each shaft carries two origins on purpose. The damage runs from just off the
+        // eye, so nothing standing at point-blank sits in a dead zone under the beam. The
+        // *picture* starts several units further out along the shaft's own line: its near
+        // end (cap, sheath and muzzle flare) is the widest thing in a first-person frame,
+        // several of them leave on one pull, and drawn from the eye they union into a wall
+        // of red the player fires blind through. Spreading the visual origins down each
+        // shaft's own direction also breaks the single shared ball into a visible fan.
+        int breaks = 2 + Random.Shared.Next(3);
+        for (int i = 0; i <= breaks; i++)
+        {
+            Vector3 dir = JitterDirection(aim, i == 0
+                ? 0.05f
+                : 0.18f + 0.45f * Random.Shared.NextSingle());
+            mote.AddShaft(Player.Eye + dir * 8f, dir);
+            BurnBeamAlong(Player.Eye + dir * 0.8f, dir, VirusRig.LanceLength,
+                VirusRig.LanceRadius, VirusRig.LanceDamage);
+        }
+
+        Audio.PlayUnstableLance();
+        mote.Jolt(0.3f);
+
+        // A shot fired on the last of the meter finished the host (see VirusRig.TryLance):
+        // the body it just burned out goes up around the player.
+        if (!mote.Hosted) StageVirusBurst(overload: false);
+    }
+
+    /// <summary>A unit direction thrown up to <paramref name="spread"/> radians off
+    /// <paramref name="dir"/>, on a random axis — how the broken lance decides where a
+    /// shaft actually goes.</summary>
+    private static Vector3 JitterDirection(Vector3 dir, float spread)
+    {
+        // A random perpendicular: cross with the axis least aligned to the direction, then
+        // roll it around the direction itself.
+        Vector3 seed = MathF.Abs(dir.Y) < 0.8f ? new Vector3(0f, 1f, 0f) : new Vector3(1f, 0f, 0f);
+        Vector3 side = Vector3.Normalize(Vector3.Cross(dir, seed));
+        float roll = Random.Shared.NextSingle() * MathF.Tau;
+        Vector3 axis = side * MathF.Cos(roll)
+                     + Vector3.Normalize(Vector3.Cross(dir, side)) * MathF.Sin(roll);
+
+        float off = spread * (0.35f + 0.65f * Random.Shared.NextSingle());
+        return Vector3.Normalize(dir * MathF.Cos(off) + axis * MathF.Sin(off));
+    }
+
+    /// <summary>
+    /// Spends the worn host as a detonation: the rig ejects the player back to the mote, and
+    /// the husk goes off as a corrupted energy burst — the very same radial star a thrown
+    /// CRAB CORE throws, which is exactly the right picture for a core forced to overload and
+    /// comes with its area damage already wired. One place, so the test hatch and the trigger
+    /// stage identical blasts.
+    /// </summary>
+    private void OverloadVirus(VirusRig mote)
+    {
+        // Guarded here rather than only at the trigger, so the test hatch can never stage
+        // a free detonation off a mote with no body to spend.
+        if (!mote.Hosted) return;
+        mote.Overload();
+        StageVirusBurst(overload: true);
+    }
+
+    /// <summary>
+    /// Drains the mote's events after the physics have run: the infection contact test, the
+    /// withering clock, the rush of flight, and the one ejection the world can only learn
+    /// about from a flag — the decay clock running out. The other ejections (an overload, a
+    /// host shot out from under the player, a lance fired on the last of the meter) are
+    /// staged at their source, because they happen at points in the tick where a flag
+    /// drained here would be a frame late or lost entirely.
+    /// </summary>
+    private void UpdateVirusEvents(VirusRig mote)
+    {
+        // While exposed, flying the mote into a body seizes it — checked every tick the
+        // way salvage collection is, so contact is enough and there is no button to fumble.
+        if (mote.Exposed) TryInfect(mote);
+
+        UpdateWithering(mote);
+
+        // The rush past the ears, fed off the rig's flight speed and left to fade on its
+        // own — the same bed the soldier's wind and the fish's wash ride.
+        Audio.SetWind(mote.PlanarSpeed > VirusRushSpeed,
+            Math.Clamp((mote.PlanarSpeed - VirusRushSpeed) / 20f, 0f, 1f));
+
+        if (mote.JustEjected) StageVirusBurst(overload: false);
+    }
+
+    /// <summary>
+    /// The mote coming apart in the open. The grace itself is free and mostly silent — a
+    /// low tick starts near its end, so the player is told before the first bite — and past
+    /// it the withering bills shield on a slow clock until a body is reached.
+    ///
+    /// The damage goes through <see cref="PlayerTank.TakeDamage"/> directly rather than
+    /// <see cref="DamagePlayer"/> on purpose: that path amplifies hits on an exposed mote,
+    /// which is a rule about <em>weapons</em> finding an unarmoured target. The withering
+    /// is not a weapon — it is the mote's own physiology, already tuned in this constant.
+    /// </summary>
+    private void UpdateWithering(VirusRig mote)
+    {
+        if (!mote.Exposed || Player.Captured) return;
+
+        // The courtesy tick as the grace runs out — rate-limited inside Audio, so it is
+        // safe to ask for on every tick of the last stretch.
+        if (!mote.Withering)
+        {
+            _witherTick = 0f;
+            if (mote.GraceRemaining < WitherWarnTime) Audio.PlayGasLow();
+            return;
+        }
+
+        _witherTick += (float)Config.FixedDt;
+        if (_witherTick < WitherTickInterval) return;
+        _witherTick -= WitherTickInterval;
+
+        Player.TakeDamage(WitherBite);
+        mote.Jolt(0.15f);
+        if (!Player.Alive) Audio.PlayExplosion();
+        else Audio.PlayWarning();
+    }
+
+    private float _witherTick;
+
+    /// <summary>How often the withering bites once the grace is spent. Twice a second, the
+    /// bloom's own cadence — discrete events the player can count, not a smooth drain.</summary>
+    private const float WitherTickInterval = 0.5f;
+
+    /// <summary>What one bite costs. Slow enough to cross most of the arena on after the
+    /// grace has already run out; fast enough that living unhosted is never a plan.</summary>
+    private const float WitherBite = 3f;
+
+    /// <summary>Seconds of grace left when the warning tick starts.</summary>
+    private const float WitherWarnTime = 5f;
+
+    /// <summary>
+    /// Seizes whatever body the mote has flown into, if any. The world owns this rather
+    /// than the rig because only the world knows what is out there — and every body is
+    /// <em>consumed</em>, not destroyed: no death blast, no debris, no fragment. A hunter
+    /// drops silently off the roster; a monster is simply no longer on the field, because
+    /// the player is now wearing it.
+    ///
+    /// The two big machines are entered the way everything else in this game reaches them:
+    /// through the bright core. The same geometry that scores a bullet on the crab's gem or
+    /// the maw's crystal admits a mote flown into it — the weak point is, for this one
+    /// class, a door.
+    /// </summary>
+    private void TryInfect(VirusRig mote)
+    {
+        if (Player.Captured) return;
+
+        // The Crab-Core, entered through the gem. Alive only — a dying rig mid-glitch is
+        // not a body anymore. The probe rides half a unit up the mote, roughly its middle.
+        if (Boss is { Alive: true } boss
+            && boss.HitsCore(Player.Position, Player.Height + 0.5f))
+        {
+            Player.Position = boss.Position;
+            Boss = null;                        // worn, not wrecked
+            mote.Possess(Player, VirusHost.Crab);
+            Audio.PlayMawSwallow();
+            Audio.PlayClamp();                  // the carapace closing around its new owner
+            return;
+        }
+
+        // The Maw-Core, entered through the crystal. The player keeps their height: they
+        // are the hovering mouth now, and it does not fall out of the sky on possession.
+        if (Maw is { Alive: true } maw
+            && maw.HitsCrystal(Player.Position, Player.Height + 0.5f))
+        {
+            Player.Position = maw.Position;
+            Maw = null;
+            mote.Possess(Player, VirusHost.Maw);
+            Audio.PlayMawSwallow();
+            return;
+        }
+
+        float reach = PlayerTank.Radius + EnemyTank.Radius + VirusRig.InfectMargin;
+        float reachSq = reach * reach;
+
+        EnemyTank? prey = null;
+        float best = reachSq;
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive) continue;
+            // The mote has to have come down onto the body, not merely be sailing overhead:
+            // a hunter is a thing on the grid, and taking one means diving to its level.
+            if (Player.Height > EnemyTank.BodyHeight + InfectVertical) continue;
+            float d = Torus.DistanceSquared(e.Position, Player.Position);
+            if (d < best) { best = d; prey = e; }
+        }
+
+        if (prey is null) return;
+
+        bool elite = prey.IsElite;
+        prey.TakeDamage(float.MaxValue);   // quietly consumed; RemoveAll clears it this tick
+        Player.Position = prey.Position;   // climb into where the body stood
+        mote.Possess(Player, elite ? VirusHost.Elite : VirusHost.Hunter);
+        Audio.PlayMawSwallow();            // a wet gulp — something climbing inside a body
+    }
+
+    /// <summary>How far off the grid the mote may be and still reach a hunter to infect —
+    /// low enough that seizing a body genuinely means diving onto it.</summary>
+    private const float InfectVertical = 2.5f;
+
+    /// <summary>
+    /// Dresses an ejection. An overload spends the whole host as the CRAB CORE's own radial
+    /// blast; a body that simply gave out throws off far less — a spatter of the mote's
+    /// colour and a dull report, and no area damage, because letting a host rot is never
+    /// rewarded the way deliberately spending one is.
+    /// </summary>
+    private void StageVirusBurst(bool overload)
+    {
+        if (overload)
+        {
+            StageCrabBlast(Player.Position);
+            return;
+        }
+
+        Debris.Burst(new Vector3(Player.Position.X, Player.Height + 1f, Player.Position.Y),
+            Palette.NeonMagenta, elite: false);
+        Audio.PlayDetonation();
+    }
+
+    /// <summary>Planar flight speed past which the mote's rush is audible at all.</summary>
+    private const float VirusRushSpeed = 16f;
+
+    /// <summary>
+    /// Capture harness and self-test only: a WASD to fly the mote or drive the host with
+    /// instead of the keyboard's. Screenshotting this chassis means holding a dart for a
+    /// second while speed builds, and there is nobody at the keys during a capture run.
+    /// </summary>
+    public Vector2? ScriptedVirusMove;
+
+    /// <summary>Fires the virus round without a mouse — the harness's and the self-test's
+    /// way in.</summary>
+    public void FireVirusRoundForTest()
+    {
+        if (Player.Virus is { } mote) FireVirusRound(mote);
+    }
+
+    /// <summary>Overloads the worn host without a mouse, through the same path the trigger
+    /// uses — so a test that drives an overload stages exactly the blast play does.</summary>
+    public void OverloadVirusForTest()
+    {
+        if (Player.Virus is { } mote) OverloadVirus(mote);
+    }
+
+    /// <summary>Fires the worn crab's broken lance without a mouse — the harness's and the
+    /// self-test's way in. Honours the cooldown and the decay cost exactly as a click does.</summary>
+    public void FireVirusLanceForTest()
+    {
+        if (Player.Virus is { } mote) FireVirusLance(mote);
+    }
+
     /// <summary>
     /// A rocket going off: the splash on everything nearby, and — alone among the
     /// player's ordnance short of a charged lance — the buildings inside the blast cut
@@ -2287,6 +2651,37 @@ public sealed class World
     /// </summary>
     private void DamagePlayer(float amount)
     {
+        // The VIRUS stands its worn host between itself and every blow: while a body is on,
+        // damage drains the host's integrity instead of the player's shield, and only what a
+        // broken husk fails to soak spills through. Exposed, it is the opposite — the naked
+        // mote takes it amplified, because a payload has no armour of its own.
+        if (Player.Virus is { } virus)
+        {
+            if (virus.Hosted)
+            {
+                amount = virus.AbsorbDamage(amount);
+                // A hit that emptied the meter burst the host: stage that here, at the
+                // moment it happens, because this pass runs after the tick's virus events
+                // and a flag drained there would be a frame late or lost.
+                if (!virus.Hosted) StageVirusBurst(overload: false);
+
+                if (amount <= 0f)
+                {
+                    // Wholly soaked: the body took it, the player didn't. A plain hit cue,
+                    // so a corrupted host being worn down still sounds like being shot at.
+                    Audio.PlayHit();
+                    return;
+                }
+                // The host broke and the overflow is about to reach a naked mote — it eats
+                // that spill amplified, the same as any exposed hit.
+                amount *= MoteVulnerability;
+            }
+            else
+            {
+                amount *= MoteVulnerability;
+            }
+        }
+
         Player.TakeDamage(amount);
 
         // A lost life that ends the run is still a destroyed craft.

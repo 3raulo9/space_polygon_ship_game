@@ -267,6 +267,53 @@ public static class Audio
         PlayClamp();
     }
 
+    /// <summary>
+    /// The worn Crab-Core's lance — the boss's own discharge fired through a corrupted
+    /// core, and nothing about it sits right. The main shot goes out detuned off true by a
+    /// fresh random amount every pull, with two more rolls of the same recipe under it
+    /// shoved a long way apart in pitch — a weapon audibly firing several ways at once,
+    /// which is exactly what the picture shows. Under that, the thrown core's grind and
+    /// metal layers do the work they were built for: failing machinery. And where the
+    /// intact lance carries a ghost of the boss's sung beam, this one gets a single sick,
+    /// warbling fragment of it — the choir is in there, but it is not singing anymore.
+    /// </summary>
+    public static void PlayUnstableLance()
+    {
+        if (!_enabled) return;
+
+        // The main discharge, off true — differently off true every time.
+        var main = SfxSynth.LanceFire(_sfxRng);
+        main.StartFreq *= 0.85f + (float)_sfxRng.NextDouble() * 0.35f;
+        main.EndFreq *= 0.6f + (float)_sfxRng.NextDouble() * 0.6f;
+        PlaySynth(main);
+
+        // The breaks: the same recipe again, thrown high and short and low and dragging —
+        // one roll per direction the beam visibly went.
+        var high = SfxSynth.LanceFire(_sfxRng);
+        high.StartFreq *= 1.5f;
+        high.EndFreq *= 1.8f;
+        high.Length *= 0.45f;
+        PlaySynth(high, 0.4f);
+
+        var low = SfxSynth.LanceFire(_sfxRng);
+        low.StartFreq *= 0.45f;
+        low.EndFreq *= 0.35f;
+        low.Length *= 1.4f;
+        PlaySynth(low, 0.5f);
+
+        // Machinery failing under the shot.
+        PlaySynth(SfxSynth.CrabBlastGrind(_sfxRng), 0.5f);
+        PlaySynth(SfxSynth.CrabBlastMetal(_sfxRng), 0.45f);
+
+        // The sung beam, sick: a short fragment bent a whole fourth downward mid-note.
+        var sung = SfxSynth.BeamAngelic(_sfxRng);
+        sung.Length = 0.5f;
+        sung.EndFreq = sung.StartFreq * 0.75f;
+        PlaySynth(sung, 0.2f);
+
+        PlayClamp();
+    }
+
     // --- Synthesised cues: built from nothing, fresh on every trigger ---------
     // These load no asset. SfxSynth rolls a new recipe each time and renders it to
     // .wav bytes in memory, so the sounds below never repeat themselves.

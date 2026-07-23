@@ -73,6 +73,16 @@ public static class SelfTest
         failures += Check("the bloom warns for ten metres before it bites", FishBloomWarnsFirst);
         failures += Check("the bloom costs shield and thins the water", FishBloomHurts);
         failures += Check("spit flies exactly where the crosshair points", FishSpitFliesTrue);
+        failures += Check("a virus opens exposed and flies where it looks", VirusMoteFliesWhereItLooks);
+        failures += Check("flying into a hunter wears it as a host", VirusInfectsOnContact);
+        failures += Check("a worn host rots out and ejects the mote", VirusHostRots);
+        failures += Check("a worn host soaks damage the shield never sees", VirusHostSoaksDamage);
+        failures += Check("a naked mote takes hits amplified", VirusMoteIsFragile);
+        failures += Check("an overload spends the whole host as a blast", VirusOverloadSpendsTheHost);
+        failures += Check("the virus round flies exactly where the crosshair points", VirusRoundFliesTrue);
+        failures += Check("an exposed mote withers only after its grace", VirusWithersAfterGrace);
+        failures += Check("the crab can be worn, and its lance breaks", VirusWearsTheCrab);
+        failures += Check("the maw can be worn, and it hovers", VirusWearsTheMaw);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1977,6 +1987,382 @@ public static class SelfTest
         var world = new World.World(loadout) { DynamicSpawning = false };
         world.Enemies.Clear();
         return world;
+    }
+
+    // --- The VIRUS: the mote and the bodies it wears -----------------------------
+
+    /// <summary>
+    /// The class's opening state and its one unique freedom. A virus starts exposed — the
+    /// naked mote, no host — and the mote flies where the crosshair points, which no other
+    /// chassis's W can claim: nose up and drive, and it gains genuine altitude with no
+    /// impulse, no arc and no cable involved.
+    /// </summary>
+    private static string? VirusMoteFliesWhereItLooks()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        if (!v.Exposed) return "a virus did not open exposed";
+        if (v.Hosted) return "a virus opened already wearing a body";
+
+        // Nose up the look and hold thrust: the mote climbs and travels along the bearing.
+        p.Pitch = 0.6f;
+        p.Heading = 0f;
+        v.MoveInput = new Vector2(0f, 1f);
+        Vector2 start = p.Position;
+
+        for (int i = 0; i < 60 * 2; i++) StepWithoutInput(world);
+
+        if (p.Height < 4f)
+            return $"two seconds of flying up the look only gained {p.Height:0.0}m";
+        Vector2 gone = Torus.Delta(start, p.Position);
+        if (gone.Y < 4f)
+            return $"the mote only covered {gone.Y:0.0}m along the bearing it was flown on";
+
+        // And letting go coasts it down, not on forever: drag is what keeps the mote a
+        // creature rather than a projectile.
+        v.MoveInput = Vector2.Zero;
+        float carried = v.Speed;
+        for (int i = 0; i < 60 * 2; i++) StepWithoutInput(world);
+        if (v.Speed >= carried * 0.6f)
+            return "two seconds of coasting cost the mote almost none of its speed";
+        return null;
+    }
+
+    /// <summary>
+    /// The infection. Contact is the whole mechanic — flying the mote into a hunter wears
+    /// it, with no button to press — and the body is <em>consumed</em>, not killed: it
+    /// leaves the roster without a death, and the player is standing where it stood with a
+    /// full decay meter on the clock.
+    /// </summary>
+    private static string? VirusInfectsOnContact()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        var prey = new Entities.EnemyTank(p.Position + new Vector2(0f, 2f), elite: false);
+        Vector2 stood = prey.Position;
+        world.Enemies.Add(prey);
+        StepWithoutInput(world);
+
+        if (!v.Hosted) return "contact with a hunter did not possess it";
+        if (world.Enemies.Count != 0) return "the worn hunter is still on the roster";
+        if (v.Decay < 0.99f) return $"a fresh host opened at {v.Decay:0.00} of its meter";
+        if (Torus.Distance(p.Position, stood) > 0.1f)
+            return "the player did not climb into where the body stood";
+        return null;
+    }
+
+    /// <summary>
+    /// The clock. A worn host rots out on time alone and ejects the mote — the rule that
+    /// makes a body a countdown rather than a home — and rotting out costs the player's own
+    /// shield nothing at all: the meter is the only thing the clock spends.
+    /// </summary>
+    private static string? VirusHostRots()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        PossessFreshHost(world);
+        if (!v.Hosted) return "the mote never took its host";
+        float shield = p.Shield;
+
+        int i = 0;
+        for (; i < 60 * 70 && v.Hosted; i++) StepWithoutInput(world);
+
+        if (v.Hosted) return "the host never rotted out";
+        // The advertised lifetime is most of a minute — a body that gave out in a few
+        // seconds untouched would make hosting pointless, and the clock is meant to be
+        // the rare way a host ends, not the usual one.
+        if (i < 60 * 30) return $"a clean host lasted only {i / 60f:0.0}s";
+        if (p.Shield < shield) return "rotting out cost the player shield";
+        if (!v.Exposed) return "the ejected mote is not exposed";
+        return null;
+    }
+
+    /// <summary>
+    /// The armour. While a host is worn, damage drains the host's meter and the player's
+    /// shield never sees it — proved by racing two identical hosted worlds, one under fire:
+    /// after the same time the shot-at host is visibly more rotten and both shields are
+    /// untouched. Plus the rig-level contract for a blow bigger than the whole body: the
+    /// husk breaks and only the overflow comes through.
+    /// </summary>
+    private static string? VirusHostSoaksDamage()
+    {
+        var under = VirusWorld();
+        var calm = VirusWorld();
+        PossessFreshHost(under);
+        PossessFreshHost(calm);
+        if (under.Player.Virus is not { Hosted: true } shot) return "the mote never took its host";
+        if (calm.Player.Virus is not { Hosted: true } idle) return "the control mote never took its host";
+
+        // The shooter, held at a stand-off range where its own AI keeps it — far outside
+        // the infect reach, close enough to land several hits over the window.
+        under.Enemies.Add(new Entities.EnemyTank(new Vector2(0f, 30f), elite: false));
+
+        float max = under.Player.MaxShield;
+        for (int i = 0; i < 60 * 8; i++)
+        {
+            StepWithoutInput(under);
+            StepWithoutInput(calm);
+        }
+
+        if (!shot.Hosted) return "eight seconds of hunter fire broke a whole host";
+        if (under.Player.Shield < max) return "a hosted player's shield was touched under fire";
+        if (shot.Decay >= idle.Decay - 0.02f)
+            return $"fire left the host at {shot.Decay:0.00} against the clock's own {idle.Decay:0.00} — nothing was soaked";
+
+        // And the overflow contract, at the rig: a blow past the body's whole capacity
+        // breaks it and passes only the remainder through.
+        var rig = new Entities.VirusRig();
+        var dummy = new Entities.PlayerTank(Vector2.Zero,
+            loadout: new Loadout { Class = PlayerClass.Virus });
+        rig.Possess(dummy, Entities.VirusHost.Hunter);
+        float over = rig.AbsorbDamage(10_000f);
+        if (rig.Hosted) return "a blow bigger than the whole body left the host standing";
+        if (over <= 0f || over >= 10_000f)
+            return $"a broken husk passed {over:0} of a 10000 blow through";
+        return null;
+    }
+
+    /// <summary>
+    /// The price. A naked mote takes hits amplified — the same hunter's round costs it well
+    /// over what a standard craft pays, which is the number the whole hop-or-die tension
+    /// hangs on. Measured against a tank control under identical fire rather than against a
+    /// copied constant, so retuning either side moves this check with it.
+    /// </summary>
+    private static string? VirusMoteIsFragile()
+    {
+        float moteLoss = FirstHitCost(new Loadout { Class = PlayerClass.Virus });
+        float tankLoss = FirstHitCost(new Loadout { Class = PlayerClass.Tank });
+
+        if (tankLoss <= 0f) return "no shot ever landed on the control tank";
+        if (moteLoss <= 0f) return "no shot ever landed on the exposed mote";
+        if (moteLoss < tankLoss * 1.5f)
+            return $"an exposed hit cost {moteLoss:0.0} against a tank's {tankLoss:0.0} — the mote is not fragile";
+        return null;
+    }
+
+    /// <summary>Shield lost to the first landed hit, for a given build standing still under
+    /// one hunter's fire at stand-off range.</summary>
+    private static float FirstHitCost(Loadout loadout)
+    {
+        var world = new World.World(loadout) { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Enemies.Add(new Entities.EnemyTank(new Vector2(0f, 30f), elite: false));
+
+        float max = world.Player.MaxShield;
+        for (int i = 0; i < 60 * 15 && world.Player.Shield >= max; i++)
+            StepWithoutInput(world);
+        return max - world.Player.Shield;
+    }
+
+    /// <summary>
+    /// The heavy. An overload spends the worn host outright: the player is ejected on the
+    /// spot and the body goes off as the radial blast, which kills what is standing near
+    /// it. And the other half of the guard — with no host there is nothing to spend, so the
+    /// trigger stages nothing at all.
+    /// </summary>
+    private static string? VirusOverloadSpendsTheHost()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        // Exposed, the overload must refuse: no host, no bomb.
+        world.OverloadVirusForTest();
+        if (world.Blasts.Count != 0) return "an overload with no host staged a blast";
+
+        PossessFreshHost(world);
+        if (!v.Hosted) return "the mote never took its host";
+
+        var victim = new Entities.EnemyTank(p.Position + new Vector2(0f, 8f), elite: false);
+        world.Enemies.Add(victim);
+
+        world.OverloadVirusForTest();
+        if (!v.Exposed) return "the overload did not eject the player";
+        if (world.Blasts.Count != 1) return $"the overload staged {world.Blasts.Count} blasts";
+
+        for (int i = 0; i < 240 && victim.Alive; i++) StepWithoutInput(world);
+        if (victim.Alive) return "the spent host's blast left a point-blank hunter standing";
+        return null;
+    }
+
+    /// <summary>
+    /// The same property the rifle and the spit have to have, for the same reason: a
+    /// mouse-aimed weapon whose aim, eye, muzzle offset and flight are four separate pieces
+    /// of arithmetic. Checked at steep pitches especially — the mote fires down its whole
+    /// flight line, so "up" is not a rare case on this chassis, it is the ordinary one.
+    /// </summary>
+    private static string? VirusRoundFliesTrue()
+    {
+        foreach (float pitch in new[] { 0f, 0.22f, -0.4f, 0.9f })
+        {
+            var world = VirusWorld();
+            var p = world.Player;
+            p.Pitch = pitch;
+            // Up in the mote's own air, so a steeply downward round has flight to measure
+            // before it correctly buries itself in the grid.
+            p.Height = 20f;
+
+            Vector3 eye = p.Eye;
+            Vector3 aim = p.Forward3;
+
+            world.FireVirusRoundForTest();
+            StepWithoutInput(world);
+            StepWithoutInput(world);
+
+            Entities.Projectile? round = null;
+            foreach (var q in world.Projectiles)
+                if (q.Active && q.IsTracer) { round = q; break; }
+            if (round == null) return $"no round in the air at pitch {pitch:0.00}";
+
+            var at = new Vector3(round.Position.X, round.Height, round.Position.Y);
+            Vector3 fromEye = at - eye;
+            float along = Vector3.Dot(fromEye, aim);
+            if (along < 1f) return $"the round went nowhere at pitch {pitch:0.00}";
+
+            float off = Vector3.Distance(fromEye, aim * along);
+            float error = MathF.Atan2(off, along);
+            if (error > 0.02f)
+                return $"at pitch {pitch:0.00} the round flies {error:0.000} rad off the aim";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The mote's own clock. The grace is genuinely free — a mote can sit exposed for
+    /// nearly all of it and never be billed — and past it the withering bites until a body
+    /// is reached, at which point the clock is handed back whole. Lose either half and the
+    /// state stops meaning what it says: a grace that bills is just damage with a delay,
+    /// and a withering that possession doesn't cure is a death sentence with extra steps.
+    /// </summary>
+    private static string? VirusWithersAfterGrace()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        // Most of the grace, sitting still in the open: free.
+        float max = p.MaxShield;
+        int safe = (int)((Entities.VirusRig.ExposureGrace - 1f) * 60f);
+        for (int i = 0; i < safe; i++) StepWithoutInput(world);
+        if (v.Withering) return "the withering started inside the grace";
+        if (p.Shield < max) return "the mote was billed inside its grace";
+
+        // Past it: the bites start and keep coming.
+        for (int i = 0; i < 60 * 4; i++) StepWithoutInput(world);
+        if (!v.Withering) return "the grace ran out and nothing started";
+        if (p.Shield >= max) return "four seconds of withering cost no shield";
+
+        // And a body ends it on the spot.
+        PossessFreshHost(world);
+        if (!v.Hosted) return "a withering mote could not take a host";
+        if (v.Withering) return "possession did not stop the withering";
+        float shield = p.Shield;
+        for (int i = 0; i < 60 * 2; i++) StepWithoutInput(world);
+        if (p.Shield < shield) return "a hosted mote went on withering";
+        return null;
+    }
+
+    /// <summary>
+    /// The big prize. The Crab-Core is entered through its gem — the same weak point a
+    /// bullet needs, used as a door — it leaves the field worn rather than wrecked, and
+    /// the weapon that comes with it is its own lance gone wrong: one pull costs a slice
+    /// of the meter and leaves several shafts burning, and the aimed one stays honest
+    /// enough to kill what the crosshair was actually on.
+    /// </summary>
+    private static string? VirusWearsTheCrab()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        world.SpawnCrabAhead();
+        if (world.Boss is not { } crab) return "no crab was raised to wear";
+
+        // Fly the mote into the gem.
+        p.Position = crab.Position;
+        p.Height = Entities.CrabCore.CoreHitHeight;
+        StepWithoutInput(world);
+
+        if (v.HostKind != Entities.VirusHost.Crab)
+            return "standing in the core did not possess the crab";
+        if (world.Boss != null) return "the worn crab is still on the field";
+
+        // Let the body settle onto the grid, then stand a hunter out in front and fire
+        // the lance down at it from the crab's high eye.
+        for (int i = 0; i < 90; i++) StepWithoutInput(world);
+
+        var victim = new Entities.EnemyTank(
+            Torus.Wrap(p.Position + new Vector2(0f, 18f)), elite: false);
+        world.Enemies.Add(victim);
+        p.Heading = 0f;
+        p.Pitch = MathF.Atan2(Entities.EnemyTank.AimHeight - p.EyeHeight, 18f);
+
+        float decay = v.Decay;
+        world.FireVirusLanceForTest();
+
+        if (v.Decay >= decay) return "a lance discharge cost the host nothing";
+        int shafts = 0;
+        foreach (var s in v.Shafts) if (s.Life > 0f) shafts++;
+        if (shafts < 3) return $"the broken lance left only {shafts} shafts burning";
+        if (victim.Alive) return "the aimed shaft missed the hunter under the crosshair";
+        return null;
+    }
+
+    /// <summary>
+    /// The other one. The Maw-Core is entered through its crystal, and what you get is the
+    /// monster's own life: a body that hovers — two seconds untouched and it has not sunk
+    /// to the grid — and a spit that leaves as the mouth's acid bolt rather than a
+    /// re-tinted rifle round.
+    /// </summary>
+    private static string? VirusWearsTheMaw()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        world.SpawnMawAhead();
+        if (world.Maw is not { } mouth) return "no maw was raised to wear";
+
+        p.Position = mouth.Position;
+        p.Height = Entities.MawRig.CrystalWorldY;
+        StepWithoutInput(world);
+
+        if (v.HostKind != Entities.VirusHost.Maw)
+            return "standing in the crystal did not possess the maw";
+        if (world.Maw != null) return "the worn maw is still on the field";
+
+        for (int i = 0; i < 60 * 2; i++) StepWithoutInput(world);
+        if (p.Height < 1.5f) return $"a worn maw sank to {p.Height:0.0} — it is not hovering";
+
+        world.FireVirusRoundForTest();
+        StepWithoutInput(world);
+        foreach (var q in world.Projectiles)
+            if (q.Active && q.IsAcid) return null;
+        return "the worn maw's spit is not an acid bolt";
+    }
+
+    /// <summary>A stage with a virus in it and nothing else moving, so the checks above are
+    /// measuring the mote and not a firefight.</summary>
+    private static World.World VirusWorld()
+    {
+        var loadout = new Loadout { Class = PlayerClass.Virus };
+        var world = new World.World(loadout) { DynamicSpawning = false };
+        world.Enemies.Clear();
+        return world;
+    }
+
+    /// <summary>Parks a hunter on the player and steps once, so the mote takes it — the
+    /// standard way into the hosted state for the checks above.</summary>
+    private static void PossessFreshHost(World.World world)
+    {
+        world.Enemies.Add(new Entities.EnemyTank(world.Player.Position, elite: false));
+        StepWithoutInput(world);
     }
 
     // --- helpers: advance the sim without going through global input ---

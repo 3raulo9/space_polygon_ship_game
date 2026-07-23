@@ -47,11 +47,11 @@ public sealed class PlayerTank
 
     /// <summary>
     /// True on the two chassis that are machines rather than bodies — the TANK and the
-    /// SPIDER. They drive on a throttle and strafe on A/D; the two bodies (SOLDIER, FISH)
-    /// run their own rigs instead. What it still gates: the shallow gun elevation and the
-    /// arced cannon shell, both of which are the tank's alone.
+    /// SPIDER. They drive on a throttle and strafe on A/D; the three bodies (SOLDIER, FISH,
+    /// VIRUS) run their own rigs instead. What it still gates: the shallow gun elevation and
+    /// the arced cannon shell, both of which are the tank's alone.
     /// </summary>
-    public bool IsMachine => Soldier == null && Fish == null;
+    public bool IsMachine => Soldier == null && Fish == null && Virus == null;
 
     /// <summary>How far the eye — and the gun with it — can crane up or down. The TANK's
     /// gun is stopped short at <see cref="TurretElevation"/>; everything else looks the
@@ -172,14 +172,25 @@ public sealed class PlayerTank
     public FishRig? Fish { get; private set; }
 
     /// <summary>
+    /// The VIRUS chassis, or null on every other. Replaces the physics outright the way the
+    /// soldier's and the fish's rigs do, and swings between two of them: a naked mote in free
+    /// flight, or a hunter worn as a suit. While it exists there is no throttle, no jump arc
+    /// and no heading momentum of the craft's own — only whichever of the rig's two states
+    /// currently owns the transform.
+    /// </summary>
+    public VirusRig? Virus { get; private set; }
+
+    /// <summary>
     /// How high the eye sits above the craft's own origin. A tank's camera rides up on
     /// the hull; a soldier is a person standing on the grid, and dropping the eye to
     /// head height is most of what makes the same city read as something you are small
     /// inside rather than something you drive past. A fish is smaller still and its
-    /// position <em>is</em> its body, so the eye barely clears the origin at all.
+    /// position <em>is</em> its body, so the eye barely clears the origin at all. A virus
+    /// moves its eye between the two: low on the mote, up on the hull of a worn host.
     /// </summary>
     public float EyeHeight => Soldier != null ? SoldierRig.EyeHeight
                             : Fish != null ? FishRig.EyeHeight
+                            : Virus != null ? Virus.EyeHeight
                             : Config.CameraHeight;
 
     // --- Rockets: the SOLDIER's right trigger --------------------------------
@@ -264,6 +275,7 @@ public sealed class PlayerTank
             Rockets = MaxRockets;
         }
         if (Class == PlayerClass.Fish) Fish = new FishRig();
+        if (Class == PlayerClass.Virus) Virus = new VirusRig();
 
         Shield = MaxShield;
         Hyper = MaxHyper;
@@ -306,6 +318,8 @@ public sealed class PlayerTank
         // the fields above. A cinematic that has just put one back down must not hand it
         // back the sprint it was in the middle of several seconds ago.
         if (Fish is { } body) body.Velocity = Vector3.Zero;
+        // ...and a virus, whose flight momentum lives in its own rig for the same reason.
+        if (Virus is { } mote) mote.Velocity = Vector3.Zero;
     }
 
     public void Update(float dt)
@@ -346,6 +360,15 @@ public sealed class PlayerTank
             body.Step(dt, this);
             if (body.Recovering && Hyper < MaxHyper)
                 Hyper = MathF.Min(MaxHyper, Hyper + FishRig.GlideRegen * dt);
+            return;
+        }
+
+        // The VIRUS owns the transform for the same reason, and reads no reserve at all: the
+        // thing this class rations is not gas or breath but <em>bodies</em>, which live in
+        // the rig's own decay clock rather than in the Hyper bar.
+        if (Virus is { } mote)
+        {
+            mote.Step(dt, this);
             return;
         }
 
@@ -483,6 +506,30 @@ public sealed class PlayerTank
     /// deliberately chip damage rather than a second kill button.
     /// </summary>
     private const float SpitInterval = 0.14f;
+
+    /// <summary>
+    /// The VIRUS's round, down the eye's line — the mote's spit and the worn host's cannon
+    /// are the same corruption bolt thrown by whatever the player currently is. Identical in
+    /// damage and cadence in both states on purpose: this class's power is positional and
+    /// explosive (survive by hopping bodies, spend one as an overload), never raw firepower,
+    /// exactly the way the SPIDER's laser is "the same damage as the bullet". Costs a
+    /// magazine round like everything else, so the AMMO track goes on meaning what it means.
+    /// </summary>
+    public bool TryFireVirus(out Vector3 origin, out Vector3 direction)
+    {
+        origin = default;
+        direction = Forward3;
+        if (_fireCooldown > 0f || Ammo <= 0) return false;
+
+        origin = Eye + direction * (Radius + 0.4f);
+        _fireCooldown = VirusFireInterval;
+        Ammo--;
+        return true;
+    }
+
+    /// <summary>Cadence of the virus round — the soldier's rifle pace, so it is usable in the
+    /// middle of a dart or a drive without ever being a stream that trivialises the field.</summary>
+    private const float VirusFireInterval = 0.11f;
 
     /// <summary>
     /// Panic-warp: drains the bulk of the Hyper reserve and flings the craft to a
@@ -641,6 +688,8 @@ public sealed class PlayerTank
         ? Math.Clamp(rig.PlanarSpeed / TopSpeed, 0f, 1f)
         : Fish is { } body
         ? Math.Clamp(body.PlanarSpeed / TopSpeed, 0f, 1f)
+        : Virus is { } mote
+        ? Math.Clamp(mote.PlanarSpeed / TopSpeed, 0f, 1f)
         : Math.Abs(_speed) / TopSpeed;
 
     // --- 0..1 fractions for the HUD bars ---

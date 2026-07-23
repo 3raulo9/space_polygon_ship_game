@@ -146,6 +146,25 @@ public static class InputMap
     /// through.</summary>
     public static bool StrikePressed => Raylib.IsMouseButtonPressed(MouseButton.Right);
 
+    // --- The VIRUS -----------------------------------------------------------
+    // The same first-person body scheme as the soldier and the fish, because it is the same
+    // hand: the mouse aims, WASD moves. What differs is that this chassis never throws a hook
+    // or beats a tail — it just flies and it just fires — so it needs only three reads.
+
+    /// <summary>Raw WASD as (strafe, forward), each -1..1 — the mote's flight and the worn
+    /// host's drive both take it. A body, not a vehicle: A and D step sideways, since the
+    /// mouse already owns the turn. Shares the soldier's reading, physical keys only.</summary>
+    public static System.Numerics.Vector2 VirusMove => SoldierMove;
+
+    /// <summary>Left mouse: fire. The mote spits a weak round; a worn host fires its cannon.
+    /// Held is fine — the cadence paces it.</summary>
+    public static bool VirusFireDown => Raylib.IsMouseButtonDown(MouseButton.Left);
+
+    /// <summary>Right mouse: overload the host into a bomb. A press, not a hold — it spends
+    /// the whole body at once, which is not a thing to hold a button through. Dead while a
+    /// mote, which has no host to spend.</summary>
+    public static bool VirusOverloadPressed => Raylib.IsMouseButtonPressed(MouseButton.Right);
+
     /// <summary>
     /// The four equip slots, wired to the physical R / T / Y / U row above the
     /// movement keys. Returns which one was just pressed (0..3) or -1 for none — the
