@@ -98,7 +98,10 @@ public sealed class Game : IDisposable
             // A soldier is exempt: the world has already stood them in front of the
             // tower they open on, and turning them to look at a hunter somewhere out in
             // the fog throws away the one thing a picture of that chassis has to show.
-            Vector2? subject = _world!.Player.Soldier != null ? null
+            // A fish is exempt for the same reason a soldier is, and more so: it opens
+            // thirty metres up looking out across the city, and swinging it round to face
+            // a hunter crawling about on the grid throws away the entire picture.
+            Vector2? subject = _world!.Player.Soldier != null || _world.Player.Fish != null ? null
                 : _world.Maw?.Position
                 ?? (Vector2?)_world.Boss?.Position
                 ?? (_world.Enemies.Count > 0 ? _world.Enemies[0].Position : null);
@@ -265,18 +268,18 @@ public sealed class Game : IDisposable
     /// low-res target instead, so the pointer is made of the same fat pixels as the rest
     /// of the picture rather than sitting crisply on top of it.
     ///
-    /// The SOLDIER additionally needs the pointer <em>captured</em>: its look is driven
-    /// by relative mouse movement, which means the real cursor has to be locked to the
-    /// window centre or it walks off the edge of the screen mid-swing and the head stops
-    /// turning. Captured only while that chassis is actually driving — the pause panel,
-    /// the pack and every menu hand the mouse back.
+    /// The two mouse-aimed chassis — the SOLDIER and the FISH — additionally need the
+    /// pointer <em>captured</em>: their look is driven by relative mouse movement, which
+    /// means the real cursor has to be locked to the window centre or it walks off the edge
+    /// of the screen mid-swing and the head stops turning. Captured only while one of them
+    /// is actually driving — the pause panel, the pack and every menu hand the mouse back.
     /// </summary>
     private void SyncCursor()
     {
         bool wantCapture = _state == GameState.Playing
                         && !_inventoryOpen
                         && !_fading
-                        && _world?.Player.Soldier != null;
+                        && (_world?.Player.Soldier != null || _world?.Player.Fish != null);
 
         if (wantCapture == _mouseCaptured)
         {
@@ -641,6 +644,51 @@ public sealed class Game : IDisposable
             // rocket and none of the rifle.
             if (hook == "shoot" && _frame >= 6) _world.FireSoldierRifleForTest();
             if (hook == "rocket" && _frame == 6) _world.FireSoldierRocketForTest();
+        }
+
+        // FISH capture. The same scripting problem the soldier has, for the same reason:
+        // what is worth photographing on this chassis — a body carving hard between two
+        // towers, a strike mid-flight, the bloom staining the top of the frame — only
+        // exists several seconds into a swim a human has to fly. So the hatch swims it.
+        // VOIDTANKS_CAPTURE_SWIM picks the beat:
+        //   cruise  a level sprint, murk and bubbles up, the lantern trailing
+        //   carve   the same, rolled hard over, the horizon on its side
+        //   strike  the lunge, mid-flight, everything pinned flat
+        //   bloom   nosed up into the ceiling, alarmed and stained
+        //   beach   down on the deck, flopping, the drained wash over everything
+        // Pair with VOIDTANKS_CLASS_INDEX=3 (which is what puts a fish in the seat) and a
+        // CAPTURE_FRAME late enough for the beat to have arrived.
+        string? swim = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_SWIM");
+        if (swim != null && _world!.Player.Fish is { } fishBody)
+        {
+            // Beat on the tail's own cadence for the whole run-up: it is an impulse, so
+            // there is no key to hold and speed only exists if the harness keeps supplying
+            // it. Everything but the beach beat needs the speed under it.
+            if (swim != "beach" && _frame % 17 == 0) _world.BeatFishForTest();
+
+            // A carve is a held roll, and a full one takes most of a second to wind in —
+            // which is exactly why it has to be scripted rather than poked in on the grab
+            // frame. Fed through the world for the same reason the soldier's reel is: the
+            // sim reads the keys into MoveInput at the top of every step, so anything
+            // written straight onto the rig is overwritten before it can do anything.
+            if (swim == "carve") _world.ScriptedFishMove = new Vector2(1f, 0f);
+
+            // Nose up and hold it: the thin water fights back, so reaching the bloom takes
+            // a sustained climb rather than a frame of pitch.
+            if (swim == "bloom") _world.Player.Pitch = 0.55f;
+
+            // ...and the opposite, driven into the grid hard enough to be a real beaching
+            // rather than a settle.
+            if (swim == "beach")
+            {
+                _world.Player.Pitch = -0.9f;
+                if (_frame % 9 == 0) _world.BeatFishForTest();
+            }
+
+            // The lunge is over in four tenths of a second, so it is thrown late and on
+            // one exact frame — anything earlier and the grab lands during the recovery.
+            if (swim == "strike" && _frame == 70) _world.StrikeFishForTest();
+            if (swim == "spit" && _frame >= 6) _world.FireFishSpitForTest();
         }
 
         // Blast cinematic capture: stage a CRAB CORE detonation dead ahead on the first

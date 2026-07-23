@@ -142,6 +142,11 @@ public sealed class World
         // whole loop is anchors would open on a minute of walking. So it starts within
         // one cable's throw of the nearest tower, looking straight at it.
         if (Player.Soldier != null) StandTheSoldierInTheCity();
+        // And a fish does not start on the seabed. Opening beached would put the player's
+        // first ten seconds in the one state the entire chassis is designed around
+        // escaping — so it opens already swimming, up level with the middle of the towers,
+        // with speed on the clock and the city laid out beneath it.
+        if (Player.Fish != null) SwimTheFishOffTheDeck();
 
         _projectiles = new Projectile[MaxProjectiles];
         for (int i = 0; i < _projectiles.Length; i++)
@@ -236,7 +241,17 @@ public sealed class World
         if (Player.Soldier is { } rig)
         {
             rig.MoveInput = ScriptedSoldierMove ?? InputMap.SoldierMove;
-            if (acceptCombatInput && !Player.Captured) UpdateSoldierLook();
+            if (acceptCombatInput && !Player.Captured) UpdateMouseLook();
+        }
+
+        // The FISH is the same arrangement with a different pair of keys: A/D roll the
+        // body and S folds the fins. The beat is not read here because it is not a state
+        // — it is an event, and it belongs with the triggers below.
+        if (Player.Fish is { } body)
+        {
+            body.MoveInput = ScriptedFishMove
+                ?? new Vector2(InputMap.RollInput, InputMap.BrakeDown ? 1f : 0f);
+            if (acceptCombatInput && !Player.Captured) UpdateMouseLook();
         }
 
         if (acceptCombatInput)
@@ -249,6 +264,8 @@ public sealed class World
                 UpdateSpiderTriggers(spider, dt);
             else if (Player.Soldier is { } soldier)
                 UpdateSoldierTriggers(soldier, dt);
+            else if (Player.Fish is { } swimmer)
+                UpdateFishTriggers(swimmer);
             else if (InputMap.Grenade)
                 FirePlayerGrenade();
             else if (InputMap.Fire)
@@ -267,9 +284,10 @@ public sealed class World
             Player.Rooted = false;
         }
 
-        // A soldier reading the crafting panel is not reeling, whatever the keys say.
-        // The beds fade themselves out the moment nothing feeds them.
-        if (!acceptCombatInput && Player.Soldier != null)
+        // A soldier reading the crafting panel is not reeling, whatever the keys say, and
+        // a fish reading it is not tearing through the water. The beds fade themselves out
+        // the moment nothing feeds them.
+        if (!acceptCombatInput && (Player.Soldier != null || Player.Fish != null))
         {
             Audio.SetReel(false, 0f);
             Audio.SetWind(false, 0f);
@@ -290,6 +308,7 @@ public sealed class World
         // After the collision pass, so a swing that ended in a wall is one of the events
         // being drained rather than something that happens a tick later.
         if (Player.Soldier is { } rig) UpdateSoldierEvents(rig, dt);
+        if (Player.Fish is { } body) UpdateFishEvents(body);
 
         foreach (var e in Enemies)
         {
@@ -570,8 +589,11 @@ public sealed class World
 
                 // For a soldier this is not a scrape but a possible crash: meeting a wall
                 // at speed is the way this chassis dies, and the rig decides which of the
-                // two just happened from the momentum it was carrying.
+                // two just happened from the momentum it was carrying. A fish threading a
+                // reef is the same bargain at a lower threshold — it has no armour and the
+                // whole run is spent at speed between buildings.
                 Player.Soldier?.RegisterWallHit();
+                Player.Fish?.RegisterWallHit();
             }
         }
     }
@@ -1323,13 +1345,14 @@ public sealed class World
     /// <summary>
     /// Mouse look. Yaw runs into the same <see cref="PlayerTank.Heading"/> every chassis
     /// uses, so everything downstream — the radar, the aim, the renderer — keeps working
-    /// unchanged; pitch is the SOLDIER's alone.
+    /// unchanged; pitch belongs to the two chassis that own their own eye, the SOLDIER
+    /// and the FISH.
     ///
     /// The sign on yaw is the one thing here worth stating: the camera renders +X on the
     /// <em>left</em> of the screen, so a heading increase swings the view left, and
     /// pushing the mouse right therefore has to <em>decrease</em> the heading.
     /// </summary>
-    private void UpdateSoldierLook()
+    private void UpdateMouseLook()
     {
         Vector2 delta = InputMap.LookDelta;
         if (delta == Vector2.Zero) return;
@@ -1702,6 +1725,287 @@ public sealed class World
             return;
         }
     }
+
+    // --- The FISH ---------------------------------------------------------------
+
+    /// <summary>
+    /// Where a fish opens the run. Not at the origin on the deck — a chassis whose entire
+    /// design is about never touching the grid must not begin by touching it — but up
+    /// level with the middle of the skyline, already moving, looking out across the city
+    /// it is about to thread. The first thing the player sees is the thing the class is
+    /// for, and they see it before they have pressed anything.
+    /// </summary>
+    private void SwimTheFishOffTheDeck()
+    {
+        Player.Height = OpeningDepth;
+        Player.Pitch = -0.12f;   // nosed a touch down, so the reef is in frame and the sky isn't
+        if (Player.Fish is { } body)
+            body.Velocity = new Vector3(0f, 0f, FishRig.BeatImpulse);
+    }
+
+    /// <summary>
+    /// How high a fish opens: squarely in the middle of the band it actually plays in —
+    /// well clear of the grid, well under the warned water, and level with the middle of
+    /// the towers rather than above them. The opening frame should show the player the
+    /// city they are about to thread, not a view down onto it.
+    /// </summary>
+    private const float OpeningDepth = 20f;
+
+    /// <summary>
+    /// The FISH's buttons: the tail, the strike and the spit. Short, because on this
+    /// chassis almost everything that happens is physics rather than input — one beat is
+    /// one press and the water does the rest.
+    /// </summary>
+    private void UpdateFishTriggers(FishRig body)
+    {
+        // A cinematic has hold of the player. Nothing is read: a monster swinging a body
+        // around by its tail is not a situation the water has an opinion about.
+        if (Player.Captured) return;
+
+        if (InputMap.BeatPressed) BeatFish(body);
+
+        // The strike before the spit: on a frame both are down, the committed attack
+        // wins. They share the fire cooldown, and a player holding the spit while
+        // clicking for a strike should get the strike rather than have it eaten.
+        if (InputMap.StrikePressed) StrikeFish(body);
+        else if (InputMap.SpitDown) FireFishSpit();
+    }
+
+    /// <summary>One beat of the tail, with its cue and — off the deck — the puff of grid
+    /// dust a flop kicks up under it.</summary>
+    private void BeatFish(FishRig body)
+    {
+        bool beached = body.Beached;
+        if (!body.Beat(Player)) return;
+
+        Audio.PlayTailBeat(body.Starvation, beached);
+        if (beached)
+            Debris.FootPuff(new Vector3(Player.Position.X, 0f, Player.Position.Y));
+    }
+
+    /// <summary>Winds a strike, if the reserve and the body will allow one.</summary>
+    private void StrikeFish(FishRig body)
+    {
+        if (body.BeginStrike(Player)) Audio.PlayFishCoil();
+    }
+
+    /// <summary>
+    /// A spit down the eye's line. Cheap, fast, and — the point of the whole weapon —
+    /// entirely usable mid-carve: nothing here touches the body, so firing never breaks
+    /// an arc.
+    /// </summary>
+    private void FireFishSpit()
+    {
+        if (Seizure is { Held: true }) return;
+        if (!Player.TryFireSpit(out Vector3 origin, out Vector3 dir)) return;
+
+        // Inside the Maw-Core's throat every trigger is the escape trigger, exactly as it
+        // is on every other chassis: there is nothing to aim at in a mouth.
+        if (Digestion is { } digestion && digestion.Held)
+        {
+            digestion.RegisterShot();
+            Audio.PlayFishSpit();
+            return;
+        }
+
+        SpawnDirected(origin, dir, Projectile.RifleSpeed, rocket: false);
+        Audio.PlayFishSpit();
+        Player.Fish?.Kick(0.010f);
+    }
+
+    /// <summary>
+    /// Drains the body's events after the physics have run: the cues, the beds, the
+    /// strike's one hit, and what a crash or a beaching costs. Split out from the rig for
+    /// the same reason the soldier's is — the physics stay a pure function of their own
+    /// state, and the world keeps sole ownership of hurting anything.
+    /// </summary>
+    private void UpdateFishEvents(FishRig body)
+    {
+        // The water going past. The single loudest carrier of speed on a chassis with no
+        // engine note to ride, fed every tick and left to fade on its own.
+        Audio.SetWind(body.PlanarSpeed > FishWashSpeed,
+            Math.Clamp((body.PlanarSpeed - FishWashSpeed) / 20f, 0f, 1f));
+
+        UpdateBloom(body);
+
+        // And the tick that says the breath is nearly out — only while off the deck,
+        // since a beached fish has larger problems and is already being told about them.
+        if (Player.Hyper < BreathWarnLevel && !body.Beached) Audio.PlayGasLow();
+
+        if (body.JustStruck) Audio.PlayFishStrike();
+        if (body.StrikeActive) SweepStrike(body);
+
+        if (body.JustCrashed)
+        {
+            Audio.PlayCrashLanding();
+            DamagePlayer(CrashDamage);
+            Debris.Burst(new Vector3(Player.Position.X, Player.Height + 1f, Player.Position.Y),
+                Palette.StructureShell, elite: false);
+        }
+
+        if (body.JustBeached)
+        {
+            Audio.PlayFishBeach(Math.Clamp(body.BeachImpact / 20f, 0f, 1f));
+            Debris.FootPuff(new Vector3(Player.Position.X, 0f, Player.Position.Y));
+
+            // Meeting the seabed hard costs shield, scaled by how hard. A fish has no
+            // armour and no legs to take it with — the grid is simply not somewhere this
+            // body is built to arrive at.
+            if (body.BeachImpact > FishRig.BeachImpactSpeed)
+            {
+                float over = (body.BeachImpact - FishRig.BeachImpactSpeed)
+                           / (FishRig.BeachImpactSpeed * 0.8f);
+                DamagePlayer(BeachDamage + BeachDamage * Math.Clamp(over, 0f, 2f));
+            }
+        }
+    }
+
+    /// <summary>
+    /// One tick of a live strike, looking for the single thing it spears. Nearest-first
+    /// is deliberately <em>not</em> what this does: the lunge is short and fast enough
+    /// that at most one candidate is ever inside its reach on a given tick, and walking
+    /// the roster in a fixed order costs nothing and never allocates.
+    ///
+    /// The snout reaches the two crystals as well as the hunters, which is the whole
+    /// reward for the class living up where they do. A Maw-Core in particular has spent
+    /// the entire game being hittable only from the top of a jump; to a fish it is simply
+    /// something else swimming at the same depth.
+    /// </summary>
+    private void SweepStrike(FishRig body)
+    {
+        var at = new Vector3(Player.Position.X, Player.Height, Player.Position.Y);
+        float reach = FishRig.StrikeReach;
+
+        // Hunters sit on the grid, so a strike only reaches one if the dive has genuinely
+        // come down to them — a fish cruising at thirty metres cannot spear something on
+        // the floor by pointing at it, and the whole cost of the attack is committing to
+        // the descent that makes it possible.
+        if (Player.Height <= reach + EnemyTank.Radius)
+        {
+            foreach (var e in Enemies)
+            {
+                if (!e.Alive) continue;
+                if (!WithinHit(Player.Position, e.Position, reach + EnemyTank.Radius)) continue;
+                if (!body.ConsumeStrike()) return;
+                DamageEnemy(e, FishRig.StrikeDamage);
+                LandStrike(at, Palette.EnemyFill);
+                return;
+            }
+        }
+
+        if (Boss is { } boss && boss.HitsCore(Player.Position, Player.Height))
+        {
+            if (!body.ConsumeStrike()) return;
+            if (boss.DamageCore(FishRig.StrikeDamage)) DestroyBoss(boss);
+            else Audio.PlayCoreHit(1f - boss.CoreFraction);
+            LandStrike(at, Palette.NeonRed);
+            return;
+        }
+
+        if (Maw is { } maw && maw.HitsCrystal(Player.Position, Player.Height))
+        {
+            if (!body.ConsumeStrike()) return;
+            if (maw.DamageCrystal(FishRig.StrikeDamage)) DestroyMaw(maw);
+            else Audio.PlayMawHurt(1f - maw.CrystalFraction);
+            LandStrike(at, Palette.NeonRed);
+        }
+    }
+
+    /// <summary>A strike connecting: the impact cue and a spray off whatever it went
+    /// into. Shared by all three targets so a spear always reads the same.</summary>
+    private void LandStrike(Vector3 at, Color colour)
+    {
+        Audio.PlayFishImpact();
+        Debris.Burst(at, colour, elite: true);
+        Player.Fish?.Jolt(0.45f);
+    }
+
+    /// <summary>
+    /// The ceiling biting. Two separate things happen here and the order they happen in is
+    /// the whole point: a player who climbs too high is <em>told</em> first — an alarm, a
+    /// stain across the top of the frame, and a tail that visibly stops gripping — across
+    /// a ten-metre band that costs them nothing at all. Only past that does it start
+    /// taking shield.
+    ///
+    /// The damage is ticked rather than applied per frame for the same two reasons the
+    /// Crab-Core's beam is: it stops depending on the frame rate, and each bite fires its
+    /// own cue, which at sixty a second would be a solid tone rather than the sound of
+    /// being repeatedly hurt.
+    /// </summary>
+    private void UpdateBloom(FishRig body)
+    {
+        // The warning band. Free, loud, and rate-limited inside Audio so it is safe to ask
+        // for every tick the body is up here.
+        if (body.BloomNotice > 0f && !body.InBloom) Audio.PlayBloomWarning();
+
+        if (!body.InBloom)
+        {
+            _bloomTick = 0f;
+            return;
+        }
+
+        // In it. The alarm goes from a tick to a proper klaxon, and the clock starts.
+        Audio.PlayBloomAlarm();
+
+        _bloomTick += (float)Config.FixedDt;
+        if (_bloomTick < BloomTickInterval) return;
+        _bloomTick -= BloomTickInterval;
+
+        // Scaled by how far past the floor of it the body has pushed. At the boundary this
+        // is a slow leak that a player can climb out of and repair; deep in, it is roughly
+        // a shot from a hunter every half second, which no build survives for long.
+        float bite = BloomBiteDamage * (1f + 2.2f * body.Toxicity);
+        DamagePlayer(bite);
+        body.Jolt(0.12f + 0.2f * body.Toxicity);
+    }
+
+    private float _bloomTick;
+
+    /// <summary>How often the bloom bites while the body is in it. Twice a second — often
+    /// enough that the drain is unmistakable, rare enough that each bite is a discrete
+    /// event the player can count.</summary>
+    private const float BloomTickInterval = 0.5f;
+
+    /// <summary>What one bite costs at the very floor of the bloom, before the depth
+    /// scaling. Deliberately survivable at the boundary: the first second up there should
+    /// be a mistake, not a death.</summary>
+    private const float BloomBiteDamage = 4f;
+
+    /// <summary>Planar speed past which the water is audible at all.</summary>
+    private const float FishWashSpeed = 14f;
+
+    /// <summary>Reserve below which the body starts ticking a warning — about two beats'
+    /// worth left, which is the only amount worth being told about.</summary>
+    private const float BreathWarnLevel = 20f;
+
+    /// <summary>What the mildest damaging arrival on the seabed costs, before the
+    /// overshoot scaling.</summary>
+    private const float BeachDamage = 10f;
+
+    /// <summary>
+    /// Capture harness and self-test only: a roll/brake to drive the body with instead of
+    /// the keyboard's. Screenshotting this chassis means holding a carve through most of a
+    /// second while a turn develops, and there is nobody at the keys during a capture run.
+    /// </summary>
+    public Vector2? ScriptedFishMove;
+
+    /// <summary>Beats the tail without a keyboard — the harness's and the self-test's way
+    /// in. Honours the refractory period and the reserve exactly as a press does.</summary>
+    public bool BeatFishForTest()
+    {
+        if (Player.Fish is not { } body) return false;
+        bool before = body.Beached;
+        if (!body.Beat(Player)) return false;
+        if (before) Debris.FootPuff(new Vector3(Player.Position.X, 0f, Player.Position.Y));
+        return true;
+    }
+
+    /// <summary>The same for a strike.</summary>
+    public bool StrikeFishForTest()
+        => Player.Fish is { } body && body.BeginStrike(Player);
+
+    /// <summary>And for the spit.</summary>
+    public void FireFishSpitForTest() => FireFishSpit();
 
     /// <summary>
     /// A rocket going off: the splash on everything nearby, and — alone among the

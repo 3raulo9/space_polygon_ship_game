@@ -64,6 +64,16 @@ public sealed class EntityRenderer
     /// where its anchor is and how hard it is pulling.</summary>
     private readonly SoldierRenderer _soldier = new();
 
+    // The FISH: articulated for the same reason the soldier is and then some — a rigid
+    // fish is not a statue, it is a dead fish. Seen in full on the turntable, and in
+    // pieces out in the run, where the player is inside its head.
+    private readonly FishModel _fishModel = new();
+
+    /// <summary>The parts of the fish's own body that hang in the player's view — the
+    /// snout, the pectorals and the lantern. Drawn in the camera's frame rather than the
+    /// world's, so they stay welded to the eye through a forty-degree carve.</summary>
+    private readonly FishRenderer _fish = new();
+
     // The SPIDER is the boss's rig at a person's size, so it gets its own CrabRenderer
     // rather than borrowing the one above — that one is carrying the live boss's scale
     // and gunmetal, and neither belongs on the player's craft.
@@ -236,6 +246,10 @@ public sealed class EntityRenderer
         // viewmodel — which sits half a metre from the eye — is over everything.
         _soldier.Draw(world, cameraPos, (float)Raylib.GetTime());
 
+        // And the FISH's own body, for the same reason and in the same slot: it sits
+        // centimetres from the eye and has to be over everything the run put behind it.
+        _fish.Draw(world, cameraPos, (float)Raylib.GetTime());
+
         // Death debris last: chunks and sparks flung from destroyed enemies, each
         // shrinking and fading toward the void over its short life.
         foreach (var s in world.Debris.Shards)
@@ -397,6 +411,13 @@ public sealed class EntityRenderer
                 // Posed rather than merely turned: it breathes, shifts its weight, scans
                 // the hangar and periodically raises a launcher to check the hook in it.
                 _soldierModel.Draw(loadout, pos, heading, cameraPos, elapsed);
+                break;
+
+            case PlayerClass.Fish:
+                // Swimming on the spot: the wave runs down its body, the pectorals scull
+                // to hold it level, the lantern trails, and every few seconds it gulps.
+                // The one specimen in the hangar that never touches the turntable.
+                _fishModel.Draw(loadout, pos, heading, cameraPos, elapsed);
                 break;
         }
     }

@@ -57,6 +57,11 @@ internal static class HudRenderer
         // the same craft's worth of information — and then adds the handful of things
         // that only exist on a chassis hanging off two cables. See SoldierHud.
         if (p.Soldier is { } rig) SoldierHud.DrawOverlay(world, rig, p);
+
+        // Same arrangement for the FISH, whose additions are all about the one axis this
+        // dashboard has never had an instrument for: the radar says where things are on
+        // the plane, and this chassis lives in the column. See FishHud.
+        if (p.Fish is { } body) FishHud.DrawOverlay(world, body, p);
     }
 
     // --- The SPIDER's lance meter: 0..100 down the right-hand edge ---

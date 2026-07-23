@@ -1121,6 +1121,165 @@ public static class Audio
         if (_enabled) _wind.Set(fast, 0f, intensity);
     }
 
+    // --- The FISH -------------------------------------------------------------
+    // Built entirely out of the bank that already exists, and deliberately so. The
+    // soldier's cues are dry and mechanical — pressure, steel, air — because that chassis
+    // is a person wearing equipment. This one is a body in water, so the same voices are
+    // reused with their envelopes opened up and their attacks softened: nothing here
+    // should click or clank, and everything should sound like it is displacing something.
+
+    /// <summary>
+    /// One beat of the tail. The gas burst is the right transient for it — a shove of
+    /// mass through a fluid — with the attack rounded off and the tail extended, which is
+    /// the whole difference between a valve opening and a body pushing water.
+    ///
+    /// <paramref name="starvation"/> thins it as the reserve empties, exactly as it does
+    /// for the soldier's jump, so a player learns their breath is going without ever
+    /// reading the gauge. <paramref name="beached"/> swaps it for the flat, dry slap of
+    /// something out of its element — the one cue on this chassis that is <em>meant</em>
+    /// to sound wrong.
+    /// </summary>
+    public static void PlayTailBeat(float starvation, bool beached)
+    {
+        if (!_enabled) return;
+        starvation = Math.Clamp(starvation, 0f, 1f);
+
+        if (beached)
+        {
+            // Flopping: no rush behind it, just the slap and the grit. A beat that moves
+            // nothing should sound like a beat that moved nothing.
+            var slap = SfxSynth.LandThud(_sfxRng);
+            slap.Length *= 0.4f;
+            PlaySynth(slap, 0.55f);
+            return;
+        }
+
+        var push = SfxSynth.GasBurst(_sfxRng, starvation);
+        push.Attack = 0.12f;    // no valve click — water doesn't start instantly
+        push.Decay = 0.75f;
+        PlaySynth(push, (1f - 0.4f * starvation) * 0.7f);
+
+        // The wash behind the stroke. Dropped on a nearly-dry reserve, where a beat is
+        // barely displacing anything and should sound like it.
+        if (starvation > 0.8f) return;
+        var wash = SfxSynth.ThrowWhoosh(_sfxRng);
+        wash.Length *= 0.7f;
+        wash.Attack = 0.15f;
+        wash.Decay = 0.8f;
+        PlaySynth(wash, (1f - starvation) * 0.5f);
+    }
+
+    /// <summary>The body gathering before a strike: a short indrawn hiss, the one moment
+    /// on this chassis where everything else goes quiet.</summary>
+    public static void PlayFishCoil()
+    {
+        if (!_enabled) return;
+        var draw = SfxSynth.ThrowWhoosh(_sfxRng);
+        draw.Length *= 0.5f;
+        draw.Attack = 0.4f;     // swelling in rather than hitting — an intake, not a blow
+        draw.Decay = 0.25f;
+        PlaySynth(draw, 0.5f);
+    }
+
+    /// <summary>
+    /// The lunge. The loudest thing the class does and the only cue in this game that is
+    /// a piece of music rather than a noise — a crushed, detuned power chord over its own
+    /// octave, straight off a Mega Drive. See <see cref="SfxSynth.StrikeRiff"/> for why
+    /// that exception is worth making here and nowhere else.
+    ///
+    /// Layered guitar-over-bass, then a thin wash of water on top so the moment still
+    /// belongs to a body moving through a fluid and not to a jukebox. The wash goes last
+    /// and quietest: if the synth pool is saturated it is the one that should be dropped,
+    /// because the riff is the cue and the water is the garnish.
+    /// </summary>
+    public static void PlayFishStrike()
+    {
+        if (!_enabled) return;
+
+        PlaySynth(SfxSynth.StrikeRiff(_sfxRng, bass: true), 0.85f);
+        PlaySynth(SfxSynth.StrikeRiff(_sfxRng), 1f);
+
+        var wash = SfxSynth.ThrowWhoosh(_sfxRng);
+        wash.Length *= 0.6f;
+        wash.Attack = 0.02f;
+        PlaySynth(wash, 0.4f);
+    }
+
+    /// <summary>A strike connecting. Heavy and blunt — this is a body at fifty metres a
+    /// second arriving somewhere, and it should sound like mass rather than like a
+    /// weapon.</summary>
+    public static void PlayFishImpact()
+    {
+        if (!_enabled) return;
+        PlaySynth(SfxSynth.LandThud(_sfxRng), 0.95f);
+        PlaySynth(SfxSynth.ClawSlam(_sfxRng), 0.5f);
+    }
+
+    /// <summary>The spit: a small wet pop with none of the rifle's dry crack. Fired at
+    /// seven a second, so anything with weight to it would stack into a drone.</summary>
+    public static void PlayFishSpit()
+    {
+        if (!_enabled) return;
+        var pop = SfxSynth.MawSpit(_sfxRng);
+        pop.Length *= 0.55f;
+        PlaySynth(pop, 0.55f);
+    }
+
+    /// <summary>
+    /// Approaching the bloom: a small, dry warning tick. Rate-limited here rather than by
+    /// the caller so it is safe to ask for on every tick the body is in the warned band.
+    /// Deliberately quiet and deliberately not an alarm — this is the free notice, and
+    /// making it frightening would waste the alarm that comes after it.
+    /// </summary>
+    public static void PlayBloomWarning()
+    {
+        if (!_enabled) return;
+
+        double now = Raylib.GetTime();
+        if (now < _nextBloomTick) return;
+        _nextBloomTick = now + BloomTickGap;
+
+        PlaySynth(SfxSynth.WarningBeep(_sfxRng, 1), 0.4f);
+    }
+
+    /// <summary>
+    /// Actually in it. The stock alarm clip — the same one the Crab-Core's threat display
+    /// lurches to, and the most alarming sound in the bank — over a rising warning tone.
+    /// Rate-limited on its own, slower clock, so it tolls rather than screams.
+    /// </summary>
+    public static void PlayBloomAlarm()
+    {
+        if (!_enabled) return;
+
+        double now = Raylib.GetTime();
+        if (now < _nextBloomAlarm) return;
+        _nextBloomAlarm = now + BloomAlarmGap;
+
+        PlaySynth(SfxSynth.WarningBeep(_sfxRng, 3), 0.8f);
+        Raylib.SetSoundVolume(_alarm, 0.5f);
+        Raylib.PlaySound(_alarm);
+    }
+
+    private static double _nextBloomTick;
+    private static double _nextBloomAlarm;
+    private const double BloomTickGap = 0.85;
+    private const double BloomAlarmGap = 1.6;
+
+    /// <summary>
+    /// Meeting the seabed. <paramref name="force"/> (0..1) is how hard, and it scales the
+    /// whole thing from a settling scrape to the full-weight thud of a body driven into
+    /// the grid — plus, past halfway, the wail underneath it, which is the one place this
+    /// chassis is allowed to sound like it is in distress.
+    /// </summary>
+    public static void PlayFishBeach(float force)
+    {
+        if (!_enabled) return;
+        force = Math.Clamp(force, 0f, 1f);
+
+        PlaySynth(SfxSynth.LandThud(_sfxRng), 0.4f + 0.6f * force);
+        if (force > 0.5f) PlaySynth(SfxSynth.MawWail(_sfxRng, force), force * 0.55f);
+    }
+
     /// <summary>
     /// A pickup being absorbed — a battery cell or stray round. Reuses the menu
     /// blip (the only bright, non-combat transient in the bank) so the collect

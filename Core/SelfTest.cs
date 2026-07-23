@@ -56,6 +56,17 @@ public static class SelfTest
         failures += Check("rifle rounds fly exactly where the crosshair points", SoldierRifleFliesTrue);
         failures += Check("a felled building stops being an anchor", SoldierAnchorDiesWithItsTower);
         failures += Check("weak material tears out from under a swing", SoldierWeakAnchorTears);
+        failures += Check("a fish opens already swimming, never on the deck", FishStartsSwimming);
+        failures += Check("the tail is an impulse, not a throttle", FishBeatIsAnImpulse);
+        failures += Check("beats cost breath and only coasting gives it back", FishBreathIsARhythm);
+        failures += Check("a rolled body carves tighter than a level one", FishCarveTurnsTighter);
+        failures += Check("speed is what holds a fish up", FishLiftHoldsAltitude);
+        failures += Check("a strike coils, commits, then leaves you spent", FishStrikeCommits);
+        failures += Check("a strike spears one thing and is done", FishStrikeSpearsOnce);
+        failures += Check("touching the grid beaches a fish, and beats free it", FishBeachesAndRecovers);
+        failures += Check("the bloom warns for ten metres before it bites", FishBloomWarnsFirst);
+        failures += Check("the bloom costs shield and thins the water", FishBloomHurts);
+        failures += Check("spit flies exactly where the crosshair points", FishSpitFliesTrue);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1388,6 +1399,423 @@ public static class SelfTest
     private static World.World SoldierWorld()
     {
         var loadout = new Loadout { Class = PlayerClass.Soldier };
+        var world = new World.World(loadout) { DynamicSpawning = false };
+        world.Enemies.Clear();
+        return world;
+    }
+
+    // --- The FISH ---------------------------------------------------------------
+
+    /// <summary>
+    /// The one fact about this chassis that has to be true before anything else can be
+    /// tested: it is in the water. Every rule the class has — the lift, the beat, the
+    /// bloom, the beaching — is a rule about a body that is off the ground, and a fish
+    /// that opened lying on the grid would spend the player's first ten seconds in the one
+    /// state the entire design is about escaping.
+    /// </summary>
+    private static string? FishStartsSwimming()
+    {
+        var world = FishWorld();
+        var body = world.Player.Fish!;
+
+        if (world.Player.Height < 10f)
+            return $"a fish opened {world.Player.Height:0.0} off the grid";
+        if (body.Beached) return "a fish opened beached";
+        // And already moving: the class cannot hold altitude without speed, so opening
+        // stationary would mean opening in a stall.
+        if (body.PlanarSpeed < 1f) return "a fish opened dead in the water";
+
+        // And the sink has to be gentle enough to answer. A player who takes their hands
+        // off gets several seconds of drifting downward before anything bad happens — long
+        // enough to read the depth ladder, understand what is going on and beat out of it.
+        // Much less than this and the class would be a chore rather than a glide.
+        for (int i = 0; i < 60 * 5; i++) StepWithoutInput(world);
+        if (body.Beached) return "an idle fish hit the grid inside five seconds";
+        return null;
+    }
+
+    /// <summary>
+    /// The single decision the whole class rests on. A beat is an <em>impulse</em>: one
+    /// press is one shove, mashing inside the refractory period buys nothing, and holding
+    /// anything at all buys nothing either. If this ever degrades into a throttle the
+    /// chassis becomes a slower aircraft and every other rule stops mattering.
+    /// </summary>
+    private static string? FishBeatIsAnImpulse()
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        p.Pitch = 0f;
+        body.Velocity = Vector3.Zero;
+
+        float before = body.Speed;
+        if (!world.BeatFishForTest()) return "the first beat was refused";
+        if (body.Speed < before + Entities.FishRig.BeatImpulse * 0.5f)
+            return $"a beat only added {body.Speed - before:0.0} m/s";
+
+        // Mashing: the next press inside the refractory period does nothing at all.
+        if (world.BeatFishForTest()) return "a second beat landed inside the refractory period";
+
+        // ...and one after it does. The gap is the rhythm the player is learning.
+        for (int i = 0; i < (int)(Entities.FishRig.BeatInterval * 60f) + 2; i++)
+            StepWithoutInput(world);
+        if (!world.BeatFishForTest()) return "the tail never recovered between beats";
+
+        // And with nothing pressed at all, the water takes it back. A body that coasted
+        // forever would make the reserve decoration.
+        float carried = body.Speed;
+        for (int i = 0; i < 60 * 3; i++) StepWithoutInput(world);
+        if (body.Speed >= carried)
+            return "three seconds of coasting cost the body no speed at all";
+        return null;
+    }
+
+    /// <summary>
+    /// The economy. Beats cost breath, and breath comes back <em>only</em> while the tail
+    /// is still — which is the rule that turns movement on this chassis into a rhythm
+    /// rather than a key held down. Both halves have to hold: if beating were free the
+    /// reserve would be decoration, and if the reserve refilled while beating there would
+    /// be no reason ever to stop.
+    /// </summary>
+    private static string? FishBreathIsARhythm()
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        p.Hyper = p.MaxHyper;
+        if (!world.BeatFishForTest()) return "the beat was refused";
+        StepWithoutInput(world);
+
+        float spent = p.Hyper;
+        if (spent >= p.MaxHyper) return "a beat cost no breath";
+        if (body.Recovering) return "breath started coming back the instant the tail moved";
+
+        // Beating flat out for two seconds must genuinely run the reserve down rather
+        // than being paid for out of the regen.
+        for (int i = 0; i < 60 * 2; i++)
+        {
+            world.BeatFishForTest();
+            StepWithoutInput(world);
+        }
+        if (p.Hyper >= spent)
+            return "two seconds of continuous beating did not drain the reserve";
+
+        // And coasting fills it. Nothing else does.
+        float drained = p.Hyper;
+        for (int i = 0; i < 60 * 2; i++) StepWithoutInput(world);
+        if (!body.Recovering) return "a coasting fish never starts recovering";
+        if (p.Hyper <= drained) return "two seconds of coasting gave no breath back";
+        return null;
+    }
+
+    /// <summary>
+    /// The handling model. Momentum lags the crosshair, and how fast it catches up is set
+    /// by how far the body is rolled — that gap, and the player's control over closing it,
+    /// is the entire difference between this chassis and a strafing camera. A carve that
+    /// turned no faster than a drift would make A and D pure decoration.
+    /// </summary>
+    private static string? FishCarveTurnsTighter()
+    {
+        float level = TurnedTowardLookIn(roll: 0f);
+        float carved = TurnedTowardLookIn(roll: 1f);
+
+        if (carved <= level + 0.05f)
+            return $"a full carve converged to {carved:0.00} against a level drift's {level:0.00}";
+        // And the level drift has to genuinely be a drift — a body that snapped onto the
+        // crosshair without rolling would pass the comparison above and still be wrong.
+        if (level > 0.98f)
+            return "a level body turned onto the crosshair almost instantly — there is no drift";
+        return null;
+    }
+
+    /// <summary>
+    /// One second of turning ninety degrees onto the crosshair at a given roll, reported as
+    /// how far the momentum got: 1 is fully converged, 0 is still travelling at a right
+    /// angle to where the player is looking.
+    /// </summary>
+    private static float TurnedTowardLookIn(float roll)
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        // Travelling along +Z and looking along +X: a dead ninety degrees to turn through.
+        p.Pitch = 0f;
+        p.Heading = MathF.PI / 2f;
+        body.Velocity = new Vector3(0f, 0f, 24f);
+        body.MoveInput = new Vector2(roll, 0f);
+
+        for (int i = 0; i < 60; i++) StepWithoutInput(world);
+
+        return Vector3.Dot(Vector3.Normalize(body.Velocity), p.Forward3);
+    }
+
+    /// <summary>
+    /// The altitude economy, and the class's answer to the soldier's height-for-speed
+    /// trade: a body generates lift by moving, so speed is what keeps it up and the price
+    /// of stalling is height. This is what makes running out of breath frightening rather
+    /// than merely slow — the reserve going means the altitude goes with it.
+    /// </summary>
+    private static string? FishLiftHoldsAltitude()
+    {
+        float stalled = SankOverASecond(speed: 0f);
+        float moving = SankOverASecond(speed: 34f);
+
+        if (stalled <= 0.5f) return "a stalled fish did not sink at all";
+        if (moving >= stalled * 0.6f)
+            return $"a body at speed sank {moving:0.0}m against a stalled one's {stalled:0.0}m — lift is doing nothing";
+        return null;
+    }
+
+    /// <summary>
+    /// Metres lost in one second from a given planar speed, with nothing pressed. Measured
+    /// down in clean water, well below the warned band — up in the thin stuff the lift is
+    /// deliberately failing, which is the bloom's job and not this test's.
+    /// </summary>
+    private static float SankOverASecond(float speed)
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        p.Pitch = 0f;
+        p.Height = Entities.FishRig.BloomWarnHeight - 9f;
+        body.Velocity = new Vector3(0f, 0f, speed);
+
+        float was = p.Height;
+        for (int i = 0; i < 60; i++) StepWithoutInput(world);
+        return was - p.Height;
+    }
+
+    /// <summary>
+    /// The strike is a commitment, and the shape of that commitment is the whole balance of
+    /// it: a gather where the body is nearly stopped and helpless, a lunge that is
+    /// genuinely faster than anything swimming can reach, and a recovery that refuses to
+    /// beat. Lose any of the three and it stops being a decision.
+    /// </summary>
+    private static string? FishStrikeCommits()
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        p.Pitch = 0f;
+        body.Velocity = new Vector3(0f, 0f, 30f);
+
+        if (!world.StrikeFishForTest()) return "the strike was refused on a full reserve";
+        if (body.Strike != Entities.StrikeState.Coil) return "the strike did not begin by coiling";
+
+        // The gather: momentum is scrubbed, and this is what the player pays before they
+        // know whether the shot lands.
+        for (int i = 0; i < (int)(Entities.FishRig.CoilTime * 60f) - 2; i++) StepWithoutInput(world);
+        if (body.Speed > 12f) return $"the coil left {body.Speed:0.0} m/s on the clock — it costs nothing";
+
+        for (int i = 0; i < 6 && body.Strike == Entities.StrikeState.Coil; i++) StepWithoutInput(world);
+        if (body.Strike != Entities.StrikeState.Lunge) return "the coil never loosed";
+        if (body.Speed < Entities.FishRig.MaxSpeed)
+            return $"the lunge travels at {body.Speed:0.0}, no faster than swimming does";
+
+        // And the bill: spent, and unable to beat its way out of the recovery.
+        for (int i = 0; i < (int)(Entities.FishRig.LungeTime * 60f) + 4; i++) StepWithoutInput(world);
+        if (body.Strike != Entities.StrikeState.Recover) return "the lunge never ended";
+        if (world.BeatFishForTest()) return "a spent fish could beat straight out of its recovery";
+
+        for (int i = 0; i < (int)(Entities.FishRig.RecoverTime * 60f) + 4; i++) StepWithoutInput(world);
+        if (body.Strike != Entities.StrikeState.Ready) return "the strike never came back";
+        return null;
+    }
+
+    /// <summary>
+    /// A strike spears one thing. It is not a plough that clears a street — if a single
+    /// lunge could rake a whole group the correct play would be to fly through crowds, and
+    /// the attack would stop being about picking a target.
+    /// </summary>
+    private static string? FishStrikeSpearsOnce()
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        // Down at hunter height, looking along +Z, with two of them in a line dead ahead.
+        p.Pitch = 0f;
+        p.Heading = 0f;
+        p.Height = 1.5f;
+        p.Position = Vector2.Zero;
+        body.Velocity = Vector3.Zero;
+
+        var near = new Entities.EnemyTank(new Vector2(0f, 9f), elite: false);
+        var far = new Entities.EnemyTank(new Vector2(0f, 17f), elite: false);
+        world.Enemies.Add(near);
+        world.Enemies.Add(far);
+
+        if (!world.StrikeFishForTest()) return "the strike was refused";
+
+        // Long enough for the whole lunge to run through both of them.
+        int steps = (int)((Entities.FishRig.CoilTime + Entities.FishRig.LungeTime) * 60f) + 6;
+        for (int i = 0; i < steps; i++) StepWithoutInput(world);
+
+        if (near.Alive) return "the strike passed through a hunter without hurting it";
+        if (!far.Alive) return "one strike killed two hunters — the lunge is a plough";
+        return null;
+    }
+
+    /// <summary>
+    /// The floor. Meeting the grid is not a landing on this chassis, it is a fish out of
+    /// water — and the important half of the rule is that it is <em>recoverable</em>: a
+    /// beached player must be able to beat their way back up, or the state is a death
+    /// sentence rather than a punishment.
+    /// </summary>
+    private static string? FishBeachesAndRecovers()
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        p.Pitch = 0f;
+        p.Height = 3f;
+        body.Velocity = new Vector3(0f, -6f, 0f);
+
+        for (int i = 0; i < 60 * 2 && !body.Beached; i++) StepWithoutInput(world);
+        if (!body.Beached) return "a fish driven into the grid never beached";
+        if (p.Height > 0.01f) return "a beached fish is not actually on the grid";
+
+        // On the deck it can barely move. That is the whole punishment, and a beached body
+        // that went on skating at speed would read as landing badly rather than as being
+        // out of its element. Measured over half a second, which is the window in which a
+        // player decides whether they are in trouble.
+        body.Velocity = new Vector3(20f, 0f, 0f);
+        for (int i = 0; i < 30; i++) StepWithoutInput(world);
+        if (body.PlanarSpeed > 1f)
+            return $"a beached fish still carries {body.PlanarSpeed:0.0} m/s after half a second";
+
+        // Now beat out of it. Nose up, wait out any stagger, and take a couple of flops.
+        p.Pitch = 0.5f;
+        for (int i = 0; i < 60 * 4; i++)
+        {
+            world.BeatFishForTest();
+            StepWithoutInput(world);
+            if (!body.Beached) break;
+        }
+        if (body.Beached) return "a beached fish could not beat its way back into the water";
+        return null;
+    }
+
+    /// <summary>
+    /// The ceiling, and the half of it that matters most: the player is told, for free, a
+    /// long way before anything costs them. Ten metres of warned, thinning water is enough
+    /// to turn round in at any speed the class can reach — and if that band ever started
+    /// billing, the warning would just be a cheaper way of being hurt.
+    /// </summary>
+    private static string? FishBloomWarnsFirst()
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        // Parked in the middle of the warned band, held there against the sink.
+        p.Pitch = 0f;
+        float shield = p.Shield;
+
+        for (int i = 0; i < 60 * 3; i++)
+        {
+            p.Height = (Entities.FishRig.BloomWarnHeight + Entities.FishRig.BloomHeight) * 0.5f;
+            StepWithoutInput(world);
+        }
+
+        if (body.BloomNotice <= 0f) return "the warned band never raised a notice";
+        if (body.InBloom) return "the middle of the warned band already counts as the bloom";
+        if (body.Toxicity > 0f) return "the warned band reports toxicity";
+        if (p.Shield < shield) return "three seconds in the warned band cost shield";
+
+        // And nothing at all below it, so ordinary play at skyline height is never nagged.
+        p.Height = Entities.FishRig.BloomWarnHeight - 6f;
+        StepWithoutInput(world);
+        if (body.BloomNotice > 0f) return "the notice fires below the warned band";
+        return null;
+    }
+
+    /// <summary>
+    /// And the other half: past the warning it genuinely bites, and the water up there is
+    /// genuinely thinner. The thinning is the more important of the two — it is a fence the
+    /// player feels through the controls, which means a fish that stops fighting sinks out
+    /// of the bloom on its own rather than needing to be told to.
+    /// </summary>
+    private static string? FishBloomHurts()
+    {
+        var world = FishWorld();
+        var p = world.Player;
+        var body = p.Fish!;
+
+        p.Pitch = 0f;
+        p.Height = Entities.FishRig.BloomHeight + 8f;
+        body.Velocity = new Vector3(0f, 0f, 30f);
+
+        float shield = p.Shield;
+        float was = p.Height;
+        for (int i = 0; i < 60 * 2; i++) StepWithoutInput(world);
+
+        if (!body.InBloom && p.Height > Entities.FishRig.BloomHeight)
+            return "the body is above the bloom's floor but not in it";
+        if (p.Shield >= shield) return "two seconds inside the bloom cost no shield";
+
+        // Thin water: a body moving this fast holds its altitude easily down in the clean
+        // water, and must not up here.
+        if (p.Height >= was)
+            return "the body held its altitude inside the bloom — the water is not thinning";
+        return null;
+    }
+
+    /// <summary>
+    /// The same property the soldier's rifle has to have, for the same reason: this is a
+    /// mouse-aimed weapon, so the aim, the eye, the muzzle offset and the round's own climb
+    /// are four separate pieces of arithmetic, and any one of them being off is invisible
+    /// standing still and infuriating mid-carve. Checked at steep pitches especially, since
+    /// the failure it guards against — treating a look slope as a look angle — is nearly
+    /// exact at level and badly wrong the moment the player looks up.
+    /// </summary>
+    private static string? FishSpitFliesTrue()
+    {
+        foreach (float pitch in new[] { 0f, 0.22f, -0.4f, 0.9f })
+        {
+            var world = FishWorld();
+            var p = world.Player;
+            p.Pitch = pitch;
+            // High enough that a steeply downward shot has some flight to measure before
+            // it correctly buries itself in the grid, low enough to stay in clean water.
+            p.Height = Entities.FishRig.BloomWarnHeight - 9f;
+
+            Vector3 eye = p.Eye;
+            Vector3 aim = p.Forward3;
+
+            world.FireFishSpitForTest();
+            StepWithoutInput(world);
+            StepWithoutInput(world);
+
+            Entities.Projectile? round = null;
+            foreach (var q in world.Projectiles)
+                if (q.Active && q.IsTracer) { round = q; break; }
+            if (round == null) return $"no round in the water at pitch {pitch:0.00}";
+
+            var at = new Vector3(round.Position.X, round.Height, round.Position.Y);
+            Vector3 fromEye = at - eye;
+            float along = Vector3.Dot(fromEye, aim);
+            if (along < 1f) return $"the round went nowhere at pitch {pitch:0.00}";
+
+            float off = Vector3.Distance(fromEye, aim * along);
+            float error = MathF.Atan2(off, along);
+            if (error > 0.02f)
+                return $"at pitch {pitch:0.00} the spit flies {error:0.000} rad off the aim";
+        }
+        return null;
+    }
+
+    /// <summary>A stage with a fish in it and nothing else moving: no spawn director, no
+    /// hunters, so the checks above are measuring the body and not a firefight.</summary>
+    private static World.World FishWorld()
+    {
+        var loadout = new Loadout { Class = PlayerClass.Fish };
         var world = new World.World(loadout) { DynamicSpawning = false };
         world.Enemies.Clear();
         return world;

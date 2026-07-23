@@ -4,8 +4,8 @@ namespace VoidTanks.Core;
 
 /// <summary>
 /// What the player climbs into. The machine offers five chassis and admits, on the
-/// same screen, that it can only still assemble two of them — the rest are listed
-/// because the manifest says they exist, not because anything is left to build.
+/// same screen, which of them it can still assemble — the rest are listed because the
+/// manifest says they exist, not because anything is left to build.
 /// </summary>
 public enum PlayerClass
 {
@@ -77,11 +77,27 @@ public static class ClassCatalog
 
         new ClassArchetype(
             PlayerClass.Fish, "FISH",
-            "NO BUILD DATA",
-            new[] { "THE MACHINE HAS NO PATTERN FOR THIS CHASSIS." },
-            Available: false,
-            PartNames: Array.Empty<string>(),
-            DefaultSwatches: Array.Empty<int>()),
+            "DROWNED SWIMMER",
+            new[]
+            {
+                "THE VOID IS AN OCEAN AND THIS IS THE ONLY THING",
+                "LEFT THAT KNOWS IT. W BEATS THE TAIL - A RHYTHM,",
+                "NOT A THROTTLE. A AND D ROLL, AND A ROLLED BODY",
+                "CARVES. LEFT SPITS. RIGHT STRIKES. NEVER LAND.",
+            },
+            Available: true,
+            PartNames: new[] { "HIDE", "FINS", "BELLY", "LURE" },
+            // Kin to the Maw-Core, and the palette says so before the briefing does: the
+            // same diseased shell, the same old bone. The lure is the one bright thing on
+            // it, which is this game's whole convention for a living core.
+            //
+            // The fins are the dark one and the belly is the pale one, which is the
+            // opposite of the obvious assignment and matters at 320 pixels across: fins are
+            // thin membranes seen edge-on, so in a light colour they read as beige lumps
+            // stuck to the animal, while the underside is a broad flat surface and pale is
+            // exactly what countershading looks like on one. Bone on the belly also gets
+            // the teeth for free.
+            DefaultSwatches: new[] { 11, 6, 9, 7 }),
 
         new ClassArchetype(
             PlayerClass.Soldier, "SOLDIER",
