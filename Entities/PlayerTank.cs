@@ -56,7 +56,7 @@ public sealed class PlayerTank
     public float MaxShield = 100f;
     public float Shield;
     public int Lives = 3;
-    public int MaxAmmo = 100;
+    public int MaxAmmo = 50;
     public int Ammo = 40;
     public bool Alive => Shield > 0f || Lives > 0;
 

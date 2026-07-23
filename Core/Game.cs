@@ -575,7 +575,9 @@ public sealed class Game : IDisposable
         switch (_state)
         {
             case GameState.Playing:
-                _world!.Update(dt);
+                // Combat triggers are muted while the crafting panel is up so a click
+                // on an item slot can't also fire the cannon; movement still runs.
+                _world!.Update(dt, acceptCombatInput: !_inventoryOpen);
                 break;
         }
     }
