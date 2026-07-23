@@ -53,6 +53,17 @@ public sealed class EntityRenderer
     private readonly PolyMesh _playerCap = Meshes.TankCap(Color.White);
     private readonly PolyMesh _playerBarrel = Meshes.TankBarrel(Color.White);
 
+    // The SOLDIER: an articulated figure rather than a mesh, since it is a person and a
+    // rigid person is a statue. Only ever seen on the hangar's turntable — out in the
+    // run this chassis is a pair of forearms and two cables, and the person holding them
+    // is never on screen.
+    private readonly SoldierModel _soldierModel = new();
+
+    /// <summary>The soldier's cables and hooks in the live world — drawn from the rig's
+    /// own state, not from a mesh, because a cable's shape is decided every frame by
+    /// where its anchor is and how hard it is pulling.</summary>
+    private readonly SoldierRenderer _soldier = new();
+
     // The SPIDER is the boss's rig at a person's size, so it gets its own CrabRenderer
     // rather than borrowing the one above — that one is carrying the live boss's scale
     // and gunmetal, and neither belongs on the player's craft.
@@ -136,8 +147,10 @@ public sealed class EntityRenderer
             // rides high — level with the leap — and sinks toward the horizon, rather
             // than snapping back to barrel height. The heavy grenade is a fatter slug
             // in the elite/orange colour.
-            if (p.IsGrenade) _grenade.Draw(shotPos, 0f, p.Height, cameraPos);
+            if (p.IsRocket) DrawRocket(p, shotPos);
+            else if (p.IsGrenade) _grenade.Draw(shotPos, 0f, p.Height, cameraPos);
             else if (p.IsLaser) DrawLaserStreak(p, shotPos);
+            else if (p.IsTracer) DrawTracer(p, shotPos, cameraPos);
             else _bolt.Draw(shotPos, 0f, p.Height, cameraPos);
         }
 
@@ -217,6 +230,12 @@ public sealed class EntityRenderer
             Raylib.DrawSphereEx(center, (1.5f + 0.6f * MathF.Sin(t * 20f)) * env, 8, 8, Color.White);
         }
 
+        // The SOLDIER's rig: both cables out to wherever their hooks have got to, and
+        // the forearms holding the launchers. Drawn near the end so the cables pass in
+        // front of the city they are anchored to rather than through it, and so the
+        // viewmodel — which sits half a metre from the eye — is over everything.
+        _soldier.Draw(world, cameraPos, (float)Raylib.GetTime());
+
         // Death debris last: chunks and sparks flung from destroyed enemies, each
         // shrinking and fading toward the void over its short life.
         foreach (var s in world.Debris.Shards)
@@ -251,6 +270,72 @@ public sealed class EntityRenderer
         Raylib.DrawCylinderEx(tail, head, 0.10f, 0.16f, 6,
             new Color(red.R, red.G, red.B, (byte)190));
         Raylib.DrawCylinderEx(tail, head, 0.04f, 0.07f, 6, Color.White);
+    }
+
+    /// <summary>
+    /// A SOLDIER's rifle round: a long thin tracer lying along its own flight, drawn
+    /// hot at the head and fading out behind. The cannon's tumbling octahedron is a
+    /// shell you can watch cross the arena; this is a bullet, and what you see of a
+    /// bullet is the streak it leaves.
+    /// </summary>
+    private static void DrawTracer(Projectile p, Vector2 at, Vector3 cameraPos)
+    {
+        var head = new Vector3(at.X, p.Height, at.Y);
+
+        // A tracer is a streak lying along its own flight, which makes it the one thing
+        // in the game that must not be drawn near the eye: a three-metre cylinder on a
+        // round two metres out reaches back past the camera and renders as a smear
+        // across the middle of the frame, pointing nowhere. Rounds leave at ninety
+        // metres a second, so skipping the first few units costs two frames of a flight
+        // the player was never going to see anyway.
+        float range = Vector3.Distance(head, cameraPos);
+        if (range < NearTracer) return;
+
+        Vector3 dir = p.Heading3;
+        // And the tail is clamped so it can never reach back to the eye either.
+        float len = MathF.Min(3.2f, range - NearTracer * 0.5f);
+
+        Vector3 tail = head - dir * len;
+        var glow = Palette.Flag;
+        Raylib.DrawCylinderEx(tail, head, 0.015f, 0.07f, 4,
+            new Color(glow.R, glow.G, glow.B, (byte)150));
+        Raylib.DrawCylinderEx(Vector3.Lerp(tail, head, 0.55f), head, 0.02f, 0.05f, 4, Color.White);
+    }
+
+    /// <summary>How close a tracer may get to the eye before it stops being drawn.</summary>
+    private const float NearTracer = 4f;
+
+    /// <summary>
+    /// A rocket: the fin-stabilised body, its motor burning behind it, and a smoke
+    /// ribbon trailing off that. The ribbon is drawn as a few fading segments back along
+    /// the flight rather than as a particle system — at 320×240 the difference is
+    /// invisible and the cost is four cylinders instead of forty.
+    /// </summary>
+    private static void DrawRocket(Projectile p, Vector2 at)
+    {
+        Vector3 dir = p.Heading3;
+        var nose = new Vector3(at.X, p.Height, at.Y);
+        Vector3 tail = nose - dir * 0.9f;
+
+        // Body, then the fins as one flared collar at the back.
+        Raylib.DrawCylinderEx(tail, nose, 0.16f, 0.05f, 6, Palette.HudChrome);
+        Raylib.DrawCylinderEx(tail - dir * 0.12f, tail + dir * 0.18f, 0.26f, 0.14f, 4,
+            Palette.CrabChassis);
+
+        // The motor: a bright cone blowing out of the back, flickering.
+        float flicker = 0.75f + 0.25f * MathF.Sin((float)Raylib.GetTime() * 47f);
+        Raylib.DrawCylinderEx(tail, tail - dir * (1.5f * flicker), 0.13f, 0.02f, 5,
+            new Color(255, 232, 180, 235));
+
+        // And the smoke ribbon behind it, thinning and fading with distance back.
+        for (int i = 1; i <= 4; i++)
+        {
+            Vector3 a = tail - dir * (1.4f * i);
+            Vector3 b = tail - dir * (1.4f * (i + 1));
+            int alpha = 110 - i * 22;
+            float r = 0.24f + i * 0.1f;
+            Raylib.DrawCylinderEx(a, b, r, r + 0.1f, 5, new Color(150, 150, 158, alpha));
+        }
     }
 
     /// <summary>
@@ -306,6 +391,12 @@ public sealed class EntityRenderer
                     CoreColor: loadout.PartColor(PlayerClass.Spider, 3),
                     SlideOffset: Vector2.Zero);
                 _spiderRig.Draw(pose, pos, heading, cameraPos);
+                break;
+
+            case PlayerClass.Soldier:
+                // Posed rather than merely turned: it breathes, shifts its weight, scans
+                // the hangar and periodically raises a launcher to check the hook in it.
+                _soldierModel.Draw(loadout, pos, heading, cameraPos, elapsed);
                 break;
         }
     }

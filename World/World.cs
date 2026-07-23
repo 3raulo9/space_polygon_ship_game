@@ -135,6 +135,14 @@ public sealed class World
         Loadout = loadout ?? new Loadout();
         Player = new PlayerTank(Vector2.Zero, 0f, Loadout);
 
+        // A soldier does not start in the clearing. Every other chassis opens at the
+        // origin, which the skyline is deliberately kept out of (see
+        // StructureField.ClearRadius) so nothing stands in the player's nose on the first
+        // frame — but this one has nothing to hang from out there, and a class whose
+        // whole loop is anchors would open on a minute of walking. So it starts within
+        // one cable's throw of the nearest tower, looking straight at it.
+        if (Player.Soldier != null) StandTheSoldierInTheCity();
+
         _projectiles = new Projectile[MaxProjectiles];
         for (int i = 0; i < _projectiles.Length; i++)
             _projectiles[i] = new Projectile();
@@ -220,6 +228,17 @@ public sealed class World
         // false): the mouse is busy managing items there, so a click on a stack must
         // never also loose a round. Movement still reads its own keys in StepForTest,
         // so the craft keeps drifting under the overlay.
+        // The SOLDIER walks on its own keys rather than through the craft's throttle, so
+        // its WASD is read here and handed to the rig every frame — including while the
+        // crafting panel is up, exactly as a tank keeps coasting under the overlay. The
+        // *look* is not: the panel has the mouse, and a player dragging a stack across a
+        // slot must not also be spinning on the spot behind it.
+        if (Player.Soldier is { } rig)
+        {
+            rig.MoveInput = ScriptedSoldierMove ?? InputMap.SoldierMove;
+            if (acceptCombatInput && !Player.Captured) UpdateSoldierLook();
+        }
+
         if (acceptCombatInput)
         {
             if (Digestion is { Held: true })
@@ -228,6 +247,8 @@ public sealed class World
             }
             else if (Player.Spider is { } spider)
                 UpdateSpiderTriggers(spider, dt);
+            else if (Player.Soldier is { } soldier)
+                UpdateSoldierTriggers(soldier, dt);
             else if (InputMap.Grenade)
                 FirePlayerGrenade();
             else if (InputMap.Fire)
@@ -246,6 +267,14 @@ public sealed class World
             Player.Rooted = false;
         }
 
+        // A soldier reading the crafting panel is not reeling, whatever the keys say.
+        // The beds fade themselves out the moment nothing feeds them.
+        if (!acceptCombatInput && Player.Soldier != null)
+        {
+            Audio.SetReel(false, 0f);
+            Audio.SetWind(false, 0f);
+        }
+
         StepForTest(dt);
     }
 
@@ -258,6 +287,9 @@ public sealed class World
     {
         Player.Update(dt);
         ResolveStructureCollisions();
+        // After the collision pass, so a swing that ended in a wall is one of the events
+        // being drained rather than something that happens a tick later.
+        if (Player.Soldier is { } rig) UpdateSoldierEvents(rig, dt);
 
         foreach (var e in Enemies)
         {
@@ -464,6 +496,11 @@ public sealed class World
                 {
                     StageCrabBlast(p.Position);
                 }
+                else if (p.IsRocket)
+                {
+                    // Neither is a rocket. Its contact fuse is exactly what a wall is for.
+                    DetonateRocket(p);
+                }
                 else
                 {
                     Debris.Burst(new Vector3(p.Position.X, MathF.Max(0.4f, p.Height), p.Position.Y),
@@ -503,7 +540,15 @@ public sealed class World
 
         for (int i = 0; i < Structures.Count; i++)
         {
-            int n = Structures[i].Blockers(blockers);
+            Structure s = Structures[i];
+
+            // Over the top of it is past it. This never mattered while the only thing on
+            // the field was a craft whose whole jump peaks at eight units, but a soldier
+            // spends most of the run above the height of an arch's legs, and being
+            // shoved sideways by a wall thirty metres beneath them would be absurd.
+            if (Player.Height > s.BlockHeight) continue;
+
+            int n = s.Blockers(blockers);
             for (int b = 0; b < n; b++)
             {
                 var (at, radius) = blockers[b];
@@ -522,6 +567,11 @@ public sealed class World
                     : new Vector2(reach, 0f);
 
                 Player.Position = Torus.Wrap(at + push);
+
+                // For a soldier this is not a scrape but a possible crash: meeting a wall
+                // at speed is the way this chassis dies, and the rig decides which of the
+                // two just happened from the momentum it was carrying.
+                Player.Soldier?.RegisterWallHit();
             }
         }
     }
@@ -1204,6 +1254,524 @@ public sealed class World
         }
     }
 
+    // --- The SOLDIER chassis ----------------------------------------------------
+
+    /// <summary>
+    /// Walks the soldier out of the empty clearing and stands them in front of the
+    /// nearest tower, facing it, one comfortable cable's throw away with the crosshair
+    /// already resting on its flank. The very first thing that chassis can do is
+    /// therefore press E, and the very first thing that happens is a hook biting stone.
+    ///
+    /// Picked as the tower nearest the origin rather than rolled, so the opening is the
+    /// same place every run — the skyline is a fixed feature of this world, and where a
+    /// class starts in it should be too.
+    /// </summary>
+    private void StandTheSoldierInTheCity()
+    {
+        Structure? nearest = null;
+        float best = float.MaxValue;
+        foreach (var s in Structures)
+        {
+            if (s.Kind != StructureKind.Tower) continue;
+            float d = s.Position.LengthSquared();
+            if (d < best) { best = d; nearest = s; }
+        }
+        if (nearest == null) return;   // a razed city (VOIDTANKS_STRUCTURES=0) — stay put
+
+        // Stand off it on the origin's side, so the walk back out to open grid is behind
+        // the player rather than through the building they are looking at.
+        Vector2 away = nearest.Position.LengthSquared() > 1e-4f
+            ? Vector2.Normalize(-nearest.Position)
+            : new Vector2(0f, -1f);
+
+        Player.Position = Torus.Wrap(nearest.Position + away * SoldierStandoff);
+        Player.Heading = MathF.Atan2(-away.X, -away.Y);
+        // Aimed a touch above level: the tower is forty metres of wall and the useful
+        // anchors are up it, not at its feet.
+        Player.Pitch = 0.22f;
+    }
+
+    /// <summary>How far off the tower a soldier opens — comfortably inside a cable's
+    /// reach, comfortably outside the footprint.</summary>
+    private const float SoldierStandoff = 34f;
+
+    /// <summary>
+    /// How far the mouse turns the look, in radians per pixel. Tuned against the
+    /// internal 320×240 rather than against the window: the whole picture is three
+    /// hundred pixels wide, so a sweep that feels ordinary in a modern shooter throws
+    /// the view most of the way round the world here.
+    /// </summary>
+    private const float LookSensitivity = 0.0032f;
+
+    /// <summary>Movement past this in one frame is a pointer warp, not a hand, and the
+    /// whole frame's look is discarded. In pixels.</summary>
+    private const float MaxLookJump = 180f;
+
+    /// <summary>
+    /// Where the crosshair's ray last landed, if it landed on anything — the point a
+    /// hook fired this frame would bite. Read by the HUD, which brackets the crosshair
+    /// on a valid anchor and greys it out otherwise, and by nothing in the sim: firing
+    /// re-casts rather than trusting a cached answer, so a hook can never bite something
+    /// that stopped existing between the frame and the trigger.
+    /// </summary>
+    public Vector3? AnchorInSight { get; private set; }
+
+    /// <summary>True when the anchor in sight is weak enough to tear out under load —
+    /// the HUD warns rather than letting the player find out mid-arc.</summary>
+    public bool AnchorIsWeak { get; private set; }
+
+    /// <summary>
+    /// Mouse look. Yaw runs into the same <see cref="PlayerTank.Heading"/> every chassis
+    /// uses, so everything downstream — the radar, the aim, the renderer — keeps working
+    /// unchanged; pitch is the SOLDIER's alone.
+    ///
+    /// The sign on yaw is the one thing here worth stating: the camera renders +X on the
+    /// <em>left</em> of the screen, so a heading increase swings the view left, and
+    /// pushing the mouse right therefore has to <em>decrease</em> the heading.
+    /// </summary>
+    private void UpdateSoldierLook()
+    {
+        Vector2 delta = InputMap.LookDelta;
+        if (delta == Vector2.Zero) return;
+
+        // A capture being taken or handed back — opening the pack, tabbing away, the
+        // frame the cursor is locked to the window — reports one enormous jump as the
+        // pointer is warped to the centre. That is not input and must not be treated as
+        // any amount of input: clamping it still throws the view a quarter turn, so a
+        // frame that reports a movement no hand could make is dropped outright. The
+        // threshold sits well above a genuine fast flick.
+        if (MathF.Abs(delta.X) > MaxLookJump || MathF.Abs(delta.Y) > MaxLookJump) return;
+
+        Player.Heading -= delta.X * LookSensitivity;
+        Player.Pitch = Math.Clamp(Player.Pitch - delta.Y * LookSensitivity,
+            -PlayerTank.MaxPitch, PlayerTank.MaxPitch);
+    }
+
+    /// <summary>
+    /// The SOLDIER's buttons: the two hooks, the gas jump, the rifle and the rockets.
+    /// Also re-casts the crosshair every frame so the HUD can bracket a valid anchor —
+    /// reading the city at a glance, mid-flight, is the skill this class is built on,
+    /// and it needs the answer before the player commits, not after.
+    /// </summary>
+    private void UpdateSoldierTriggers(SoldierRig rig, float dt)
+    {
+        // A cinematic has hold of the player: both cables go, and nothing else is read.
+        // Being swung around by a monster while still anchored to a tower is not a
+        // situation the constraint solver has any sensible answer for.
+        if (Player.Captured)
+        {
+            rig.ReleaseBoth();
+            AnchorInSight = null;
+            return;
+        }
+
+        Vector3 eye = Player.Eye;
+        Vector3 look = Player.Forward3;
+
+        AnchorInSight = TryFindAnchor(eye, look, out Vector3 at, out Structure? holding)
+            ? at : null;
+        AnchorIsWeak = AnchorInSight != null && holding is { } h && h.Scale < SoldierRig.WeakScale;
+
+        // E and Q are the same button twice: throw if stowed, let go if out. Which is
+        // what makes the alternating chain — fire E, swing, fire Q, release E, re-anchor
+        // E further ahead — a rhythm on two keys rather than a chord on four.
+        if (InputMap.RightHookPressed) ToggleSoldierHook(rig, right: true, eye, look, at, holding);
+        if (InputMap.LeftHookPressed) ToggleSoldierHook(rig, right: false, eye, look, at, holding);
+
+        if (InputMap.HighJumpPressed && rig.Jump(Player))
+        {
+            Audio.PlayGasJump(rig.Starvation);
+            // The ring of dust blasted out from under the launch.
+            Debris.FootPuff(new Vector3(Player.Position.X, 0f, Player.Position.Y));
+        }
+
+        // Rockets before the rifle: on a frame both are down, the deliberate shot wins.
+        // They share the fire cooldown, and a player holding fire while clicking for a
+        // rocket should get the rocket rather than have it eaten by the stream.
+        if (InputMap.RocketPressed) FireSoldierRocket();
+        else if (InputMap.RifleDown) FireSoldierRifle();
+    }
+
+    /// <summary>
+    /// One hook's key press. Fires it at whatever the crosshair is on, or — if it is
+    /// already flying or anchored — brings it home. A shot at nothing still goes: the
+    /// cable pays out its full reach and zips back, which is the honest feedback that
+    /// the player aimed at sky.
+    /// </summary>
+    private void ToggleSoldierHook(SoldierRig rig, bool right, Vector3 eye, Vector3 look,
+        Vector3 at, Structure? holding)
+    {
+        GrappleHook hook = rig.Hook(right);
+
+        if (hook.Out)
+        {
+            rig.ReleaseHook(right);
+            Audio.PlayCableZip();
+            return;
+        }
+
+        // Fired from the hip on the matching side rather than from the eye, so the two
+        // cables visibly leave different points on the body and cross where they should.
+        Vector3 from = SoldierMuzzle(right);
+        rig.FireHook(right, new Vector2(from.X, from.Z), from.Y, look,
+            AnchorInSight, AnchorInSight != null ? holding : null);
+        Audio.PlayCableFire();
+    }
+
+    /// <summary>
+    /// Where a cable leaves the rig: out from the hip on its own side, at belt height.
+    /// Shared by the sim (which fires from here) and the renderer (which draws from
+    /// here), so the line the player sees is the line the hook actually flew.
+    /// </summary>
+    public Vector3 SoldierMuzzle(bool right)
+    {
+        Vector2 fwd = Player.Forward;
+        var side = new Vector2(-fwd.Y, fwd.X) * (right ? 0.55f : -0.55f);
+        return new Vector3(
+            Player.Position.X + side.X + fwd.X * 0.4f,
+            Player.Height + SoldierRig.ShoulderHeight,
+            Player.Position.Y + side.Y + fwd.Y * 0.4f);
+    }
+
+    /// <summary>
+    /// Walks the crosshair's ray out through the city looking for something to bite.
+    /// Returns the point on the surface it found and which building it belongs to.
+    ///
+    /// Only the skyline is an anchor. Not the grid — a hook that could always bite the
+    /// floor would make every one of these decisions free — and not the monsters, which
+    /// would be a different game. That the city is the <em>only</em> thing holding the
+    /// player up is what makes a rocket fired at the wrong tower a genuine mistake.
+    ///
+    /// Marched rather than solved, for the same reason the spider's lance walks its
+    /// shaft: a half-metre stride is far finer than any footprint out there, it handles
+    /// a ray that climbs or dives without a second case, and it costs a few hundred
+    /// distance tests against the handful of buildings actually in front of the player.
+    /// </summary>
+    public bool TryFindAnchor(Vector3 origin, Vector3 direction,
+        out Vector3 point, out Structure? holding)
+    {
+        point = default;
+        holding = null;
+
+        Vector3 d = Vector3.Normalize(direction);
+        var originXZ = new Vector2(origin.X, origin.Z);
+        var dirXZ = new Vector2(d.X, d.Z);
+
+        // Everything the ray could possibly reach, gathered once so the march itself
+        // only ever tests a handful of circles.
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        Span<(Vector2 At, float Radius, float Top, int Owner)> near =
+            stackalloc (Vector2, float, float, int)[MaxAnchorCandidates];
+        int count = 0;
+
+        for (int i = 0; i < Structures.Count && count < MaxAnchorCandidates; i++)
+        {
+            Structure s = Structures[i];
+            int n = s.Blockers(blockers);
+            for (int b = 0; b < n && count < MaxAnchorCandidates; b++)
+            {
+                var (at, r) = blockers[b];
+                float reach = SoldierRig.MaxRange + r;
+                if (Torus.DistanceSquared(at, originXZ) > reach * reach) continue;
+                // Held as the nearest image so the march never has to wrap: a building
+                // just over the seam is tested where the player can actually see it.
+                near[count++] = (Torus.NearestImage(at, originXZ), r, s.BlockHeight, i);
+            }
+        }
+        if (count == 0) return false;
+
+        for (float t = MinAnchorRange; t <= SoldierRig.MaxRange; t += AnchorStep)
+        {
+            float y = origin.Y + d.Y * t;
+            if (y < 0f) return false;             // the ray has gone into the grid
+
+            Vector2 xz = originXZ + dirXZ * t;
+
+            for (int i = 0; i < count; i++)
+            {
+                var (at, r, top, owner) = near[i];
+                if (y > top) continue;
+                if (Vector2.DistanceSquared(xz, at) > r * r) continue;
+
+                // Pull the bite back out onto the surface rather than leaving it at the
+                // sample point inside the wall, so the cable ends on the building and
+                // the swing radius is the one the player can see.
+                Vector2 outward = xz - at;
+                float len = outward.Length();
+                Vector2 surface = len > 1e-4f ? at + outward / len * r : at + new Vector2(r, 0f);
+
+                point = new Vector3(surface.X, MathF.Max(1f, y), surface.Y);
+                holding = Structures[owner];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Stride the anchor march walks the ray in. Well under the tightest
+    /// footprint out there, so nothing can sit between two samples.</summary>
+    private const float AnchorStep = 0.5f;
+
+    /// <summary>No anchoring closer than this. A hook that bit the wall you are already
+    /// scraping along would be a hook that does nothing.</summary>
+    private const float MinAnchorRange = 4f;
+
+    /// <summary>How many footprints the march will consider at once. Comfortably more
+    /// than the city ever puts inside one cable's reach.</summary>
+    private const int MaxAnchorCandidates = 16;
+
+    /// <summary>
+    /// Capture harness only: a WASD to drive the rig with instead of the keyboard's.
+    /// Screenshotting this chassis means holding a reel in for a second or two while a
+    /// swing builds, and there is nobody at the keys during a capture run.
+    /// </summary>
+    public Vector2? ScriptedSoldierMove;
+
+    /// <summary>Pulls the rifle's trigger without a mouse — the capture harness and the
+    /// self-test's way in. Honours the cooldown and the magazine exactly as a click
+    /// does, so a burst driven through here is a burst the player could fire.</summary>
+    public void FireSoldierRifleForTest() => FireSoldierRifle();
+
+    /// <summary>The same for a rocket.</summary>
+    public void FireSoldierRocketForTest() => FireSoldierRocket();
+
+    /// <summary>
+    /// Throws one hook at whatever the eye is currently pointed at, without waiting on a
+    /// key edge — the headless self-test's way in, since it has no mouse. Returns whether
+    /// there was anything out there to bite; a false still throws the cable, exactly as
+    /// pressing the key at open sky does.
+    /// </summary>
+    public bool FireSoldierHookForTest(bool right)
+    {
+        if (Player.Soldier is not { } rig) return false;
+
+        Vector3 eye = Player.Eye;
+        Vector3 look = Player.Forward3;
+        bool found = TryFindAnchor(eye, look, out Vector3 at, out Structure? holding);
+
+        Vector3 from = SoldierMuzzle(right);
+        rig.FireHook(right, new Vector2(from.X, from.Z), from.Y, look,
+            found ? at : null, found ? holding : null);
+        return found;
+    }
+
+    /// <summary>
+    /// Drains the rig's events after the physics have run: the cues, the dust, and the
+    /// damage a landing or a crash costs. Split out from the rig itself so that the
+    /// physics stay a pure function of their own state and the world keeps sole
+    /// ownership of hurting the player.
+    /// </summary>
+    private void UpdateSoldierEvents(SoldierRig rig, float dt)
+    {
+        // Both hooks, named rather than iterated: this runs every tick of every frame,
+        // and an array built to walk two fields is two fields' worth of garbage a tick.
+        SoundHookEvents(rig.Left);
+        SoundHookEvents(rig.Right);
+
+        // The gas jet while it pulls, the wind past the ears, and the steel creaking
+        // under whatever weight it is carrying. All three are beds, fed every tick with
+        // whatever the rig is doing and left to fade on their own the moment it stops —
+        // see Audio.Update, which clears them after servicing.
+        Audio.SetReel(rig.Reeling, 1f - rig.Starvation);
+        Audio.SetWind(rig.PlanarSpeed > WindSpeed,
+            Math.Clamp((rig.PlanarSpeed - WindSpeed) / 18f, 0f, 1f));
+
+        float strain = MathF.Max(rig.Left.Taut ? rig.Left.Tension : 0f,
+                                 rig.Right.Taut ? rig.Right.Tension : 0f);
+        Audio.SetCableStrain(strain > 0f, strain);
+
+        // And the tick that says the bottle is nearly out. Rate-limited inside Audio, so
+        // it is safe to ask for on every tick the gauge is in the red.
+        if (Player.Hyper < GasWarnLevel && !rig.Grounded) Audio.PlayGasLow();
+
+        if (rig.JustCrashed)
+        {
+            Audio.PlayCrashLanding();
+            DamagePlayer(CrashDamage);
+            Debris.Burst(new Vector3(Player.Position.X, Player.Height + 1f, Player.Position.Y),
+                Palette.StructureShell, elite: false);
+        }
+
+        if (rig.JustLanded && rig.LandingSpeed > SoldierRig.HardLanding)
+        {
+            Audio.PlayCrashLanding();
+            Debris.FootPuff(new Vector3(Player.Position.X, 0f, Player.Position.Y));
+
+            // Anything past a twenty-metre drop is paid for in shield, scaled by how far
+            // past it went — a bad landing hurts, a catastrophic one nearly ends you.
+            if (rig.LandingSpeed > SoldierRig.FallDamageSpeed)
+            {
+                float over = (rig.LandingSpeed - SoldierRig.FallDamageSpeed)
+                           / (SoldierRig.FallDamageSpeed * 0.6f);
+                DamagePlayer(FallDamageBase + FallDamageBase * Math.Clamp(over, 0f, 2f));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Voices one hook's single-frame events: the clank of a bite, the zip of a miss,
+    /// and the splintering crack of an anchor tearing out — with a spray of masonry off
+    /// the point it tore from, so the failure is seen as well as heard.
+    /// </summary>
+    private void SoundHookEvents(GrappleHook h)
+    {
+        if (h.JustBit)
+            Audio.PlayAnchorBite(Torus.Distance(h.Tip, Player.Position));
+        if (h.JustMissed)
+            Audio.PlayCableZip();
+        if (h.JustTore)
+        {
+            Audio.PlayAnchorTear();
+            Debris.Burst(new Vector3(h.Tip.X, h.TipY, h.Tip.Y), Palette.StructureShell, elite: false);
+        }
+    }
+
+    /// <summary>Planar speed past which the wind is audible at all.</summary>
+    private const float WindSpeed = 12f;
+
+    /// <summary>Reserve below which the rig starts ticking a warning — about one jump's
+    /// worth left, which is the only amount worth being told about.</summary>
+    private const float GasWarnLevel = 26f;
+
+    /// <summary>What swinging into a wall costs. Well short of lethal on a full shield:
+    /// the real punishment for a crash is the momentum, and momentum is this chassis's
+    /// only currency.</summary>
+    private const float CrashDamage = 14f;
+
+    /// <summary>What the mildest damaging landing costs, before the overshoot scaling.</summary>
+    private const float FallDamageBase = 12f;
+
+    /// <summary>
+    /// A rifle round down the eye's line. Cheap, fast, and — the point of the whole
+    /// weapon — entirely usable mid-swing: nothing here touches the rig, so firing never
+    /// breaks an arc.
+    /// </summary>
+    private void FireSoldierRifle()
+    {
+        if (Seizure is { Held: true }) return;
+        if (!Player.TryFireRifle(out Vector3 origin, out Vector3 dir)) return;
+
+        if (Digestion is { } digestion && digestion.Held)
+        {
+            digestion.RegisterShot();
+            Audio.PlayRifleShot();
+            return;
+        }
+
+        SpawnDirected(origin, dir, Projectile.RifleSpeed, rocket: false);
+        Audio.PlayRifleShot();
+
+        if (Player.Soldier is not { } rig) return;
+
+        // The punch: a small nudge up the view, and a shell case tumbling out past the
+        // ear. Both exist for the same reason — a weapon that produced a tracer and
+        // nothing else would read as a cursor emitting dots.
+        rig.Kick(0.012f);
+
+        Vector2 fwd = Player.Forward;
+        var side = new Vector2(-fwd.Y, fwd.X) * (rig.FlashOnRight ? 1f : -1f);
+        Debris.Fleck(
+            Player.Eye + new Vector3(side.X, -0.15f, side.Y) * 0.5f,
+            new Vector3(side.X * 3.4f, 1.6f, side.Y * 3.4f)
+                + new Vector3(-fwd.X, 0f, -fwd.Y) * 1.8f
+                + new Vector3(rig.Velocity.X, 0f, rig.Velocity.Z),
+            Palette.Flag, life: 0.45f);
+    }
+
+    /// <summary>
+    /// A rocket. Contact-fused, so the world's ordinary projectile pass detonates it the
+    /// instant it meets anything — including the grid, which a round fired down the line
+    /// of a dive will find quickly.
+    /// </summary>
+    private void FireSoldierRocket()
+    {
+        if (Seizure is { Held: true } || Digestion is { Held: true }) return;
+        if (!Player.TryFireRocket(out Vector3 origin, out Vector3 dir)) return;
+
+        SpawnDirected(origin, dir, Projectile.RocketSpeed, rocket: true);
+        Audio.PlayRocketLaunch();
+    }
+
+    private void SpawnDirected(Vector3 origin, Vector3 dir, float speed, bool rocket)
+    {
+        foreach (var p in _projectiles)
+        {
+            if (p.Active) continue;
+            p.FireDirected(origin, dir, speed, rocket);
+            return;
+        }
+    }
+
+    /// <summary>
+    /// A rocket going off: the splash on everything nearby, and — alone among the
+    /// player's ordnance short of a charged lance — the buildings inside the blast cut
+    /// down. That last clause is the whole reason rockets are rationed. Anything the
+    /// blast destroys stops being an anchor, and the game does not check first whether
+    /// the player is currently hanging from it.
+    /// </summary>
+    private void DetonateRocket(Projectile p)
+    {
+        var at = new Vector3(p.Position.X, MathF.Max(0.4f, p.Height), p.Position.Y);
+
+        float reach = Projectile.RocketSplash + EnemyTank.Radius;
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive) continue;
+            if (WithinHit(p.Position, e.Position, reach)) DamageEnemy(e, GrenadeDamage);
+        }
+
+        // The blast reaches the two crystals too, if either happens to be in it.
+        if (Boss is { } boss && boss.HitsCore(p.Position, p.Height))
+        {
+            if (boss.DamageCore(GrenadeDamage)) DestroyBoss(boss);
+            else Audio.PlayCoreHit(1f - boss.CoreFraction);
+        }
+        if (Maw is { } maw && maw.HitsCrystal(p.Position, p.Height))
+        {
+            if (maw.DamageCrystal(GrenadeDamage)) DestroyMaw(maw);
+            else Audio.PlayMawHurt(1f - maw.CrystalFraction);
+        }
+
+        // Every standing footprint inside the blast comes down.
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        for (int i = Structures.Count - 1; i >= 0; i--)
+        {
+            Structure s = Structures[i];
+            int n = s.Blockers(blockers);
+            for (int b = 0; b < n; b++)
+            {
+                var (bAt, r) = blockers[b];
+                if (!WithinHit(p.Position, bAt, Projectile.RocketSplash + r)) continue;
+                // Only what the blast can actually reach up the building's side: a rocket
+                // going off at the foot of a forty-metre tower still fells it, but one
+                // detonating in mid-air well above an arch's legs does not.
+                if (p.Height > s.BlockHeight + Projectile.RocketSplash) continue;
+                FellStructure(s);
+                break;
+            }
+        }
+
+        Debris.Burst(at, Palette.EliteFill, elite: true);
+        Audio.PlayRocketBlast(Torus.Distance(p.Position, Player.Position));
+
+        // The pressure ripple: everything nearby is thrown about, the player included.
+        // A rocket fired at a wall you are swinging toward should be felt through the
+        // camera, not merely heard.
+        float range = Torus.Distance(p.Position, Player.Position);
+        if (Player.Soldier is { } rig && range < RocketShakeRange)
+        {
+            rig.Jolt(0.35f + 0.65f * (1f - range / RocketShakeRange));
+            // And it stings if the player is genuinely inside their own blast, which a
+            // contact fuse on a fast approach makes entirely possible.
+            if (range < Projectile.RocketSplash + PlayerTank.Radius)
+                DamagePlayer(GrenadeDamage * 3f);
+        }
+    }
+
+    /// <summary>How far a rocket's concussion still throws the view about.</summary>
+    private const float RocketShakeRange = 34f;
+
     /// <summary>Requests a heavy grenade; honoured only if off cooldown with 10 ammo.</summary>
     public void FirePlayerGrenade()
     {
@@ -1274,6 +1842,12 @@ public sealed class World
             if (p.JustExpired && p.IsCrabBomb)
                 StageCrabBlast(p.Position);
 
+            // A rocket has a contact fuse and nothing else: it goes off wherever it
+            // stops, which includes the grid it flew into and the empty air at the end
+            // of its run.
+            if (p.JustExpired && p.IsRocket)
+                DetonateRocket(p);
+
             if (!p.Active) continue;
 
             // The skyline stops rounds — every round, from anyone. Tested before any
@@ -1285,10 +1859,23 @@ public sealed class World
 
             if (p.FromPlayer)
             {
+                // A rocket meeting either crystal goes off against it rather than
+                // plinking it: the fuse does not care what it touched, and the blast is
+                // already wired to bill both weak points for whatever it reaches.
+                if (p.IsRocket
+                    && ((Boss is { } rBoss && rBoss.HitsCore(p.Position, p.Height))
+                     || (Maw is { } rMaw && rMaw.HitsCrystal(p.Position, p.Height))))
+                {
+                    DetonateRocket(p);
+                    p.Active = false;
+                    continue;
+                }
+
                 // The Crab-Core's only weak spot: a level air shot threading the
                 // raised neon core. Checked before the tanks, since the core sits
                 // where nothing else does — high overhead.
-                if (!p.IsGrenade && Boss is { } liveBoss && liveBoss.HitsCore(p.Position, p.Height))
+                if (!p.IsGrenade && !p.IsRocket
+                    && Boss is { } liveBoss && liveBoss.HitsCore(p.Position, p.Height))
                 {
                     if (liveBoss.DamageCore(PlayerShotDamage))
                         DestroyBoss(liveBoss);
@@ -1304,7 +1891,8 @@ public sealed class World
                 // as the crab's core and a stricter one: this band sits so far above
                 // barrel height that a grounded shot cannot reach it at all, so
                 // landing this is proof the player was in the air when they fired.
-                if (!p.IsGrenade && Maw is { } liveMaw && liveMaw.HitsCrystal(p.Position, p.Height))
+                if (!p.IsGrenade && !p.IsRocket
+                    && Maw is { } liveMaw && liveMaw.HitsCrystal(p.Position, p.Height))
                 {
                     if (liveMaw.DamageCrystal(PlayerShotDamage))
                         DestroyMaw(liveMaw);
@@ -1314,13 +1902,20 @@ public sealed class World
                     continue;
                 }
 
+                // A round riding high over a hunter's hull passes over it. Only the
+                // directed rounds are tested this way — everything else in the pool
+                // travels flat at barrel height, where the check would be noise.
+                bool overhead = p.IsRocket && p.Height > EnemyTank.BodyHeight + 1f;
+
                 foreach (var e in Enemies)
                 {
-                    if (!e.Alive) continue;
+                    if (!e.Alive || overhead) continue;
                     if (WithinHit(p.Position, e.Position, EnemyTank.Radius))
                     {
                         if (p.IsCrabBomb)
                             StageCrabBlast(p.Position); // erupts into the lance ring here
+                        else if (p.IsRocket)
+                            DetonateRocket(p);
                         else if (p.IsGrenade)
                             Detonate(p);           // area burst, damages the whole cluster
                         else

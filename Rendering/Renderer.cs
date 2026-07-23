@@ -23,6 +23,11 @@ public sealed class Renderer : IDisposable
     private const int BlurW = Config.InternalWidth / PauseBlock;   // 40
     private const int BlurH = Config.InternalHeight / PauseBlock;  // 30
     private const int PauseBlock = 8; // world px per mosaic block at full pause
+
+    /// <summary>Planar speed at which the SOLDIER's lens begins to stretch. Set to the
+    /// same 20 m/s the vignette and the wind come in at, so the whole "this is fast now"
+    /// language arrives as one change rather than three.</summary>
+    private const float SoldierFovSpeed = 20f;
     private Camera3D _camera;
     private readonly EntityRenderer _entities = new();
     // Renders the inventory's items as small rotating 3D models (see DrawInventory).
@@ -55,11 +60,13 @@ public sealed class Renderer : IDisposable
     {
         PlayerTank player = world.Player;
 
-        // First-person eye: sits at camera height above the craft, looking down
-        // its heading. The jump lifts the eye with the craft.
+        // First-person eye: sits at the chassis's own eye height above the craft,
+        // looking down its heading. The jump lifts the eye with the craft. A soldier's
+        // eye is barely half a tank's off the ground, which is most of why the same city
+        // reads as something to be small inside rather than something to drive past.
         var eye = new Vector3(
             player.Position.X,
-            Config.CameraHeight + player.Height,
+            player.EyeHeight + player.Height,
             player.Position.Y);
 
         var fwd = player.Forward;
@@ -85,6 +92,11 @@ public sealed class Renderer : IDisposable
         // magnitude below it, which is what leaves the scream and the blow room to land.
         float amp = 0.035f * shake;
         if (seizure != null) amp = MathF.Max(amp, 0.28f * seizure.Shake);
+        // A rocket going off in the soldier's face, a swing that ended in a wall, or a
+        // fall that nearly ended the run. Pitched between the two above: harder than
+        // standing near a stalking crab, well short of being held in its claw.
+        if (player.Soldier is { Shake: > 0f } jolted)
+            amp = MathF.Max(amp, 0.16f * jolted.Shake);
 
         Vector3 rumble = Vector3.Zero, rattle = Vector3.Zero;
         if (amp > 0f)
@@ -113,18 +125,73 @@ public sealed class Renderer : IDisposable
         float roll = seizure?.Roll ?? 0f;
         float pitch = seizure?.Pitch ?? 0f;
 
+        // The SOLDIER owns its own camera in three ways no other chassis does: the mouse
+        // aims it anywhere including straight up and straight down, an arc banks it like
+        // an aircraft, and speed stretches the field of view. All three are the class —
+        // the roll especially, which is the single most important thing about how a
+        // swing feels — so they are applied on top of whatever a cinematic is doing
+        // rather than instead of it.
+        float lift = Config.CameraLookLift;
+        float fov = Config.CameraFovY;
+
+        if (player.Soldier is { } rig)
+        {
+            // The look is a genuine angle, and the camera target takes a slope, so this
+            // is its tangent. The standing tilt every other chassis holds is dropped
+            // outright: a player who can look wherever they want does not also want the
+            // horizon quietly pushed down for them.
+            //
+            // The rifle's recoil rides on top of the aim rather than in it — the shot
+            // has already gone, and shifting where the player is actually pointing at
+            // six hundred rounds a minute would make the weapon unusable mid-swing.
+            lift = MathF.Tan(Math.Clamp(player.Pitch + rig.Recoil,
+                -PlayerTank.MaxPitch, PlayerTank.MaxPitch));
+            roll += rig.Bank;
+
+            // Knees buckling under a landing: the whole eye drops and springs back.
+            eye.Y += rig.Dip;
+
+            // Field of view stretching with speed. Nothing else in the game moves the
+            // lens, and it is worth the exception: widening the frame as the player
+            // accelerates is what makes thirty metres a second feel like thirty metres a
+            // second rather than like a faster walk.
+            float fast = Math.Clamp((rig.PlanarSpeed - SoldierFovSpeed) / 16f, 0f, 1f);
+            fov *= 1f + 0.28f * fast * fast;
+        }
+
+        _camera.FovY = fov;
         _camera.Position = eye + rumble;
         // Pitch the eye up a touch so the horizon sits low on screen: that opens
         // up a tall sky band above the floor, where the pink glow can fade all
         // the way to black below the top HUD strip.
         _camera.Target = eye + rumble
-                       + new Vector3(fwd.X, Config.CameraLookLift + pitch, fwd.Y) + rattle;
+                       + new Vector3(fwd.X, lift + pitch, fwd.Y) + rattle;
         // Roll tips the whole world by turning the camera's idea of up. The axis is
         // the craft's own right on the plane, so the horizon pivots about the centre
         // of the view rather than sliding sideways.
-        _camera.Up = roll != 0f
-            ? new Vector3(fwd.Y * MathF.Sin(roll), MathF.Cos(roll), -fwd.X * MathF.Sin(roll))
-            : new Vector3(0f, 1f, 0f);
+        //
+        // A chassis that can look straight up needs that axis derived from the look
+        // itself rather than from the plane: with the eye near vertical, "the craft's
+        // right on the plane" stops being perpendicular to where the camera is pointing
+        // and the picture shears. The two agree exactly at level pitch — see the
+        // derivation below — so nothing but the soldier changes.
+        if (player.Soldier != null)
+        {
+            Vector3 look = Vector3.Normalize(new Vector3(fwd.X, lift + pitch, fwd.Y));
+            Vector3 side = Vector3.Normalize(Vector3.Cross(look, new Vector3(0f, 1f, 0f)));
+            Vector3 up = Vector3.Cross(side, look);
+            // At zero pitch this is cos(roll)·up + sin(roll)·(cos h, 0, −sin h), which is
+            // the expression below to the letter.
+            _camera.Up = roll != 0f
+                ? up * MathF.Cos(roll) - side * MathF.Sin(roll)
+                : up;
+        }
+        else
+        {
+            _camera.Up = roll != 0f
+                ? new Vector3(fwd.Y * MathF.Sin(roll), MathF.Cos(roll), -fwd.X * MathF.Sin(roll))
+                : new Vector3(0f, 1f, 0f);
+        }
 
         // Render the rotating 3D item icons into their own textures before the world's
         // texture pass opens (a 3D pass can't nest inside it) — the HUD's equip slots
@@ -146,6 +213,10 @@ public sealed class Renderer : IDisposable
         // with it. Drawn over the scene but under the HUD, so the instruments stay
         // readable through the flash.
         if (seizure is { Glow: > 0f }) DrawCoreGlare(seizure.Glow);
+
+        // The SOLDIER's speed effects: the vignette closing in, the wind streaking past.
+        // Over the world and under the instruments, same as the glare.
+        SoldierRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
 
         // Flat instrument panel over the scene: vital bars + radar along the top, plus
         // the R/T/Y/U equip slots showing their 3D item icons.
@@ -272,12 +343,24 @@ public sealed class Renderer : IDisposable
         // left of the frame, so pushing the *camera* to -X puts the (stationary) model
         // at +X relative to it — which is what moves the craft leftward on screen
         // rather than dragging the whole scene with it.
-        float shift = screen.Customising ? -2.6f : 0f;
-        var eye = leggy ? new Vector3(shift, 4.8f, -13f) : new Vector3(shift, 3.6f, -9.2f);
+        // ...and the soldier is the opposite problem. It is a person: under two metres
+        // tall and a third of a tank wide, so at the tank's framing it is a smudge in
+        // the middle of an empty hangar. It gets pulled right in and looked at nearly
+        // level, which is also the only way the launchers on its hips — the entire point
+        // of the chassis — are big enough on screen to be seen at all.
+        bool small = screen.Loadout.Class == PlayerClass.Soldier;
+
+        // How far it slides is per chassis for the same reason the framing is: the shift
+        // is a distance in the world, and the soldier is looked at from a third of the
+        // range, so the tank's 2.6 units throws it clean off the side of the frame.
+        float shift = screen.Customising ? (small ? -1.15f : -2.6f) : 0f;
+        var eye = leggy ? new Vector3(shift, 4.8f, -13f)
+                : small ? new Vector3(shift, 1.75f, -4.1f)
+                : new Vector3(shift, 3.6f, -9.2f);
         _camera.Position = eye;
         // Aimed below the craft's feet rather than at its middle, which lifts the whole
         // model up the frame and clear of the briefing text along the bottom.
-        _camera.Target = new Vector3(shift, leggy ? -0.15f : -0.35f, 0f);
+        _camera.Target = new Vector3(shift, leggy ? -0.15f : small ? 0.22f : -0.35f, 0f);
 
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);

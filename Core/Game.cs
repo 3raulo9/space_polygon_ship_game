@@ -94,7 +94,12 @@ public sealed class Game : IDisposable
             // hunter drops in at a random bearing, so aiming at it points the camera
             // away from a deliberately-placed monster — which produces a picture of
             // empty grid and looks exactly like the monster failing to draw.
-            Vector2? subject = _world!.Maw?.Position
+            //
+            // A soldier is exempt: the world has already stood them in front of the
+            // tower they open on, and turning them to look at a hunter somewhere out in
+            // the fog throws away the one thing a picture of that chassis has to show.
+            Vector2? subject = _world!.Player.Soldier != null ? null
+                : _world.Maw?.Position
                 ?? (Vector2?)_world.Boss?.Position
                 ?? (_world.Enemies.Count > 0 ? _world.Enemies[0].Position : null);
             if (subject is { } at)
@@ -116,6 +121,8 @@ public sealed class Game : IDisposable
             Audio.Update();
 
             if (_capturePath != null && RunCaptureFrame()) break;
+
+            SyncCursor();
 
             // F11 flips borderless fullscreen from any screen. The Renderer already
             // rescales the low-res target off the live window size each Present, so
@@ -174,7 +181,7 @@ public sealed class Game : IDisposable
                 continue;
             }
 
-            // 'E' toggles the inventory overlay. Escape closes it too if it's open;
+            // 'F' toggles the inventory overlay. Escape closes it too if it's open;
             // otherwise Escape opens the pause panel (the world only pauses when the
             // inventory is *not* up — the panel itself never freezes the sim).
             if (InputMap.InventoryToggle)
@@ -242,6 +249,53 @@ public sealed class Game : IDisposable
             // The live world, with the crafting panel laid over it when it's open.
             if (_inventoryOpen) DrawInventory();
             else Draw();
+        }
+    }
+
+    /// <summary>True while the pointer is captured — locked to the window and feeding
+    /// relative movement to the SOLDIER's look.</summary>
+    private bool _mouseCaptured;
+
+    /// <summary>
+    /// Decides what the pointer is doing this frame.
+    ///
+    /// The operating system's cursor is never visible anywhere in this game. On every
+    /// screen but one it is simply hidden — nothing here is driven by pointing at it —
+    /// and the inventory panel, which is, draws its own chunky pixel arrow into the
+    /// low-res target instead, so the pointer is made of the same fat pixels as the rest
+    /// of the picture rather than sitting crisply on top of it.
+    ///
+    /// The SOLDIER additionally needs the pointer <em>captured</em>: its look is driven
+    /// by relative mouse movement, which means the real cursor has to be locked to the
+    /// window centre or it walks off the edge of the screen mid-swing and the head stops
+    /// turning. Captured only while that chassis is actually driving — the pause panel,
+    /// the pack and every menu hand the mouse back.
+    /// </summary>
+    private void SyncCursor()
+    {
+        bool wantCapture = _state == GameState.Playing
+                        && !_inventoryOpen
+                        && !_fading
+                        && _world?.Player.Soldier != null;
+
+        if (wantCapture == _mouseCaptured)
+        {
+            // Raylib's HideCursor is not sticky across every window event, so it is
+            // re-asserted each frame while the pointer is free. Cheap, and it is the
+            // difference between "no cursor" and "no cursor most of the time".
+            if (!_mouseCaptured) Raylib.HideCursor();
+            return;
+        }
+
+        _mouseCaptured = wantCapture;
+        if (wantCapture)
+        {
+            Raylib.DisableCursor();
+        }
+        else
+        {
+            Raylib.EnableCursor();
+            Raylib.HideCursor();
         }
     }
 
@@ -543,6 +597,50 @@ public sealed class Game : IDisposable
             for (int i = 0; i < 2; i++) { _renderer.DrawInventory(_world!, _inventory, _menuTime); _renderer.Present(); }
             Raylib.TakeScreenshot(_capturePath!);
             return true;
+        }
+
+        // SOLDIER capture. Photographing this chassis is a scripting problem the others
+        // don't have: what is worth looking at — two cables out, the horizon banked over,
+        // the wind streaking past — only exists several seconds into a swing that a human
+        // has to fly. So the hatch flies it. VOIDTANKS_CAPTURE_HOOK picks the beat:
+        //   fire   the first hook leaving the launcher, cable mid-flight
+        //   swing  jumped, anchored, hanging and reeling on one cable
+        //   both   the signature state — both hooks bitten, the body suspended between
+        // Pair with VOIDTANKS_CLASS_INDEX=4 (which is what puts a soldier in the seat)
+        // and a CAPTURE_FRAME late enough for the beat to have arrived.
+        string? hook = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_HOOK");
+        if (hook != null && _world!.Player.Soldier is { } soldierRig)
+        {
+            if (_frame == 1 && hook != "fire") soldierRig.Jump(_world.Player);
+            // Give the leap a moment to clear the ground before throwing anything, so
+            // the arc has somewhere to go.
+            if (_frame == (hook == "fire" ? 1 : 30)) _world.FireSoldierHookForTest(right: true);
+            // The second cable goes out a beat later and a few degrees off the first, so
+            // the two anchors are genuinely apart and the player hangs between them
+            // rather than from one line drawn twice.
+            if (hook == "both" && _frame == 55)
+            {
+                _world.Player.Heading += 0.5f;
+                _world.FireSoldierHookForTest(right: false);
+                _world.Player.Heading -= 0.5f;
+            }
+            // Hold the reel in from the moment the first hook bites, which is what
+            // builds the speed the vignette and the bank are keyed to. Set on the world
+            // rather than on the rig: the sim reads the keyboard into MoveInput at the
+            // top of every step, so anything written straight onto the rig here is
+            // overwritten before it can do anything.
+            if (hook != "shoot" && _frame > 40)
+                _world.ScriptedSoldierMove = new System.Numerics.Vector2(0f, 1f);
+
+            // "shoot" is the weapons beat instead: a burst of rifle down the line of
+            // sight with a rocket travelling out ahead of it, so the tracers, the brass,
+            // the muzzle flash and the rocket's motor trail can all be photographed in
+            // one frame. Nothing else stages this — the rounds are gone in a second.
+            // One weapon at a time, because they share a cooldown: a rocket locks the
+            // trigger for most of a second, so a beat that fires both photographs the
+            // rocket and none of the rifle.
+            if (hook == "shoot" && _frame >= 6) _world.FireSoldierRifleForTest();
+            if (hook == "rocket" && _frame == 6) _world.FireSoldierRocketForTest();
         }
 
         // Blast cinematic capture: stage a CRAB CORE detonation dead ahead on the first

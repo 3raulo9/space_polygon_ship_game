@@ -48,10 +48,31 @@ public sealed class Projectile
     /// </summary>
     public bool IsLaser;
 
+    /// <summary>
+    /// A SOLDIER's rocket: fin-stabilised, contact-fused, and the only round in the game
+    /// that flies a genuine 3D line rather than skimming the plane at a fixed height —
+    /// it is fired down a mouse-aimed look, which can point at the sky or at the floor.
+    /// It carries a splash like a grenade's and, unlike any other round, what it goes off
+    /// against comes down.
+    /// </summary>
+    public bool IsRocket;
+
     private const float Speed = 90f;
     private const float GrenadeSpeed = 60f;   // heavier, so it lobs slower
     private const float MaxLife = 2.4f;
     public const float GrenadeSplash = 7f;    // blast radius in world units
+
+    /// <summary>How fast a rocket travels. Slow enough to watch leave, and slow enough
+    /// that firing one at a wall you are swinging toward is a real gamble.</summary>
+    public const float RocketSpeed = 45f;
+
+    /// <summary>Its blast radius. Everything inside takes the hit, and any building
+    /// caught in it is cut down — including the one the player is hanging from.</summary>
+    public const float RocketSplash = 6f;
+
+    /// <summary>How fast a rifle round leaves — the cannon's own muzzle speed, since it
+    /// is the same round out of a smaller weapon.</summary>
+    public const float RifleSpeed = Speed;
 
     /// <summary>Barrel height of a grounded shot — where the bolt rides by default.</summary>
     public const float BoltHeight = 0.55f;
@@ -71,6 +92,9 @@ public sealed class Projectile
         IsLaser = laser;
         IsCrabBomb = false;   // pooled slots are reused — clear the thrown-core flag or a
                               // plain bolt inherits it and detonates like one on expiry
+        IsRocket = false;
+        IsTracer = false;
+        _climb = 0f;
         SplashRadius = 0f;
         Height = launchHeight;
         JustExpired = false;
@@ -94,9 +118,12 @@ public sealed class Projectile
         IsGrenade = true;
         IsCrabBomb = false;
         IsLaser = false;
+        IsRocket = false;
+        IsTracer = false;
         SplashRadius = GrenadeSplash;
         Height = 0.7f;          // the fatter slug rides a touch higher than a bolt
         _descentRate = 0f;
+        _climb = 0f;
         IsAirShot = false;
         JustExpired = false;
         Active = true;
@@ -117,12 +144,69 @@ public sealed class Projectile
         IsGrenade = true;       // reuse the fat-slug travel + splash-style handling
         IsCrabBomb = true;
         IsLaser = false;
+        IsRocket = false;
+        IsTracer = false;
         SplashRadius = 0f;      // the beams carry the damage, not a splash sphere
         Height = 0.7f;
         _descentRate = 0f;
+        _climb = 0f;
         IsAirShot = false;
         JustExpired = false;
         Active = true;
+    }
+
+    /// <summary>
+    /// Launches a round along a full 3D line: the SOLDIER's rifle and its rockets, both
+    /// of which are aimed with a mouse at whatever the crosshair is on rather than fired
+    /// along a chassis's heading.
+    ///
+    /// The climb is carried as its own velocity rather than as the air shot's fixed
+    /// descent, so a round fired at the sky genuinely goes up and a round fired at the
+    /// grid from the top of a swing genuinely comes down where it was pointed.
+    /// </summary>
+    public void FireDirected(Vector3 origin, Vector3 dir, float speed, bool rocket)
+    {
+        Vector3 d = Vector3.Normalize(dir);
+
+        Position = new Vector2(origin.X, origin.Z);
+        Velocity = new Vector2(d.X, d.Z) * speed;
+        Height = MathF.Max(0.05f, origin.Y);
+        _descentRate = 0f;
+        _climb = d.Y * speed;
+
+        FromPlayer = true;
+        IsRocket = rocket;
+        IsTracer = !rocket;
+        IsGrenade = false;      // a rocket carries its own splash; it is not the heavy round
+        IsCrabBomb = false;
+        IsLaser = false;
+        IsAirShot = false;
+        SplashRadius = rocket ? RocketSplash : 0f;
+        Life = rocket ? MaxLife : 1.6f;
+        JustExpired = false;
+        Active = true;
+    }
+
+    /// <summary>Vertical velocity for a directed round, in units a second. Zero for
+    /// everything that travels flat.</summary>
+    private float _climb;
+
+    /// <summary>A directed round that isn't a rocket — the SOLDIER's rifle. Drawn as a
+    /// tracer streak rather than as the cannon's tumbling shell.</summary>
+    public bool IsTracer { get; private set; }
+
+    /// <summary>
+    /// The full 3D direction of travel, normalised — what a round that flies a real
+    /// line has to be drawn along. Falls back to +Z for a shot with no velocity at all,
+    /// which only a pooled slot mid-reset can be.
+    /// </summary>
+    public Vector3 Heading3
+    {
+        get
+        {
+            var v = new Vector3(Velocity.X, _climb, Velocity.Y);
+            return v.LengthSquared() > 1e-6f ? Vector3.Normalize(v) : new Vector3(0f, 0f, 1f);
+        }
     }
 
     public void Update(float dt)
@@ -131,9 +215,15 @@ public sealed class Projectile
         JustExpired = false;
         Position += Velocity * dt;
         if (_descentRate != 0f) Height -= _descentRate * dt;
+        if (_climb != 0f) Height += _climb * dt;
         Life -= dt;
-        if (Life <= 0f || (IsAirShot && Height <= 0f))
+
+        // A directed round that has flown into the grid has hit the grid: it goes off
+        // there rather than sailing on underneath the floor.
+        bool struckGround = _climb < 0f && Height <= 0f;
+        if (Life <= 0f || (IsAirShot && Height <= 0f) || struckGround)
         {
+            if (struckGround) Height = 0f;
             Active = false;
             JustExpired = true;   // ended on its own — stage the horizon blast
         }

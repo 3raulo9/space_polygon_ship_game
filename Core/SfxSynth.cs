@@ -1713,6 +1713,391 @@ public static class SfxSynth
         };
     }
 
+    // --- The SOLDIER's cable rig ----------------------------------------------
+    // Everything below is pressure, steel or air. Nothing in this set sings, glows or
+    // whirrs: the chassis is a person with a gas bottle and two hooks, and the moment
+    // any of it sounds electrical it stops being that. The one indulgence is how loud
+    // the jump is — it is the opener of every traversal and it earns the room.
+
+    /// <summary>
+    /// The gas burst that throws a soldier fifteen metres into the air. Noise, which is
+    /// the only oscillator here that ignores frequency entirely, so the whole shape is
+    /// in the envelope and the filter: an instantaneous release, then the low-pass
+    /// slamming open across the launch, which is heard as the body accelerating rather
+    /// than as a pitch moving.
+    ///
+    /// <paramref name="starvation"/> (0..1) thins it toward a hiss as the reserve runs
+    /// down — the filter starts higher and opens less far, which strips the body out and
+    /// leaves the top. The player hears the bottle emptying several jumps before it does.
+    /// </summary>
+    public static Params GasBurst(Random rng, float starvation)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+        starvation = Math.Clamp(starvation, 0f, 1f);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.55f, 0.75f) * (1f - 0.35f * starvation),
+
+            Attack = 0.02f,                         // the valve opening, not a swell
+            Sustain = Range(0.18f, 0.3f),
+            Decay = Range(0.6f, 0.78f),             // tails out into the rise
+
+            // Full: opens from a deep chest thump into an airy rush. Starved: starts
+            // thin and stays thin — all hiss, no body.
+            LpCutoff = Range(0.05f, 0.1f) + starvation * 0.45f,
+            LpResonance = Range(0.3f, 0.5f),
+            LpSweep = 1f + Range(0.00002f, 0.00004f) * (1f - 0.7f * starvation),
+            HpCutoff = Range(0.01f, 0.03f) + starvation * 0.2f,
+
+            CrushBits = rng.Next(5, 9),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.9f,                          // the loudest cue the class has
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// A hook leaving the launcher: a compressed-air pop with the line whipping out
+    /// behind it. Two things at once, so the pitch climbs (the cable's hiss rising as it
+    /// pays out) while the envelope falls (the pop already spent) — which is what stops
+    /// it reading as a gunshot, since the two never do that together.
+    /// </summary>
+    public static Params CableLaunch(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(420f, 620f);
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.22f, 0.32f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(2.2f, 3.4f),    // the line hissing away from you
+
+            Attack = 0.01f,
+            Sustain = Range(0.1f, 0.18f),
+            Decay = Range(0.75f, 0.88f),
+
+            LpCutoff = Range(0.3f, 0.45f),
+            LpResonance = Range(0.35f, 0.6f),
+            LpSweep = 1f + Range(0.00001f, 0.000025f),
+            HpCutoff = Range(0.08f, 0.16f),         // strip the mud; it is a small pop
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.55f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// Steel biting stone. Short, hard, and metallic — a square wave dropping fast
+    /// through a resonant filter, with a dissonant second voice a fourth or so off it so
+    /// the impact rings rather than thuds. This is the cue the whole class turns on, so
+    /// it is deliberately the sharpest transient in the rig's bank.
+    /// </summary>
+    public static Params AnchorClank(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(620f, 880f);
+        return new Params
+        {
+            Wave = Osc.Square,
+            Length = Range(0.16f, 0.26f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.35f, 0.5f),   // metal struck, not metal sounded
+
+            Attack = 0.005f,                        // instantaneous: it is an impact
+            Sustain = Range(0.08f, 0.15f),
+            Decay = Range(0.8f, 0.92f),
+
+            Duty = Range(0.12f, 0.28f),             // thin and hard
+            DutySweep = Range(-1.2f, 1.2f),
+
+            Detune = Range(1.32f, 1.46f),           // the ring: deliberately not consonant
+            DetuneGain = Range(0.4f, 0.65f),
+
+            LpCutoff = Range(0.55f, 0.8f),
+            LpResonance = Range(0.3f, 0.55f),
+            HpCutoff = Range(0.06f, 0.12f),
+
+            CrushBits = rng.Next(3, 7),             // crushed hard: it is old steel
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.8f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// A cable retracting: a fast metallic zip climbing as the line comes in, ending on
+    /// the click of the hook seating. Short — a returning cable is dead time and should
+    /// not sound like an event.
+    /// </summary>
+    public static Params CableZip(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(700f, 1000f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = Range(0.14f, 0.22f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.6f, 2.4f),    // reeling home, not paying out
+
+            Attack = 0.02f,
+            Sustain = Range(0.25f, 0.4f),
+            Decay = Range(0.55f, 0.7f),
+
+            Duty = Range(0.2f, 0.4f),
+            DutySweep = Range(0.4f, 1.4f),
+
+            LpCutoff = Range(0.4f, 0.65f),
+            LpResonance = Range(0.25f, 0.5f),
+            HpCutoff = Range(0.1f, 0.2f),
+
+            CrushBits = rng.Next(3, 6),             // the mechanical rattle of the line
+            CrushRate = rng.Next(2, 5),
+            Volume = 0.4f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// An anchor tearing out of weak material. The one splintering sound in the bank,
+    /// and the only one that <em>falls</em> in both pitch and level at once — everything
+    /// else here either climbs or holds. Hard rate-crush is what does the splintering:
+    /// holding each sample for several frames breaks the noise into audible grains,
+    /// which is heard as material coming apart rather than as a filtered rush.
+    /// </summary>
+    public static Params AnchorTear(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(240f, 380f);
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.35f, 0.5f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.3f, 0.5f),
+
+            Attack = 0.01f,
+            Sustain = Range(0.3f, 0.45f),           // it gives way over a moment
+            Decay = Range(0.5f, 0.68f),
+
+            Detune = Range(1.5f, 1.7f),             // as wrong as this bank gets
+            DetuneGain = Range(0.4f, 0.6f),
+
+            LpCutoff = Range(0.35f, 0.55f),
+            LpResonance = Range(0.4f, 0.65f),
+            LpSweep = 1f - Range(0.000008f, 0.00002f),   // closing: the sound of losing it
+            HpCutoff = Range(0.03f, 0.08f),
+
+            CrushBits = rng.Next(2, 5),             // coarse — this is the splinter
+            CrushRate = rng.Next(4, 9),
+            Volume = 0.75f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// A rifle round. Sharp, dry and gone — the opposite of the cannon's detonation
+    /// clip, which has enough body that ten of them a second stack into a solid roar.
+    /// Almost all attack and decay, with the low end filtered out entirely so what is
+    /// left is the crack and nothing under it.
+    /// </summary>
+    public static Params RifleCrack(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(900f, 1300f);
+        return new Params
+        {
+            Wave = rng.NextDouble() < 0.5 ? Osc.Square : Osc.Noise,
+            Length = Range(0.07f, 0.11f),           // over before the next round is due
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.25f, 0.4f),
+
+            Attack = 0.004f,
+            Sustain = Range(0.06f, 0.12f),
+            Decay = Range(0.85f, 0.94f),
+
+            Duty = Range(0.1f, 0.25f),
+            DutySweep = Range(-1f, 1f),
+
+            LpCutoff = Range(0.6f, 0.9f),
+            LpResonance = Range(0.15f, 0.35f),
+            HpCutoff = Range(0.12f, 0.22f),         // no body at all — just the crack
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = 1,
+            Volume = 0.45f,                         // it fires six times a second
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// A rocket leaving the tube: the motor catching, then the whole thing tearing away
+    /// from the player. The pitch falls while the filter opens, which is the doppler of
+    /// something departing at speed — and is why it reads as leaving rather than as
+    /// simply being fired.
+    /// </summary>
+    public static Params RocketLaunch(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(180f, 260f);
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.5f, 0.7f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.4f, 0.6f),    // departing
+
+            Attack = 0.03f,                         // the motor catching
+            Sustain = Range(0.2f, 0.32f),
+            Decay = Range(0.6f, 0.75f),
+
+            Detune = Range(1.01f, 1.04f),           // the motor's own roughness
+            DetuneGain = Range(0.5f, 0.7f),
+
+            LpCutoff = Range(0.12f, 0.2f),
+            LpResonance = Range(0.3f, 0.5f),
+            LpSweep = 1f + Range(0.000006f, 0.000016f),
+            HpCutoff = Range(0.01f, 0.04f),
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(2, 5),
+            Volume = 0.7f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The reel's gas jet — a seamless bed, because a reel lasts exactly as long as the
+    /// player holds W and no one-shot envelope could ever match that. The caller drives
+    /// its playback rate off the pressure left in the bottle, so a starved reel sags in
+    /// rate as well as in level: the whole jet slows down rather than merely getting
+    /// quieter, which is the difference between a weak push and a failing one.
+    ///
+    /// Filtered wide open compared with the monsters' beds. Those are machinery heard
+    /// through armour; this one is a gas jet a foot from the player's own hip.
+    /// </summary>
+    public static Params ReelJet(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Loop = true,
+            Wave = Osc.Noise,
+            Length = Range(0.9f, 1.3f),
+
+            // The jet pulsing rather than droning — a real gas release chugs as the
+            // regulator opens and closes, and a perfectly smooth hiss reads as a synth.
+            TremoloDepth = Range(0.12f, 0.24f),
+            TremoloSpeed = Range(11f, 19f),
+
+            LpCutoff = Range(0.28f, 0.42f),
+            LpResonance = Range(0.25f, 0.45f),
+            HpCutoff = Range(0.02f, 0.06f),
+
+            CrushBits = rng.Next(5, 9),
+            CrushRate = 1,                          // rate-crush can't be made seamless
+            Volume = 0.5f,                          // the caller scales this
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The air past the ears. Also a bed, and the loudest one in the game: on this
+    /// chassis the wind <em>is</em> the speedometer, and a player crossing the city at
+    /// thirty metres a second should be able to hear that with their eyes shut.
+    ///
+    /// Almost unfiltered — wind has no pitch and hiding it behind a low-pass just makes
+    /// it a rumble. The slow tremolo is the buffet: air breaking over a body, which is
+    /// what separates it from tape hiss.
+    /// </summary>
+    public static Params WindRush(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Loop = true,
+            Wave = Osc.Noise,
+            Length = Range(1.3f, 1.8f),             // long: a short lap would pulse
+
+            TremoloDepth = Range(0.18f, 0.32f),     // the buffet
+            TremoloSpeed = Range(1.6f, 3.4f),
+
+            LpCutoff = Range(0.5f, 0.75f),
+            LpResonance = Range(0.05f, 0.2f),       // barely resonant: it is air, not a tube
+            HpCutoff = Range(0.04f, 0.09f),
+
+            CrushBits = rng.Next(6, 10),            // lightly crushed, in keeping
+            CrushRate = 1,
+            Volume = 0.5f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// Steel taking weight — the third of the SOLDIER's beds, and the quietest. A low
+    /// creak with a fine vibration hum sitting in it, which is two things at once and
+    /// needs to be: the creak alone is a door, and the hum alone is a machine, but a
+    /// slow wow underneath a tight high buzz is unmistakably a loaded cable.
+    ///
+    /// Kept well below the wind and the jet on purpose. This is a sound the player
+    /// should notice they have been hearing rather than one they listen to.
+    /// </summary>
+    public static Params CableStrain(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(88f, 118f);
+        return new Params
+        {
+            Loop = true,
+            Wave = Osc.Saw,
+            Length = Range(1.0f, 1.4f),
+
+            StartFreq = baseF,
+            EndFreq = baseF,                        // pinned flat by Loop anyway
+
+            // The creak: a slow, uneven bend in the pitch, as a rope under load does.
+            VibratoDepth = Range(0.02f, 0.045f),
+            VibratoSpeed = Range(3.5f, 7f),
+
+            // And the vibration hum, as a fast shallow chop on the level.
+            TremoloDepth = Range(0.1f, 0.2f),
+            TremoloSpeed = Range(26f, 44f),
+
+            Detune = Range(1.49f, 1.51f),           // a fifth up: metal, not a note
+            DetuneGain = Range(0.25f, 0.4f),
+
+            Duty = Range(0.25f, 0.45f),
+            LpCutoff = Range(0.2f, 0.32f),
+            LpResonance = Range(0.35f, 0.55f),
+            HpCutoff = 0f,
+
+            CrushBits = rng.Next(5, 9),
+            CrushRate = 1,                          // rate-crush can't be made seamless
+            Volume = 0.4f,
+            Seed = rng.Next(),
+        };
+    }
+
     // --- .wav header helpers --------------------------------------------------
 
     private static void WriteTag(byte[] b, int at, string tag)

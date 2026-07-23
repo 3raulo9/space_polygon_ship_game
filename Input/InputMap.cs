@@ -40,9 +40,68 @@ public static class InputMap
 
     public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
 
-    // 'E' opens and closes the inventory / crafting panel. A just-pressed edge so a
-    // held key doesn't flap the panel open and shut every frame.
-    public static bool InventoryToggle => Raylib.IsKeyPressed(KeyboardKey.E);
+    /// <summary>
+    /// 'F' opens and closes the inventory / crafting panel, on every chassis. A
+    /// just-pressed edge, so a held key doesn't flap the panel open and shut every frame.
+    ///
+    /// It used to be E, and moved because the SOLDIER's right hook is bound to E and its
+    /// left to Q — a player chaining swings would have opened the pack a dozen times a
+    /// minute. Moving it for that one class and leaving it on E for the rest would have
+    /// been worse than either: the pack is the same pack, and a key that means "open my
+    /// things" on one chassis and "throw a grappling hook" on another is a key nobody can
+    /// build a habit around. F is one along from the hand already resting on WASD.
+    /// </summary>
+    public static bool InventoryToggle => Raylib.IsKeyPressed(KeyboardKey.F);
+
+    // --- The SOLDIER ---------------------------------------------------------
+    // A separate scheme, not a re-skin of the tank's. This chassis is a person in first
+    // person: the mouse is the aim, WASD is a body rather than a throttle, and the two
+    // hooks are the whole game. Fixed bindings — the settings screen's schemes are all
+    // about which key turns a vehicle, and none of them mean anything here.
+
+    /// <summary>Frame's mouse movement in pixels. Only meaningful while the cursor is
+    /// captured, which the loop does for exactly as long as a soldier is driving.</summary>
+    public static System.Numerics.Vector2 LookDelta => Raylib.GetMouseDelta();
+
+    /// <summary>E: throw the right hook, or let it go if it is already out.</summary>
+    public static bool RightHookPressed => Raylib.IsKeyPressed(KeyboardKey.E);
+
+    /// <summary>Q: the same, on the left.</summary>
+    public static bool LeftHookPressed => Raylib.IsKeyPressed(KeyboardKey.Q);
+
+    /// <summary>
+    /// The gas burst that gets a soldier off the ground. ENTER, as the spec binds it —
+    /// and SPACE alongside it, because every hand that has ever played a first-person
+    /// game reaches for SPACE to jump, and a class whose whole opener is "leave the
+    /// ground immediately" cannot afford the one second a player spends discovering that
+    /// SPACE does nothing.
+    /// </summary>
+    public static bool HighJumpPressed
+        => Raylib.IsKeyPressed(KeyboardKey.Enter) || Raylib.IsKeyPressed(KeyboardKey.Space);
+
+    /// <summary>Left mouse: the rifle. Held is fine — the cadence paces it.</summary>
+    public static bool RifleDown => Raylib.IsMouseButtonDown(MouseButton.Left);
+
+    /// <summary>Right mouse: a rocket. A press, not a hold: six are carried and every
+    /// one of them is a decision.</summary>
+    public static bool RocketPressed => Raylib.IsMouseButtonPressed(MouseButton.Right);
+
+    /// <summary>Raw WASD as (strafe, forward), each -1..1. A body, not a vehicle: A and
+    /// D step sideways rather than turning, since the mouse is already doing the
+    /// turning. Reads the physical keys and ignores the turn-swap setting, which is a
+    /// preference about steering a craft.</summary>
+    public static System.Numerics.Vector2 SoldierMove
+    {
+        get
+        {
+            float x = 0f, y = 0f;
+            if (Raylib.IsKeyDown(KeyboardKey.D)) x += 1f;
+            if (Raylib.IsKeyDown(KeyboardKey.A)) x -= 1f;
+            if (Raylib.IsKeyDown(KeyboardKey.W)) y += 1f;
+            if (Raylib.IsKeyDown(KeyboardKey.S)) y -= 1f;
+            return new System.Numerics.Vector2(x, y);
+        }
+    }
 
     /// <summary>
     /// The four equip slots, wired to the physical R / T / Y / U row above the

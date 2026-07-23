@@ -103,6 +103,37 @@ public sealed class DebrisSystem
         }
     }
 
+    /// <summary>
+    /// A single piece thrown along a chosen line, rather than a burst fanning out in
+    /// every direction: the SOLDIER's brass ejecting past the camera, and anything else
+    /// that wants one flying object it has picked the trajectory of.
+    ///
+    /// Short-lived and small on purpose — a shell case tumbling past the eye at six
+    /// hundred rounds a minute is a flicker in the corner of the frame, and anything
+    /// with more presence than that turns the view into a snowstorm.
+    /// </summary>
+    public void Fleck(Vector3 origin, Vector3 velocity, Color color, float life = 0.5f)
+    {
+        int slot = -1;
+        for (int i = 0; i < _shards.Length; i++)
+            if (!_shards[i].Active) { slot = i; break; }
+        if (slot < 0) return;
+
+        var r = Random.Shared;
+        _shards[slot] = new Shard
+        {
+            Position = origin,
+            Velocity = velocity,
+            Angle = r.NextSingle() * MathF.Tau,
+            Spin = (r.NextSingle() - 0.5f) * 26f,   // tumbling hard: it is a small thing
+            MaxLife = life,
+            Size = 0.28f + r.NextSingle() * 0.14f,
+            Color = color,
+            IsSpark = true,
+        };
+        _shards[slot].Life = life;
+    }
+
     public void Update(float dt)
     {
         for (int i = 0; i < _shards.Length; i++)
