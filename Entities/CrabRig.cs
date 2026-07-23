@@ -19,6 +19,17 @@ public static class CrabRig
     /// <summary>Overall size multiplier — the boss towers, ~10× a hunter tank.</summary>
     public const float Scale = 2.4f;
 
+    /// <summary>
+    /// The same rig cut down to something a person drives — the player's SPIDER chassis.
+    /// Sized off the body rather than the feet: the carapace and the core standing in it
+    /// come out about as tall as a hunter tank, which is what makes it read as a
+    /// Crab-Core you could look in the eye rather than a scale model of one. The legs
+    /// then reach a good way past the craft's own hitbox, because that is simply the
+    /// proportion of the thing — a walker's footprint is much wider than its body, and
+    /// pulling the legs in to match the hitbox would just make it a bug.
+    /// </summary>
+    public const float PlayerScale = 0.45f;
+
     // Leg segment endpoints in the leg's own +X frame (shoulder at origin).
     public static readonly Vector3 Knee = new(2.4f, 3.0f, 0f);   // up and out
     public static readonly Vector3 Foot = new(4.6f, -3.6f, 0f);  // far out, on the floor

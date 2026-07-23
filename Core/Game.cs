@@ -26,6 +26,12 @@ public sealed class Game : IDisposable
     private bool _inventoryOpen;
     private readonly SettingsScreen _settingsScreen;
     private readonly TestScreen _testScreen = new();
+
+    // The hangar's build. Held here rather than on the screen so it survives a run:
+    // dying and coming back to the menu should not silently un-paint your craft or
+    // reset the points you spent on it.
+    private readonly Loadout _loadout = new();
+    private readonly ClassSelectScreen _classSelect;
     private World.World? _world;
     private GameState _state = GameState.Menu;
 
@@ -56,8 +62,13 @@ public sealed class Game : IDisposable
     // When set, capture grabs a UI screen instead of the world: "menu" or "settings".
     private readonly string? _captureScreen =
         Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU");
-    private bool _captureMenu => _captureScreen is "1" or "menu" or "settings" or "test";
+    private bool _captureMenu =>
+        _captureScreen is "1" or "menu" or "settings" or "test" or "class";
     private int _frame;
+
+    /// <summary>Capture-only: the harness is holding the SPIDER's lance charge, so no
+    /// step of the sim may read the trigger as released. See RunCaptureFrame.</summary>
+    private bool _lanceHold;
 
     public Game()
     {
@@ -67,6 +78,7 @@ public sealed class Game : IDisposable
         _settings = Settings.Load();
         InputMap.Active = _settings;
         _settingsScreen = new SettingsScreen(_settings);
+        _classSelect = new ClassSelectScreen(_loadout);
 
         // Capture runs the world directly (no menu), so build it now and aim the
         // craft at the seeded enemy. Normal play starts on the menu instead. The
@@ -121,6 +133,15 @@ public sealed class Game : IDisposable
             {
                 if (UpdateMenu()) break; // Quit requested
                 DrawMenu();
+                continue;
+            }
+
+            if (_state == GameState.ClassSelect)
+            {
+                UpdateClassSelect();
+                // LAUNCH tears down the hangar and starts a fade, which owns the next
+                // frame — so only draw the hangar while we're actually still in it.
+                if (_state == GameState.ClassSelect && !_fading) DrawClassSelect();
                 continue;
             }
 
@@ -231,9 +252,11 @@ public sealed class Game : IDisposable
         switch (_menu.Update())
         {
             case Menu.Action.StartSinglePlayer:
-                // Dissolve the menu out, spin the world up at the crossover, then
-                // resolve into the first-person view.
-                BeginFade(EnterSinglePlayer);
+                // Single Player no longer drops straight into the world: it opens the
+                // hangar first, where the chassis and the build are chosen. The fade
+                // still runs, so the menu dissolves into the hangar the same way it
+                // used to dissolve into the grid.
+                BeginFade(() => _state = GameState.ClassSelect);
                 break;
             case Menu.Action.OpenSettings:
                 _state = GameState.Settings;
@@ -246,6 +269,26 @@ public sealed class Game : IDisposable
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Advances the hangar. LAUNCH dissolves out and spins the world up at the
+    /// crossover with whatever build is on the bench; Escape falls back to the menu
+    /// (through the same dissolve, so no screen ever hard-cuts to another).
+    /// </summary>
+    private void UpdateClassSelect()
+    {
+        _menuTime += Raylib.GetFrameTime();
+
+        switch (_classSelect.Update())
+        {
+            case ClassSelectScreen.Action.Launch:
+                BeginFade(EnterSinglePlayer);
+                break;
+            case ClassSelectScreen.Action.Back:
+                BeginFade(() => _state = GameState.Menu);
+                break;
+        }
     }
 
     /// <summary>
@@ -393,6 +436,7 @@ public sealed class Game : IDisposable
         switch (_state)
         {
             case GameState.Menu: _renderer.DrawMenu(_menu, _menuTime); break;
+            case GameState.ClassSelect: _renderer.DrawClassSelect(_classSelect, _menuTime); break;
             case GameState.Settings: _renderer.DrawSettings(_settingsScreen, _menuTime); break;
             case GameState.Test: _renderer.DrawTest(_testScreen, _menuTime); break;
             default: _renderer.DrawWorld(_world!); break; // Playing / Paused
@@ -429,7 +473,7 @@ public sealed class Game : IDisposable
 
     private void EnterSinglePlayer()
     {
-        _world = new World.World();
+        _world = new World.World(_loadout);
         _state = GameState.Playing;
         _inventoryOpen = false;
     }
@@ -469,6 +513,7 @@ public sealed class Game : IDisposable
             for (int i = 0; i < 2; i++)
             {
                 if (_captureScreen == "settings") _renderer.DrawSettings(_settingsScreen, _menuTime);
+                else if (_captureScreen == "class") _renderer.DrawClassSelect(_classSelect, _menuTime);
                 else if (_captureScreen == "test") _renderer.DrawTest(_testScreen, _menuTime);
                 else _renderer.DrawMenu(_menu, _menuTime);
                 _renderer.ApplyPixelDissolve(fa);
@@ -507,7 +552,41 @@ public sealed class Game : IDisposable
 
         // Let the world run so the enemy advances out of the fog toward the
         // player before we grab the frame.
-        _world!.Update((float)Config.FixedDt);
+        // SPIDER capture: VOIDTANKS_CAPTURE_LANCE=hold parks the chassis mid-charge (so
+        // the meter and the gathering flare can be photographed), and =fire looses it on
+        // the first frame so the shaft is burning by the time the grab lands. Paired
+        // with VOIDTANKS_CLASS_INDEX=1, which is what put a spider in the seat.
+        string? lance = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_LANCE");
+
+        // A held charge has to have the sim's combat input muted, because that input is
+        // what decides a charge has been let go: the harness holds no button, so an
+        // ordinary step would read the trigger as released and fire the lance every
+        // frame — a picture of a beam where a picture of a full meter was wanted. The
+        // flag is a field because muting it here is not enough: a capture frame that
+        // isn't the grab returns false, and the ordinary loop then steps the world a
+        // *second* time with input live, which would fire the charge anyway.
+        _lanceHold = lance == "hold";
+        _world!.Update((float)Config.FixedDt, acceptCombatInput: !_lanceHold);
+
+        if (lance != null && _world!.Player.Spider is { } cap)
+        {
+            if (lance == "hold")
+            {
+                // Re-wound after the sim step, not before: the step's own trigger
+                // handling releases any charge whose button isn't down, and the harness
+                // has no button. Held at about three quarters, which is where the meter
+                // is most worth looking at — visibly filling, not yet full.
+                cap.Cancel();
+                for (int i = 0; i < 45; i++) cap.Hold((float)Config.FixedDt);
+                _world.Player.Rooted = true;
+            }
+            else if (_frame == 1)
+            {
+                for (int i = 0; i < 100; i++) cap.Hold((float)Config.FixedDt);
+                _world.FireSpiderLanceForTest();
+                _world.FirePlayerShot(laser: true);
+            }
+        }
 
         // Grab late enough that the enemy has closed to inside the fog boundary.
         int captureAt = int.TryParse(
@@ -577,7 +656,7 @@ public sealed class Game : IDisposable
             case GameState.Playing:
                 // Combat triggers are muted while the crafting panel is up so a click
                 // on an item slot can't also fire the cannon; movement still runs.
-                _world!.Update(dt, acceptCombatInput: !_inventoryOpen);
+                _world!.Update(dt, acceptCombatInput: !_inventoryOpen && !_lanceHold);
                 break;
         }
     }
@@ -611,6 +690,12 @@ public sealed class Game : IDisposable
     private void DrawSettings()
     {
         _renderer.DrawSettings(_settingsScreen, _menuTime);
+        _renderer.Present();
+    }
+
+    private void DrawClassSelect()
+    {
+        _renderer.DrawClassSelect(_classSelect, _menuTime);
         _renderer.Present();
     }
 

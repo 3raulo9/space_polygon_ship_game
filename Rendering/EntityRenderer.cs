@@ -39,6 +39,20 @@ public sealed class EntityRenderer
     // ...and so is the Maw-Core, which shares two of the crab's parts outright.
     private readonly MawRenderer _maw = new();
 
+    // --- The player's own chassis, for the hangar's turntable -------------------
+    // Only ever drawn on the class-select screen: the run itself is first-person, so
+    // the craft the player picked is a thing they see exactly once, before they climb
+    // into it. Built white and tinted per part at draw time so the paint bay can
+    // repaint them every frame for free.
+    private readonly PolyMesh _playerHull = Meshes.TankHull(Color.White);
+    private readonly PolyMesh _playerCap = Meshes.TankCap(Color.White);
+    private readonly PolyMesh _playerBarrel = Meshes.TankBarrel(Color.White);
+
+    // The SPIDER is the boss's rig at a person's size, so it gets its own CrabRenderer
+    // rather than borrowing the one above — that one is carrying the live boss's scale
+    // and gunmetal, and neither belongs on the player's craft.
+    private readonly CrabRenderer _spiderRig = new() { Scale = CrabRig.PlayerScale };
+
     public void Draw(World.World world, Vector3 cameraPos)
     {
         // The world is a torus, so every world thing is drawn at its nearest image
@@ -104,7 +118,39 @@ public sealed class EntityRenderer
             // than snapping back to barrel height. The heavy grenade is a fatter slug
             // in the elite/orange colour.
             if (p.IsGrenade) _grenade.Draw(shotPos, 0f, p.Height, cameraPos);
+            else if (p.IsLaser) DrawLaserStreak(p, shotPos);
             else _bolt.Draw(shotPos, 0f, p.Height, cameraPos);
+        }
+
+        // The SPIDER's lance: the gathering flare in its core while the meter fills,
+        // then the shaft itself. Drawn through the boss's own lance renderer at the
+        // salvaged emitter's smaller reach — it is literally the same weapon, cut down,
+        // so it should be the same light.
+        if (world.Player.Spider is { } spider)
+        {
+            if (spider.Charging || spider.BeamActive)
+            {
+                Vector2 fwd = world.Player.Forward;
+                Vector2 muzzleXZ = world.Player.Position + fwd * SpiderWeapon.MuzzleForward;
+
+                // While charging the flare rides the live craft; once fired the shaft
+                // stays where it was loosed from, so a player who turns mid-burn sees
+                // the beam hold its line rather than sweep round with them.
+                Vector3 origin = spider.BeamActive
+                    ? spider.BeamOrigin
+                    : new Vector3(muzzleXZ.X,
+                        SpiderWeapon.MuzzleHeight + world.Player.Height, muzzleXZ.Y);
+                Vector3 dir = spider.BeamActive
+                    ? spider.BeamDirection
+                    : new Vector3(fwd.X, 0f, fwd.Y);
+
+                _crab.DrawLance(origin, dir,
+                    spider.Charging ? spider.ChargeFraction : 0f,
+                    spider.BeamProgress,
+                    SpiderWeapon.BeamLength,
+                    SpiderWeapon.BeamRadius * (0.45f + 0.55f * spider.BeamPower),
+                    SpiderWeapon.FlareScale);
+            }
         }
 
         // Thrown CRAB CORE detonations: a cinematic energy burst. A floating light core
@@ -168,6 +214,27 @@ public sealed class EntityRenderer
     }
 
     /// <summary>
+    /// A SPIDER laser: a short neon streak lying along its own flight path rather than
+    /// the cannon's tumbling octahedron. Drawn as a thin cylinder for the same reason
+    /// the boss's lance is — light is the one thing out here not built out of polygons
+    /// — and cored white inside red so it reads as the same emitter's work at a
+    /// hundredth the size.
+    /// </summary>
+    private static void DrawLaserStreak(Projectile p, Vector2 at)
+    {
+        const float len = 1.6f;
+        Vector2 dir = p.Velocity.LengthSquared() > 1e-4f
+            ? Vector2.Normalize(p.Velocity) : new Vector2(0f, 1f);
+        var tail = new Vector3(at.X - dir.X * len, p.Height, at.Y - dir.Y * len);
+        var head = new Vector3(at.X, p.Height, at.Y);
+
+        var red = Palette.NeonRed;
+        Raylib.DrawCylinderEx(tail, head, 0.10f, 0.16f, 6,
+            new Color(red.R, red.G, red.B, (byte)190));
+        Raylib.DrawCylinderEx(tail, head, 0.04f, 0.07f, 6, Color.White);
+    }
+
+    /// <summary>
     /// Draws a single roster entry as a rotating turntable specimen for the test
     /// screen. Tanks sit on the grid; the ships float, matching the rootless drift
     /// the enemies already have. Returns nothing — purely a display pass.
@@ -184,6 +251,44 @@ public sealed class EntityRenderer
             _                         => (_standardTank, 0f),
         };
         mesh.Draw(pos, heading, height, cameraPos);
+    }
+
+    /// <summary>
+    /// Draws the player's chosen chassis on the hangar's turntable, painted in whatever
+    /// the paint bay currently holds. An offline chassis has no model — the screen says
+    /// so in words instead, so nothing is drawn here and the middle of the hangar is
+    /// left as empty grid, which is the honest picture of a build the machine can't make.
+    /// </summary>
+    public void DrawLoadoutShowcase(Loadout loadout, Vector2 pos, float heading,
+        Vector3 cameraPos, float elapsed)
+    {
+        var arch = ClassCatalog.Get(loadout.Class);
+        if (!arch.Available) return;
+
+        switch (loadout.Class)
+        {
+            case PlayerClass.Tank:
+                _playerHull.Draw(pos, heading, 0f, cameraPos, 1f, loadout.PartColor(PlayerClass.Tank, 0));
+                _playerCap.Draw(pos, heading, 0f, cameraPos, 1f, loadout.PartColor(PlayerClass.Tank, 1));
+                _playerBarrel.Draw(pos, heading, 0f, cameraPos, 1f, loadout.PartColor(PlayerClass.Tank, 2));
+                break;
+
+            case PlayerClass.Spider:
+                _spiderRig.UpperTint = loadout.PartColor(PlayerClass.Spider, 0);
+                _spiderRig.LowerTint = loadout.PartColor(PlayerClass.Spider, 1);
+                _spiderRig.LegTint = loadout.PartColor(PlayerClass.Spider, 2);
+                // A slow idle rather than a pose lifted off the boss's protocol: the
+                // gem turns, the legs breathe, and the carapace stays shut. Nothing the
+                // hangar shows should look like the thing is winding up to do something.
+                var pose = new CrabPose(
+                    CoreSpin: elapsed * 1.3f,
+                    ClawOpen: 0f,
+                    LegPhase: elapsed * 1.8f,
+                    CoreColor: loadout.PartColor(PlayerClass.Spider, 3),
+                    SlideOffset: Vector2.Zero);
+                _spiderRig.Draw(pose, pos, heading, cameraPos);
+                break;
+        }
     }
 
     /// <summary>

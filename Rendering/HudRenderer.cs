@@ -50,6 +50,56 @@ internal static class HudRenderer
         DrawWeaponSlots(world.Inventory);
         DrawRadar(world, p);
         DrawAimGuide(p);
+        if (p.Spider is { } spider) DrawChargeMeter(spider, p);
+    }
+
+    // --- The SPIDER's lance meter: 0..100 down the right-hand edge ---
+    // Deliberately not in the top strip with the vitals. The charge is the one gauge
+    // the player has to watch *while standing still and exposed*, so it wants to be
+    // tall, off to the side and unmissable, rather than another 7px stub in a row of
+    // three. It sits under the radar and runs most of the way down the frame.
+
+    private const int ChargeX = W - 12;
+    private const int ChargeW = 8;
+    private const int ChargeTop = StripH + 24;
+    private const int ChargeBottom = H - 40;
+
+    private static void DrawChargeMeter(SpiderWeapon spider, PlayerTank p)
+    {
+        int barH = ChargeBottom - ChargeTop;
+        float f = spider.ChargeFraction;
+        int filled = (int)MathF.Round(barH * f);
+
+        Raylib.DrawRectangle(ChargeX, ChargeTop, ChargeW, barH, new Color(10, 20, 24, 220));
+
+        if (filled > 0)
+        {
+            // The fill rides from the core's resting magenta to a blown-out white as it
+            // tops out, so a full meter reads as "this is about to come out of you"
+            // rather than as a bar that has merely reached its end.
+            Color hot = Lerp(Palette.NeonMagenta, Color.White, f * f);
+            Raylib.DrawRectangle(ChargeX, ChargeBottom - filled, ChargeW, filled, hot);
+        }
+
+        // The minimum a release needs to actually fire — below this the trigger fizzles,
+        // so the line is worth drawing rather than leaving the player to discover it.
+        int minY = ChargeBottom - (int)(barH * (SpiderWeapon.MinCharge / SpiderWeapon.MaxCharge));
+        Raylib.DrawRectangle(ChargeX, minY, ChargeW, 1, Palette.Warning);
+
+        Raylib.DrawRectangleLines(ChargeX, ChargeTop, ChargeW, barH, Scale(Palette.HudChrome, 0.5f));
+
+        // The number, so "0 to 100" is literally what the player sees, and under it the
+        // rounds the shot would cost — the meter is spending two things at once.
+        int charge = (int)MathF.Round(spider.Charge);
+        PixelFont.DrawCentered(charge.ToString(), ChargeX + ChargeW / 2, ChargeTop - 9, 1,
+            spider.Charging ? Palette.HudChrome : Scale(Palette.HudChrome, 0.6f));
+
+        if (!spider.Charging) return;
+
+        int cost = spider.AmmoCost;
+        bool afford = p.Ammo >= cost;
+        PixelFont.DrawCentered("-" + cost, ChargeX + ChargeW / 2, ChargeBottom + 4, 1,
+            afford ? Palette.Flag : Palette.Warning);
     }
 
     // --- Equip slots (R T Y U): the crafted CRAB CORE lives here ---

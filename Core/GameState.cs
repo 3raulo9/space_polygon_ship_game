@@ -7,6 +7,7 @@ namespace VoidTanks.Core;
 public enum GameState
 {
     Menu,
+    ClassSelect, // the hangar: pick a chassis, spend the points, paint it, then launch
     Settings,
     Test,        // hidden bestiary reached by the secret 'L' hatch
     LevelIntro,

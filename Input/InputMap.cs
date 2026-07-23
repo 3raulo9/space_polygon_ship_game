@@ -70,6 +70,12 @@ public static class InputMap
     public static bool MenuConfirm => Raylib.IsKeyPressed(KeyboardKey.Enter)
                                       || Raylib.IsKeyPressed(KeyboardKey.Space);
 
+    // Tab walks between the panes of a multi-column screen (the class-select hangar
+    // is the only one so far); Shift-Tab walks back. Fixed, like the rest of menu nav.
+    public static bool MenuTab => Raylib.IsKeyPressed(KeyboardKey.Tab);
+    public static bool MenuTabBack => Raylib.IsKeyDown(KeyboardKey.LeftShift)
+                                      || Raylib.IsKeyDown(KeyboardKey.RightShift);
+
     // Secret keybind: physical 'L' position drops into the (empty for now) test
     // screen. Undocumented on purpose — a maintenance hatch into the machine.
     public static bool SecretTestPressed => Raylib.IsKeyPressed(KeyboardKey.L);

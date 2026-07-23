@@ -65,6 +65,10 @@ public static class Audio
         // one mid-fight would mean tearing down a stream that is currently audible.
         _hum.Load(SfxSynth.RenderWav(SfxSynth.Hum(_sfxRng)));
         _mawHover.Load(SfxSynth.RenderWav(SfxSynth.MawHover(_sfxRng)));
+        // The player's own bed: the SPIDER's lance winding up. Same machinery as the
+        // monsters' — a loop whose playback rate is driven per frame — because the
+        // charge has no fixed length, so no one-shot envelope could ever match it.
+        _lanceCharge.Load(SfxSynth.RenderWav(SfxSynth.LanceCharge(_sfxRng)));
 
         _enabled = true;
     }
@@ -190,6 +194,68 @@ public static class Audio
         PlaySynth(SfxSynth.CrabBlastGrind(_sfxRng));
         PlaySynth(SfxSynth.CrabBlastMetal(_sfxRng));
         // A mechanical snap of the housing as it discharges.
+        PlayClamp();
+    }
+
+    /// <summary>
+    /// One of the SPIDER's small lasers leaving the emitter: a dry zap and, a beat
+    /// behind it, the same zap again at a fifth of the level and a touch lower — a tiny
+    /// echo, and nothing more. The cannon's <see cref="PlayDetonation"/> is a report
+    /// with body to it, which at the laser's cadence stacks into a continuous roar; this
+    /// is built to get out of the way the instant the shot has left.
+    /// </summary>
+    public static void PlayLaser()
+    {
+        if (!_enabled) return;
+        PlaySynth(SfxSynth.Laser(_sfxRng));
+
+        // The echo is the same recipe rendered again rather than a delay line — there
+        // is no delay in the synth — so it is a genuinely different roll of the same
+        // sound, which is closer to a reflection than a duplicate would be.
+        var tail = SfxSynth.Laser(_sfxRng);
+        tail.StartFreq *= 0.82f;
+        tail.EndFreq *= 0.82f;
+        tail.Length *= 1.3f;
+        PlaySynth(tail, 0.22f);
+    }
+
+    /// <summary>
+    /// The SPIDER's lance discharging: a short crushed discharge, a clamp snap for the
+    /// housing, a quiet tail a fifth down — and, underneath all of it, the Crab-Core's
+    /// own sung beam.
+    ///
+    /// That last layer is the point of the class. The chassis is a boss's weapon cut
+    /// down and bolted to a person, and the sung pair is the single most recognisable
+    /// sound the boss makes; hearing a ghost of it every time you fire is what tells the
+    /// player, without a line of text, whose gun they are holding. It is mixed low and
+    /// — critically — rendered at the <em>player's</em> burn length rather than the
+    /// boss's, since <see cref="PlayCrabCoreBlast"/>'s five-second voices are what left
+    /// the old cue sounding for four seconds after the light had gone. Same voice,
+    /// quarter the level, a tenth of the length: present, not playing.
+    /// </summary>
+    public static void PlayLanceFire()
+    {
+        if (!_enabled) return;
+        PlaySynth(SfxSynth.LanceFire(_sfxRng));
+
+        var tail = SfxSynth.LanceFire(_sfxRng);
+        tail.StartFreq *= 0.66f;
+        tail.EndFreq *= 0.66f;
+        PlaySynth(tail, 0.3f);
+
+        // The boss's beam, cut to the length of the shaft the player actually fired.
+        // Keyed off SpiderWeapon.BeamTime rather than a literal so retuning the burn
+        // moves the sound with it instead of quietly desynchronising the two.
+        float burn = SpiderWeapon.BeamTime;
+
+        var sung = SfxSynth.BeamAngelic(_sfxRng);
+        sung.Length = burn;
+        PlaySynth(sung, 0.26f);
+
+        var choir = SfxSynth.BeamChoir(_sfxRng);
+        choir.Length = burn;
+        PlaySynth(choir, 0.18f);
+
         PlayClamp();
     }
 
@@ -577,6 +643,15 @@ public static class Audio
     // Round-robin voices for the core ping, so rapid fire overlaps instead of
     // cutting itself off mid-ring.
     private const int CoreHitVoices = 3;
+    /// <summary>
+    /// The SPIDER's lance charge. Ranged at 1 unit and always fed a distance of 0, since
+    /// it is the player's own weapon and there is nothing to fall off with — the bed's
+    /// distance channel is simply not the axis this one varies on. Its rate is driven
+    /// hard (a wide spool) because the whole point of the cue is that the pitch tells
+    /// you how full the meter is without looking at it.
+    /// </summary>
+    private static readonly Bed _lanceCharge = new(wokenPitch: 2.4f, range: 1f, maxVolume: 0.5f);
+
     private static readonly Sound[] _coreHits = new Sound[CoreHitVoices];
     private static int _coreHitSlot;
 
@@ -631,6 +706,18 @@ public static class Audio
     }
 
     /// <summary>
+    /// The SPIDER's lance winding up. <paramref name="charging"/> is whether the trigger
+    /// is currently held and <paramref name="fraction"/> is the meter, 0..1 — the whine
+    /// climbs with it and holds once the meter tops out. Fed every tick with whatever
+    /// state the emitter is in; releasing simply stops feeding it, and the bed's own
+    /// fade carries the tail out over a fraction of a second.
+    /// </summary>
+    public static void SetLanceCharge(bool charging, float fraction)
+    {
+        if (_enabled) _lanceCharge.Set(charging, 0f, fraction);
+    }
+
+    /// <summary>
     /// Drains any scheduled sounds that have come due and services the rotor hum.
     /// Call once per frame from the main loop. The death cascade has to be spread
     /// over time and the hum stream needs refilling every frame; everything else in
@@ -653,6 +740,17 @@ public static class Audio
         float dt = Raylib.GetFrameTime();
         _hum.Service(dt);
         _mawHover.Service(dt);
+        _lanceCharge.Service(dt);
+
+        // The lance bed is fed-or-it-dies, unlike the two monster beds. Those are
+        // driven from the world's own step, which runs whenever their owner exists;
+        // this one is driven from the player's trigger handler, which does not run at
+        // all while the game is paused, while a cinematic has the craft, or after a
+        // bail to the menu. Clearing the target here — after servicing, so a frame that
+        // did set it still counts — means any frame that stops asking for the whine
+        // lets it fade out on its own, rather than leaving a charge humming behind the
+        // pause panel forever.
+        _lanceCharge.Set(false, 0f, 0f);
     }
 
     /// <summary>Moves <paramref name="v"/> toward <paramref name="target"/> by at
@@ -859,6 +957,7 @@ public static class Audio
         if (!_enabled) return;
         _hum.Unload();
         _mawHover.Unload();
+        _lanceCharge.Unload();
         // Aliases first: they borrow their source clips' samples, so they must all
         // be released before the clips that own those samples go.
         for (int i = 0; i < BossBoomCount; i++) Raylib.UnloadSoundAlias(_bossBooms[i]);

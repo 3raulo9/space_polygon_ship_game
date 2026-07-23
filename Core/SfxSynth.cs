@@ -511,6 +511,139 @@ public static class SfxSynth
         };
     }
 
+    // --- The player's SPIDER emitter ------------------------------------------
+
+    /// <summary>
+    /// The SPIDER's lance winding up — a seamless bed, not an event, because unlike the
+    /// boss's fixed 2.6-second charge the player's is held for as long as they dare. It
+    /// therefore cannot carry the rise in its own envelope: the caller drives the
+    /// playback rate off the meter, so the whine climbs exactly as far as the charge
+    /// does and holds there when the meter tops out.
+    ///
+    /// Deliberately thinner and higher than <see cref="Hum"/>. That one is a heavy thing
+    /// turning over inside armour; this is a small salvaged core in your own hands, so
+    /// it wants to sound close, electrical, and a bit unshielded — which is the tremolo
+    /// doing most of the work, chopping the tone into something that reads as charging
+    /// rather than merely droning.
+    /// </summary>
+    public static Params LanceCharge(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(120f, 150f);
+        return new Params
+        {
+            Loop = true,
+            Wave = Osc.Saw,
+            Length = Range(0.7f, 0.95f),
+
+            StartFreq = baseF,
+            EndFreq = baseF,                       // pinned flat by Loop anyway
+
+            TremoloDepth = Range(0.3f, 0.45f),     // the audible cycling of the charge
+            TremoloSpeed = Range(11f, 16f),
+
+            VibratoDepth = Range(0.01f, 0.025f),
+            VibratoSpeed = Range(5f, 9f),
+
+            Detune = Range(1.49f, 1.51f),          // a fifth up: a tone that sounds *loaded*
+            DetuneGain = Range(0.35f, 0.5f),
+
+            Duty = Range(0.2f, 0.36f),
+            LpCutoff = Range(0.34f, 0.5f),         // brighter than the boss's rotor
+            LpResonance = Range(0.35f, 0.6f),
+            HpCutoff = Range(0.01f, 0.04f),
+
+            CrushBits = rng.Next(5, 9),
+            CrushRate = 1,                         // rate-crush can't be made seamless
+            Volume = 0.5f,                         // the caller scales this
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The lance discharging. Short on purpose — a fraction of a second, against the
+    /// boss's five-second sung beam, because the player's shaft burns for barely half a
+    /// second and a cue that outlives its own light reads as a sound that got stuck.
+    /// A hard downward swoop with the crush on, so it lands as the salvaged core letting
+    /// go of everything at once rather than as the clean thing it was cut out of.
+    /// </summary>
+    public static Params LanceFire(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(520f, 640f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = Range(0.36f, 0.46f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.16f, 0.26f),  // dumps its pitch as it empties
+
+            Attack = 0.01f,
+            Sustain = Range(0.18f, 0.28f),
+            Decay = Range(0.7f, 0.8f),
+
+            TremoloDepth = Range(0.15f, 0.3f),
+            TremoloSpeed = Range(24f, 38f),
+
+            Detune = Range(1.48f, 1.52f),           // the charge's own interval, released
+            DetuneGain = Range(0.4f, 0.6f),
+
+            Duty = Range(0.25f, 0.45f),
+            DutySweep = Range(-1.2f, -0.4f),
+            LpCutoff = Range(0.55f, 0.85f),
+            LpResonance = Range(0.35f, 0.6f),
+            HpCutoff = Range(0.01f, 0.03f),
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.5f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// One of the SPIDER's small lasers. Tiny and dry: a fast downward zap with almost
+    /// no body, so a stream of them at the cannon's cadence reads as a rate of fire
+    /// rather than as a wall of noise. Sits well above the cannon's report in pitch so
+    /// the two chassis are audibly different weapons even with your eyes shut.
+    /// </summary>
+    public static Params Laser(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(1050f, 1400f);
+        return new Params
+        {
+            Wave = Osc.Square,
+            Length = Range(0.07f, 0.1f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.28f, 0.42f),
+
+            Attack = 0.008f,
+            Sustain = Range(0.12f, 0.2f),
+            Decay = Range(0.78f, 0.88f),
+
+            Duty = Range(0.1f, 0.24f),              // thin, so it cuts without weight
+            DutySweep = Range(-1f, 1f),
+
+            Detune = Range(1.49f, 1.51f),
+            DetuneGain = Range(0.2f, 0.35f),
+
+            LpCutoff = Range(0.6f, 0.9f),
+            LpResonance = Range(0.2f, 0.45f),
+            HpCutoff = Range(0.05f, 0.12f),
+
+            CrushBits = rng.Next(4, 8),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.4f,
+            Seed = rng.Next(),
+        };
+    }
+
     /// <summary>
     /// A single leg's actuator working as the foot plants — the servo whine and
     /// creak layered over the impact itself. Short, dry and mechanical.

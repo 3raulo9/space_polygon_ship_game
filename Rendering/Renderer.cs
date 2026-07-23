@@ -230,6 +230,51 @@ public sealed class Renderer : IDisposable
     }
 
     /// <summary>
+    /// Renders the hangar: the chosen chassis turning slowly on the spot over the same
+    /// drifting grid as the menu, with the roster / budget / paint panels laid flat on
+    /// top. The camera is framed so the model sits in the clear band between the two
+    /// side panels rather than centred on the screen — the panels are what the player
+    /// is reading, and the craft has to sit beside them, not behind them.
+    /// </summary>
+    public void DrawClassSelect(UI.ClassSelectScreen screen, float elapsed)
+    {
+        var specimen = Vector2.Zero;
+
+        // Framing is per chassis, because they are not the same shape. The tank is a
+        // compact block and wants the close view; the spider is mostly leg — nearly
+        // twice as wide as it is tall — so at the tank's distance its limbs run off the
+        // top and sides of the clear band. It gets pulled back and looked down on a
+        // little, which also opens the well enough to see the core standing in it,
+        // since the core is the part of that chassis the briefing is about.
+        bool leggy = screen.Loadout.Class == PlayerClass.Spider;
+        // The paint bay's list takes the right two fifths of the screen outright, so the
+        // model has to slide over into what's left of it. The camera renders +X on the
+        // left of the frame, so pushing the *camera* to -X puts the (stationary) model
+        // at +X relative to it — which is what moves the craft leftward on screen
+        // rather than dragging the whole scene with it.
+        float shift = screen.Customising ? -2.6f : 0f;
+        var eye = leggy ? new Vector3(shift, 4.8f, -13f) : new Vector3(shift, 3.6f, -9.2f);
+        _camera.Position = eye;
+        // Aimed below the craft's feet rather than at its middle, which lifts the whole
+        // model up the frame and clear of the briefing text along the bottom.
+        _camera.Target = new Vector3(shift, leggy ? -0.15f : -0.35f, 0f);
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+        SkyRenderer.Draw(_camera, elapsed);
+
+        Raylib.BeginMode3D(_camera);
+        GridRenderer.Draw(specimen);
+        // A slow turntable, so every painted face comes round to be looked at.
+        _entities.DrawLoadoutShowcase(screen.Loadout, specimen, elapsed * 0.6f, eye, elapsed);
+        Raylib.EndMode3D();
+
+        ClassSelectRenderer.Draw(screen, elapsed);
+
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
     /// Renders the hidden test screen: a single roster specimen turning slowly on
     /// the spot over the grid, with the 2D stat overlay on top. The camera holds
     /// still and low, a few units back, so the turntable does all the moving.

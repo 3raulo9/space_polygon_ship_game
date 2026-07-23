@@ -25,6 +25,15 @@ public sealed class CrabRenderer
 
     public float Scale = CrabRig.Scale;
 
+    // Per-part chassis colours. The boss leaves all three at its own dead gunmetal;
+    // the player's SPIDER chassis overwrites them with whatever came out of the paint
+    // bay. Kept as fields on the renderer rather than threaded through Draw because
+    // the pose is a per-frame value and a paint job is not — a spider is repainted
+    // once, when the run starts, and then drawn thousands of times.
+    public Color UpperTint = Palette.CrabChassis;
+    public Color LowerTint = Palette.CrabChassis;
+    public Color LegTint = Palette.CrabChassis;
+
     /// <summary>
     /// Draws the rig. <paramref name="death"/> ramps 0→1 as the boss glitches apart:
     /// at 0 it's the normal posed crab; above 0 the parts fling outward and up, the
@@ -48,7 +57,7 @@ public sealed class CrabRenderer
         {
             Vector3 j = Jitter(death, 1.2f) + new Vector3(0f, -fling * 3f, 0f);
             _bodyLower.Draw(new Vector2(bodyPos.X + j.X, bodyPos.Y + j.Z), heading,
-                baseY * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death),
+                baseY * Scale + j.Y, cameraPos, Scale, DeathTint(LowerTint, death),
                 pitch, roll);
         }
 
@@ -60,7 +69,7 @@ public sealed class CrabRenderer
             Vector3 j = Jitter(death, 1.6f) + new Vector3(0f, fling * 12f, 0f);
             float spin = heading + fling * 6f;
             _bodyUpper.Draw(new Vector2(bodyPos.X + j.X, bodyPos.Y + j.Z), spin,
-                (baseY + lift) * Scale + j.Y, cameraPos, Scale, DeathTint(Palette.CrabChassis, death),
+                (baseY + lift) * Scale + j.Y, cameraPos, Scale, DeathTint(UpperTint, death),
                 pitch, roll);
         }
 
@@ -110,7 +119,7 @@ public sealed class CrabRenderer
             // upright, because its foot is on the grid holding the thing up. Tipping
             // the legs too would swing the feet through the floor.
             DrawPart(_leg, mount, yaw + fling * 4f, bodyPos, heading, cameraPos,
-                DeathTint(Palette.CrabChassis, death), offset, pitch, roll, tiltPart: false);
+                DeathTint(LegTint, death), offset, pitch, roll, tiltPart: false);
         }
     }
 
@@ -137,7 +146,15 @@ public sealed class CrabRenderer
     /// show the charge and the beam with no brain behind them. A negative
     /// <paramref name="beam"/> means the shaft isn't firing at all.
     /// </summary>
-    public void DrawLance(Vector3 origin, Vector3 direction, float charge, float beam)
+    /// <param name="flare">Multiplier on the gathering ball of light, over and above the
+    /// shaft's own width. Exists for the player's SPIDER, whose emitter sits a few units
+    /// in front of the camera: at the boss's proportions the charge is a sphere the
+    /// player is very nearly standing inside, and a weapon that blinds its own operator
+    /// while they are already rooted to the spot is not a trade, it's a punishment.</param>
+    public void DrawLance(Vector3 origin, Vector3 direction, float charge, float beam,
+        float length = Entities.CrabCore.BeamLength,
+        float radius = Entities.CrabCore.BeamRadius,
+        float flare = 1f)
     {
         float t = (float)Raylib.GetTime();
 
@@ -146,7 +163,8 @@ public sealed class CrabRenderer
         if (charge > 0f)
         {
             float pulse = 0.75f + 0.25f * MathF.Sin(t * (14f + 26f * charge));
-            float r = (0.8f + 3.2f * charge * charge) * pulse;
+            float r = (0.8f + 3.2f * charge * charge) * pulse
+                    * (radius / Entities.CrabCore.BeamRadius) * flare;
             Color hot = GridRenderer.LerpColor(Palette.NeonRed, Color.White, charge * charge);
             Raylib.DrawSphereEx(origin, r * 1.7f, 8, 8,
                 new Color(Palette.NeonRed.R, Palette.NeonRed.G, Palette.NeonRed.B, (int)(120 * charge)));
@@ -163,13 +181,13 @@ public sealed class CrabRenderer
         if (env <= 0f) return;
 
         Vector3 from = origin;
-        Vector3 to = from + direction * Entities.CrabCore.BeamLength;
+        Vector3 to = from + direction * length;
 
         // A fast flutter on the width, so the shaft boils rather than sitting there
         // as a static cone — a still beam reads as geometry, not as energy.
         float flutter = 0.9f + 0.1f * MathF.Sin(t * 37f);
-        float core = Entities.CrabCore.BeamRadius * 0.42f * env * flutter;
-        float sheath = Entities.CrabCore.BeamRadius * env * flutter;
+        float core = radius * 0.42f * env * flutter;
+        float sheath = radius * env * flutter;
 
         // White core first, red sheath over it: the sheath's near face then blends
         // across the white instead of the depth buffer hiding it.
