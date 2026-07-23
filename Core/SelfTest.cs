@@ -53,6 +53,17 @@ public static class SelfTest
         failures += Check("the spider's gun cranes the full way up", SpiderGunCranesAllTheWay);
         failures += Check("the cannon fires where the craft is aimed", CannonFollowsTheAim);
         failures += Check("a raised tank gun still can't reach the maw's crystal", TankGunStaysUnderTheMaw);
+        failures += Check("a tank is too heavy to jump; the spider still hops", TankIsTooHeavyToJump);
+        failures += Check("a tank plants to crane its gun and brace", TankPlantsToCraneAndBrace);
+        failures += Check("a dug-in tank is too heavy for the crab to seize", PlantedTankResistsSeizure);
+        failures += Check("a tank lurches off its tracks for hyper", TankLurchesOffItsTracks);
+        failures += Check("a fast hull rams what it drives into", TankRamsWhatItDrivesInto);
+        failures += Check("a smoke screen blinds the sight line and eats rounds", TankSmokeBlindsTheField);
+        failures += Check("the heavy round lobs like a mortar and comes down", TankMortarLobsAndComesDown);
+        failures += Check("a lobbed mortar can bite the Crab-Core", MortarBitesTheCrabCore);
+        failures += Check("a lobbed mortar can bite the Maw-Core", MortarBitesTheMawCore);
+        failures += Check("the AP slug punches through a whole line", TankSlugPunchesThroughALine);
+        failures += Check("armour turns the front and bares the rear", TankArmorTurnsFrontAndRear);
         failures += Check("a soldier opens within a cable's throw of the city", SoldierStartsAtAnAnchor);
         failures += Check("the high jump clears fifteen metres and costs gas", SoldierJumpClearsTheCity);
         failures += Check("a hook bites the building it was aimed at", SoldierHookBites);
@@ -408,6 +419,28 @@ public static class SelfTest
     }
 
     /// <summary>
+    /// A tank does not jump — treads have no answer to gravity, and the class stopped
+    /// pretending otherwise. The refusal has to be clean: no lift, and not a drop of
+    /// the reserve spent, because a bar that drains for nothing reads as a bug rather
+    /// than a limit. The same press on the SPIDER must still work, so what is checked
+    /// is the TANK's own refusal and not a regression in the machine hop.
+    /// </summary>
+    private static string? TankIsTooHeavyToJump()
+    {
+        var tank = new Entities.PlayerTank(Vector2.Zero);
+        float hyper0 = tank.Hyper;
+        if (tank.TryJump()) return "the tank agreed to jump";
+        if (tank.Hyper < hyper0) return "the refused jump still spent hyper";
+        if (tank.IsAirborne) return "the refusal left the tank airborne";
+
+        var spider = new Entities.PlayerTank(Vector2.Zero,
+            loadout: new Loadout { Class = PlayerClass.Spider });
+        if (!spider.TryJump()) return "the spider lost its hop too";
+        if (spider.Hyper >= spider.MaxHyper) return "the spider's hop cost no hyper";
+        return null;
+    }
+
+    /// <summary>
     /// The SPIDER's ring, unlike the tank's gun, cranes the full way up — nearly to
     /// vertical, the Crab-Core's own reach. It pays for that with an exposed core, not by
     /// being stopped short.
@@ -477,6 +510,295 @@ public static class SelfTest
                          + $"(height {round.Height:0.0}, band {band:0.0})";
             }
         }
+        return null;
+    }
+
+    // --- The TANK's siege kit ---------------------------------------------------
+    // Everything the heavy chassis gained when it gave up the jump. Each mechanic is driven
+    // through the same public entry points the live world uses, so the checks exercise the
+    // real trigger paths rather than a headless copy of them.
+
+    private static World.World TankWorld()
+    {
+        // The default loadout is the TANK on a straight 5/5/5, which is exactly the craft
+        // these checks want. Spawning off and the field cleared so the seeded scene is known.
+        var world = new World.World { DynamicSpawning = false };
+        world.Enemies.Clear();
+        return world;
+    }
+
+    /// <summary>
+    /// The siege plant. Rolling, the tank's gun is stopped short — the number that keeps the
+    /// Maw-Core honest. Dug in, it cranes the full way up (the tank's answer to a game it can no
+    /// longer leave the ground to solve), and standing back up re-clamps the gun so a shot on
+    /// the way out can't leave at an angle the moving chassis can't hold. No other chassis plants.
+    /// </summary>
+    private static string? TankPlantsToCraneAndBrace()
+    {
+        var p = TankWorld().Player;
+
+        if (MathF.Abs(p.LookElevation - Entities.PlayerTank.TurretElevation) > 1e-4f)
+            return "a rolling tank's gun wasn't at its shallow stop";
+
+        if (!p.TogglePlant() || !p.Planted) return "the tank refused to plant";
+        if (MathF.Abs(p.LookElevation - Entities.PlayerTank.MaxPitch) > 1e-4f)
+            return "a planted tank's gun didn't crane the full way up";
+
+        for (int i = 0; i < 200; i++) p.Look(0f, 0.1f);   // crane hard up
+        if (p.Pitch <= Entities.PlayerTank.TurretElevation + 0.01f)
+            return $"the planted gun stalled at {p.Pitch:F2}, no higher than rolling";
+
+        p.TogglePlant();
+        if (p.Planted) return "the tank wouldn't stand back up";
+        if (p.Pitch > Entities.PlayerTank.TurretElevation + 1e-4f)
+            return $"the gun stayed craned at {p.Pitch:F2} after standing up";
+
+        var spider = new Entities.PlayerTank(Vector2.Zero,
+            loadout: new Loadout { Class = PlayerClass.Spider });
+        spider.TogglePlant();
+        if (spider.Planted) return "a non-tank chassis planted";
+        return null;
+    }
+
+    /// <summary>
+    /// The plant's other half of the bargain: dug in, the tank is too anchored for the Crab-Core
+    /// to lift. It gave up the airborne escape from the grab, so planting is the escape the air
+    /// used to be — paid for by being unable to move a metre while it holds.
+    /// </summary>
+    private static string? PlantedTankResistsSeizure()
+    {
+        var (boss, player) = CorneredByBoss();
+        if (boss == null || player == null) return "the boss never entered pursuit";
+
+        if (!Entities.CrabSeizure.CanSeize(boss, player))
+            return "the boss wouldn't seize a grounded tank at point-blank";
+
+        if (!player.TogglePlant()) return "the cornered tank refused to plant";
+        if (Entities.CrabSeizure.CanSeize(boss, player))
+            return "the crab seized a dug-in tank it should be too heavy to lift";
+        return null;
+    }
+
+    /// <summary>
+    /// The lurch: a Hyper-fed track-boost dodge that throws the hull far further than a drive
+    /// could in the same breath. Refused while dug in, and owned by no other chassis.
+    /// </summary>
+    private static string? TankLurchesOffItsTracks()
+    {
+        var world = TankWorld();
+        var p = world.Player;
+        p.Heading = 0f;
+        Vector2 start = p.Position;
+        float hyper0 = p.Hyper;
+
+        if (!p.TryLurch()) return "a tank on a full reserve refused to lurch";
+        if (p.Hyper >= hyper0) return "the lurch cost no hyper";
+
+        for (int i = 0; i < 24; i++) StepWithoutInput(world);   // ~0.4s: run the surge out
+        float moved = Torus.Distance(p.Position, start);
+        if (moved < 10f) return $"the lurch only carried the hull {moved:F1} units";
+
+        if (!p.TogglePlant()) return "the tank refused to plant";
+        if (p.TryLurch()) return "a planted tank lurched anyway";
+        p.TogglePlant();
+
+        var spider = new Entities.PlayerTank(Vector2.Zero,
+            loadout: new Loadout { Class = PlayerClass.Spider });
+        if (spider.TryLurch()) return "a non-tank chassis lurched";
+        return null;
+    }
+
+    /// <summary>
+    /// The ram: a hull genuinely driving into a hunter crushes it. Built up to ramming speed
+    /// with a lurch straight at a parked hunter — the slam erases it, where a stationary tank
+    /// would simply sit there.
+    /// </summary>
+    private static string? TankRamsWhatItDrivesInto()
+    {
+        var world = TankWorld();
+        var p = world.Player;
+        p.Heading = 0f;   // faces +Z
+        world.Enemies.Add(new Entities.EnemyTank(p.Position + new Vector2(0f, 4f), elite: false));
+
+        if (!p.TryLurch()) return "the tank wouldn't lurch to build ramming speed";
+        for (int i = 0; i < 20 && world.Enemies.Count > 0; i++) StepWithoutInput(world);
+
+        return world.Enemies.Count == 0
+            ? null : "the hull drove through a hunter without crushing it";
+    }
+
+    /// <summary>
+    /// The smoke dischargers. A laid screen breaks the line of sight from a shooter to the
+    /// player and swallows a round sitting in the murk — and the dischargers won't re-fire
+    /// until they cool, so the screen is rationed rather than a wall the tank hides behind
+    /// forever.
+    /// </summary>
+    private static string? TankSmokeBlindsTheField()
+    {
+        var world = TankWorld();
+        var p = world.Player;
+        p.Heading = 0f;
+        Vector2 shooter = p.Position + new Vector2(0f, 20f);
+
+        if (world.SmokeBlocks(shooter, p.Position))
+            return "the sight line was blocked before any smoke was laid";
+
+        if (!world.DeploySmokeForTest())
+            return "the dischargers refused to fire on a full cooldown";
+        for (int i = 0; i < 40; i++) StepWithoutInput(world);   // let the screen bloom
+
+        if (!world.SmokeBlocks(shooter, p.Position))
+            return "a bloomed screen didn't break the sight line";
+        if (!world.SmokeAbsorbs(p.Position))
+            return "a round sitting in the screen wasn't absorbed";
+        if (world.DeploySmokeForTest())
+            return "the dischargers re-fired with no cooldown";
+        return null;
+    }
+
+    /// <summary>
+    /// The mortar. The heavy round is no longer a flat slug: it lobs, climbing well above head
+    /// height and coming back down far downrange — indirect fire that clears low cover and the
+    /// hunters massed in front of a target. Watched over its whole flight: it has to peak high
+    /// and vanish on the grid a long way out, not skim the plane and fizzle.
+    /// </summary>
+    private static string? TankMortarLobsAndComesDown()
+    {
+        var world = TankWorld();
+        var p = world.Player;
+        p.Heading = 0f;
+        Vector2 start = p.Position;
+
+        world.FirePlayerGrenade();
+
+        float apex = 0f, lastDist = 0f, lastHeight = 0f;
+        bool sawShell = false, landed = false;
+        for (int i = 0; i < 200; i++)
+        {
+            Entities.Projectile? shell = null;
+            foreach (var pr in world.Projectiles)
+                if (pr.Active && pr.IsGrenade) { shell = pr; break; }
+
+            if (shell != null)
+            {
+                sawShell = true;
+                apex = MathF.Max(apex, shell.Height);
+                lastDist = Torus.Distance(shell.Position, start);
+                lastHeight = shell.Height;
+            }
+            else if (sawShell) { landed = true; break; }
+
+            StepWithoutInput(world);
+        }
+
+        if (!sawShell) return "no mortar shell was ever in the air";
+        if (apex < 5f) return $"the heavy round didn't lob — peaked at {apex:F1}m";
+        if (!landed) return "the shell never came down or expired";
+        if (lastDist < 40f) return $"the shell fell only {lastDist:F1} units out — no real lob";
+        if (lastHeight > 2f) return $"the shell vanished at height {lastHeight:F1}, not on the grid";
+        return null;
+    }
+
+    /// <summary>
+    /// The mortar is the tank's indirect answer to a boss it can no longer leap up to hit: a lob
+    /// that comes down on or arcs across the Crab-Core's raised gem strikes it directly, for a
+    /// couple of good drops rather than one. A dormant boss is planted a mortar's throw ahead and
+    /// shelled until its core gives out.
+    /// </summary>
+    private static string? MortarBitesTheCrabCore()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Player.Ammo = world.Player.MaxAmmo;
+        world.SpawnCrabAhead();   // a dormant Crab-Core out along the player's heading
+
+        for (int i = 0; i < 60 * 20 && world.Boss is { Alive: true }; i++)
+        {
+            if (!AnyGrenadeAloft(world)) world.FirePlayerGrenade();
+            StepWithoutInput(world);
+        }
+        return world.Boss is null or { Alive: false }
+            ? null : "mortars never brought the Crab-Core down";
+    }
+
+    /// <summary>The same, against the Maw-Core's hovering crystal — the weak point every other
+    /// tank shot has to leap for. A lobbed mortar reaches it from the grid.</summary>
+    private static string? MortarBitesTheMawCore()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Player.Ammo = world.Player.MaxAmmo;
+        world.SpawnMawAhead();
+
+        for (int i = 0; i < 60 * 20 && world.Maw is { Alive: true }; i++)
+        {
+            if (!AnyGrenadeAloft(world)) world.FirePlayerGrenade();
+            StepWithoutInput(world);
+        }
+        return world.Maw is null or { Alive: false }
+            ? null : "mortars never brought the Maw-Core down";
+    }
+
+    private static bool AnyGrenadeAloft(World.World world)
+    {
+        foreach (var pr in world.Projectiles)
+            if (pr.Active && pr.IsGrenade) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// The AP slug: a heavy round that punches straight through a whole line of hunters instead
+    /// of stopping at the first, at the cost of a fistful of the magazine. Three hunters strung
+    /// out along the gun line all die to one slug, and the magazine is docked exactly its cost.
+    /// </summary>
+    private static string? TankSlugPunchesThroughALine()
+    {
+        var world = TankWorld();
+        var p = world.Player;
+        p.Heading = 0f;
+        p.Ammo = p.MaxAmmo;
+        int ammo0 = p.Ammo;
+
+        world.Enemies.Add(new Entities.EnemyTank(p.Position + new Vector2(0f, 6f), elite: false));
+        world.Enemies.Add(new Entities.EnemyTank(p.Position + new Vector2(0f, 10f), elite: false));
+        world.Enemies.Add(new Entities.EnemyTank(p.Position + new Vector2(0f, 14f), elite: false));
+
+        world.FirePlayerSlug();
+        for (int i = 0; i < 30 && world.Enemies.Count > 0; i++) StepWithoutInput(world);
+
+        if (world.Enemies.Count > 0)
+            return $"{world.Enemies.Count} of 3 hunters survived a piercing slug";
+        if (ammo0 - p.Ammo != Entities.PlayerTank.SlugAmmoCost)
+            return $"the slug cost {ammo0 - p.Ammo} rounds, expected {Entities.PlayerTank.SlugAmmoCost}";
+        return null;
+    }
+
+    /// <summary>
+    /// Directional armour: the tank's sloped glacis turns a frontal shot, its flanks take a hit
+    /// square, and its thin rear plate takes it worse — so which way the hull faces when a round
+    /// arrives is the whole difference. Planting hardens the front further, and no other chassis
+    /// has plating at all.
+    /// </summary>
+    private static string? TankArmorTurnsFrontAndRear()
+    {
+        var tank = new Entities.PlayerTank(Vector2.Zero);   // faces +Z at heading 0
+        float front = tank.ArmorMultiplierFromShot(new Vector2(0f, -1f));  // arriving from the front
+        float flank = tank.ArmorMultiplierFromShot(new Vector2(1f, 0f));   // crossing the flank
+        float rear = tank.ArmorMultiplierFromShot(new Vector2(0f, 1f));    // arriving from behind
+
+        if (!(front < flank)) return $"the front ({front:F2}) didn't turn a shot better than the flank ({flank:F2})";
+        if (!(rear > flank)) return $"the rear ({rear:F2}) wasn't softer than the flank ({flank:F2})";
+        if (MathF.Abs(flank - 1f) > 1e-4f) return $"a flank hit should land in full, was {flank:F2}";
+
+        tank.TogglePlant();
+        float planted = tank.ArmorMultiplierFromShot(new Vector2(0f, -1f));
+        if (!(planted < front)) return $"planting ({planted:F2}) didn't harden the front ({front:F2})";
+        tank.TogglePlant();
+
+        var spider = new Entities.PlayerTank(Vector2.Zero,
+            loadout: new Loadout { Class = PlayerClass.Spider });
+        if (MathF.Abs(spider.ArmorMultiplierFromShot(new Vector2(0f, -1f)) - 1f) > 1e-4f)
+            return "a non-tank chassis had directional armour";
         return null;
     }
 

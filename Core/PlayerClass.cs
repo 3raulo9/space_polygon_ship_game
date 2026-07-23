@@ -44,9 +44,10 @@ public static class ClassCatalog
             "STANDARD CHASSIS",
             new[]
             {
-                "THE CRAFT YOU HAVE ALWAYS DRIVEN. HEAVY, SLOW TO",
-                "TURN, AND HONEST ABOUT IT. CANNON ON THE LEFT",
-                "TRIGGER, HEAVY GRENADE ON THE RIGHT.",
+                "HEAVY, HONEST, AND TOO HEAVY TO JUMP - THE",
+                "TREADS OWN THE GRID. SPACE DIGS IN TO CRANE",
+                "AND SHRUG SHOTS; Q LURCHES, E SMOKES, R SLUGS",
+                "THROUGH COVER. RAM. LEFT CANNON, RIGHT MORTAR.",
             },
             Available: true,
             PartNames: new[] { "HULL", "CAP", "BARREL" },

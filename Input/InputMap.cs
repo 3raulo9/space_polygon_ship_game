@@ -38,6 +38,26 @@ public static class InputMap
     // the Hyper reserve can pay for it.
     public static bool HyperspacePressed => Active.HyperspacePressed();
 
+    // --- The TANK's siege kit ---------------------------------------------------
+    // The heavy chassis gained a kit the day it gave up the jump. The plant rides the freed
+    // jump binding — Space, or Shift when Space is the fire key (see Settings.JumpPressed) —
+    // which is exactly the key that used to leave the ground and now digs in instead. The
+    // other three are fixed keys under the left hand; they share physical keys with the
+    // SOLDIER's hooks and the VIRUS's slots, but only ever one chassis reads them at a time,
+    // the same way WASD already means a different thing on every craft.
+
+    /// <summary>Dig in / stand up: the freed jump key. The treads never leave the grid now.</summary>
+    public static bool TankPlantPressed => Active.JumpPressed();
+
+    /// <summary>Q: the lurch — a track-boost dodge, paid out of the Hyper reserve.</summary>
+    public static bool TankLurchPressed => Raylib.IsKeyPressed(KeyboardKey.Q);
+
+    /// <summary>E: vent the smoke dischargers to blind the field.</summary>
+    public static bool TankSmokePressed => Raylib.IsKeyPressed(KeyboardKey.E);
+
+    /// <summary>R: the AP slug — a heavy round that punches through a line and through cover.</summary>
+    public static bool TankSlugPressed => Raylib.IsKeyPressed(KeyboardKey.R);
+
     public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
 
     /// <summary>

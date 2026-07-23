@@ -280,6 +280,27 @@ public sealed class EntityRenderer
         // centimetres from the eye and has to be over everything the run put behind it.
         _fish.Draw(world, cameraPos, (float)Raylib.GetTime());
 
+        // A TANK's screening smoke: a soft bank of murk drawn as a small clutch of translucent
+        // spheres, swelling and fading with the cloud's own density. Drawn late so it hangs in
+        // front of the city it is hiding, and kept deliberately cheap — a few spheres, not a
+        // particle field, which at this resolution is the same picture at a fraction of the cost.
+        foreach (var cloud in world.Smoke)
+        {
+            float d = cloud.Density;
+            if (d <= 0.02f) continue;
+            Vector2 at = Torus.NearestImage(cloud.Position, eyeXZ);
+            float r = cloud.Radius;
+            var c = Palette.StructureShell;
+            byte a0 = (byte)(120 * d);
+            byte a1 = (byte)(96 * d);
+            var centre = new Vector3(at.X, 1.8f, at.Y);
+            Raylib.DrawSphereEx(centre, r, 8, 8, new Color(c.R, c.G, c.B, a0));
+            Raylib.DrawSphereEx(centre + new Vector3(r * 0.5f, 0.5f, r * 0.3f), r * 0.7f, 7, 7,
+                new Color(c.R, c.G, c.B, a1));
+            Raylib.DrawSphereEx(centre + new Vector3(-r * 0.45f, 0.2f, -r * 0.5f), r * 0.72f, 7, 7,
+                new Color(c.R, c.G, c.B, a1));
+        }
+
         // Death debris last: chunks and sparks flung from destroyed enemies, each
         // shrinking and fading toward the void over its short life.
         foreach (var s in world.Debris.Shards)

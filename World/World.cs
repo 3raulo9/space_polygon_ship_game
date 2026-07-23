@@ -91,6 +91,40 @@ public sealed class World
     // through this line fires warning.wav once — not once per frame below it.
     private const float LowShieldWarning = 0.45f;
 
+    // --- The TANK's siege kit (world side) --------------------------------------
+    // The craft-side state lives on PlayerTank; these are the numbers only the world can own,
+    // because they are about the tank meeting the rest of the field — what a ram costs a hunter,
+    // how far it shoves them, what an AP slug does to a line, and the screening smoke it lays.
+
+    /// <summary>Base ram damage, scaled up by how hard the hull was moving. A cruising bump
+    /// chips a hunter; a lurch-speed slam erases one. See <see cref="UpdateRam"/>.</summary>
+    private const float RamDamage = 2.2f;
+
+    /// <summary>How far a rammed hunter is thrown clear along the contact line. Enough to break
+    /// contact in one tick, which is what keeps a single slam from billing every frame.</summary>
+    private const float RamShove = 4.5f;
+
+    /// <summary>What the AP slug deals per body it punches through — one-shots a standard hunter
+    /// and badly hurts an elite, the price of five rounds and a long reload for a whole line.</summary>
+    private const float SlugDamage = 3f;
+
+    /// <summary>
+    /// What a mortar burst deals to a boss's weak point when it lands on or arcs over one.
+    /// Deliberately well short of the rocket's one-shot: the mortar is ammo-cheap and comes
+    /// back every few seconds, so a boss should cost two or three good lobs (the crab's core is
+    /// 4, the maw's crystal 5), not a single lucky one. This is the tank's indirect answer to a
+    /// monster it can no longer leap up to hit — the same bargain the thrown CRAB CORE strikes,
+    /// where a heavy detonation close enough simply reaches the core through its inert armour.
+    /// </summary>
+    private const float MortarBossDamage = 2f;
+
+    /// <summary>The lone screening smoke a TANK lays with its dischargers. A short list, capped,
+    /// aged every tick and swept when spent. Public so the renderer can draw the murk.</summary>
+    public readonly List<SmokeCloud> Smoke = new();
+    private const int MaxSmoke = 8;
+    private const float SmokeLife = 6f;
+    private const float SmokeRadius = 7.5f;
+
     // What one battery is worth when spent from the pack: 30% of the shield *and* 30%
     // of the Hyper reserve. Public so the inventory panel's right-click charge reads
     // the same figure the salvage used to apply on contact.
@@ -304,10 +338,8 @@ public sealed class World
                 UpdateFishTriggers(swimmer);
             else if (Player.Virus is { } virusRig)
                 UpdateVirusTriggers(virusRig);
-            else if (InputMap.Grenade)
-                FirePlayerGrenade();
-            else if (InputMap.Fire)
-                FirePlayerShot();
+            else
+                UpdateTankTriggers();   // the TANK's whole expanded kit — and the plain machine default
 
             if (InputMap.HyperspacePressed)
                 Player.TryHyperspace();
@@ -320,6 +352,9 @@ public sealed class World
             Player.Spider?.Cancel();
             if (Player.Spider != null) Audio.SetLanceCharge(false, 0f);
             Player.Rooted = false;
+            // A tank reading the crafting panel is not dug in — drop the stance rather than
+            // leaving it locked behind an overlay the player is dragging items around in.
+            Player.Unplant();
         }
 
         // A soldier reading the crafting panel is not reeling, whatever the keys say, and
@@ -354,11 +389,19 @@ public sealed class World
             if (!e.Alive) continue;
             // Hand the hunter the player's height so it can elevate onto a craft off the
             // grid; the pitch it hands back rides the enemy round up the same way the
-            // tank's cannon climbs on its own aim.
+            // tank's cannon climbs on its own aim. A firing solution that has to cross a
+            // TANK's screening smoke is simply lost — the hunter still spends its cooldown,
+            // so a laid screen reads as the field going half-blind rather than pausing.
             if (e.Update(dt, Player.Position, Player.Height,
-                out Vector2 eOrigin, out Vector2 eDir, out float ePitch))
+                out Vector2 eOrigin, out Vector2 eDir, out float ePitch)
+                && !SmokeBlocks(e.Position, Player.Position))
                 SpawnProjectile(eOrigin, eDir, fromPlayer: false, pitch: ePitch);
         }
+
+        // The tank's ram: with the enemies stepped to their spots this tick, a hull that is
+        // genuinely driving into one crushes it. Runs before the projectile pass so a shoved
+        // hunter is already clear when its own shot is resolved.
+        UpdateRam();
 
         // The boss stalks on its own clock; a true return means the carapace just
         // slammed shut this tick, so sound the bit-crushed CLANG. Wherever a leg
@@ -409,6 +452,7 @@ public sealed class World
 
         UpdateProjectiles(dt);
         UpdateCrabBlasts(dt);
+        UpdateSmoke(dt);
         UpdateStructures(dt);
         UpdatePickups(dt);
         if (DynamicSpawning) UpdateSpawning(dt);
@@ -539,6 +583,10 @@ public sealed class World
     /// </summary>
     private bool BlockShotOnStructure(Projectile p)
     {
+        // The AP slug punches through the skyline as readily as through a line of hunters —
+        // going through cover is the whole point of it, so it is never blocked here.
+        if (p.IsPiercing) return false;
+
         Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
 
         foreach (var s in Structures)
@@ -562,6 +610,12 @@ public sealed class World
                 {
                     // Neither is a rocket. Its contact fuse is exactly what a wall is for.
                     DetonateRocket(p);
+                }
+                else if (p.IsGrenade)
+                {
+                    // A mortar that clipped a tower it couldn't clear bursts against it — the
+                    // same splash it would have thrown on the grid, just up the wall instead.
+                    DetonateMortar(p);
                 }
                 else
                 {
@@ -1159,6 +1213,239 @@ public sealed class World
         // that can, so the bolt climbs or dives to where the crosshair is resting.
         SpawnProjectile(origin, dir, fromPlayer: true, launchHeight: launchHeight,
             laser: laser, pitch: Player.GunElevation);
+    }
+
+    // --- The TANK chassis: the siege kit ----------------------------------------
+
+    /// <summary>
+    /// Reads the TANK's expanded kit — and, since the SPIDER, FISH, SOLDIER and VIRUS are all
+    /// dispatched earlier, this is the only chassis that reaches here, so it also carries the
+    /// plain machine default of cannon-and-heavy-round. The order is deliberate: the plant
+    /// toggles first (so a plant and a shot on the same frame both land), then the two Hyper /
+    /// cooldown moves, then the AP slug takes priority over the cannon so tapping its key never
+    /// loses the shot under a held fire button.
+    /// </summary>
+    private void UpdateTankTriggers()
+    {
+        // The siege plant, on the freed jump key. Locks the tracks, cranes the gun the full way
+        // up and turns the front plate to the field — the tank's answer to a game it can no
+        // longer leave the ground to solve.
+        if (InputMap.TankPlantPressed)
+        {
+            Player.TogglePlant();
+            Audio.PlayClamp();   // the clank of the tracks locking, or letting go
+        }
+
+        // The lurch: a Hyper-fed track-boost dodge in the drive direction. Refused while dug in.
+        if (InputMap.TankLurchPressed && Player.TryLurch())
+            Audio.PlayGasJump(0f);   // borrow the soldier's kick — a hard gout of thrust
+
+        // The dischargers: a screen of smoke to blind the field and break contact.
+        if (InputMap.TankSmokePressed && Player.TryDeploySmoke())
+            DeploySmoke();
+
+        // The AP slug: a heavy piercing shot. Ahead of the cannon so holding fire and tapping
+        // its key fires the slug rather than swallowing it under the ordinary round.
+        if (InputMap.TankSlugPressed)
+        {
+            FirePlayerSlug();
+            return;
+        }
+
+        // The ordinary triggers: the mortar on the heavy button, the cannon on fire.
+        if (InputMap.Grenade) FirePlayerGrenade();
+        else if (InputMap.Fire) FirePlayerShot();
+    }
+
+    /// <summary>
+    /// Fires the AP slug: a heavy piercing round down the gun line that punches through a whole
+    /// line of hunters and through cover both (see the projectile pass and BlockShotOnStructure).
+    /// Costs a fistful of the magazine at once. Dead while seized, like the cannon.
+    /// </summary>
+    public void FirePlayerSlug()
+    {
+        if (Seizure is { Held: true }) return;
+        if (!Player.TryFireSlug(out Vector2 origin, out Vector2 dir, out float launchHeight)) return;
+        SpawnProjectile(origin, dir, fromPlayer: true, launchHeight: launchHeight,
+            pitch: Player.GunElevation, piercing: true);
+    }
+
+    /// <summary>Lays a smoke screen off the dischargers: one bank on the hull and one just
+    /// behind it, so the murk is a wall to hide the whole craft rather than a puff beside it.</summary>
+    private void DeploySmoke()
+    {
+        LaySmoke(Player.Position);
+        LaySmoke(Player.Position - Player.Forward * 6f);
+        Audio.PlayThrowWhoosh();
+        Debris.Burst(new Vector3(Player.Position.X, 1.2f, Player.Position.Y),
+            Palette.StructureShell, elite: false);
+    }
+
+    private void LaySmoke(Vector2 at)
+    {
+        if (Smoke.Count >= MaxSmoke) Smoke.RemoveAt(0);
+        Smoke.Add(new SmokeCloud(Torus.Wrap(at), SmokeLife, SmokeRadius));
+    }
+
+    /// <summary>Test hook: lay a screen exactly as the discharger trigger would, if it has
+    /// cooled. Returns whether it fired — the headless self-test can't press E.</summary>
+    public bool DeploySmokeForTest()
+    {
+        if (!Player.TryDeploySmoke()) return false;
+        DeploySmoke();
+        return true;
+    }
+
+    private void UpdateSmoke(float dt)
+    {
+        if (Smoke.Count == 0) return;
+        for (int i = Smoke.Count - 1; i >= 0; i--)
+        {
+            Smoke[i].Update(dt);
+            if (!Smoke[i].Active) Smoke.RemoveAt(i);
+        }
+    }
+
+    /// <summary>
+    /// The tank's ram: a hull genuinely driving into a hunter crushes it. Gated on the TANK,
+    /// on the grid, and on the drive velocity actually clearing <see cref="PlayerTank.RamThreshold"/>
+    /// — a cruise bump chips, a lurch-speed slam erases. The struck hunter is thrown clear along
+    /// the contact line, and that separation (not a per-enemy timer) is what makes one slam one
+    /// hit. Reads the velocity <see cref="PlayerTank"/> stashed on its own move this tick.
+    /// </summary>
+    private void UpdateRam()
+    {
+        if (Player.Class != PlayerClass.Tank || Player.IsAirborne || Player.Captured) return;
+
+        float speed = Player.DriveVelocity.Length();
+        if (speed < Player.RamThreshold) return;
+
+        float reach = PlayerTank.Radius + EnemyTank.Radius;
+        float over = Math.Clamp((speed - Player.RamThreshold) / (PlayerTank.MaxSpeed * 0.9f), 0f, 1.5f);
+
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive) continue;
+            if (!WithinHit(Player.Position, e.Position, reach)) continue;
+
+            DamageEnemy(e, RamDamage * (0.6f + over));
+
+            Vector2 push = Torus.Delta(Player.Position, e.Position);
+            push = push.LengthSquared() > 1e-4f ? Vector2.Normalize(push) : Player.Forward;
+            e.Position = Torus.Wrap(e.Position + push * RamShove);
+
+            Player.Jolt(0.35f);
+            Audio.PlayDetonation();   // the crunch of the hull meeting a hull
+        }
+    }
+
+    /// <summary>
+    /// True if a live, opaque smoke screen sits across the segment from a shooter
+    /// (<paramref name="from"/>) to the player (<paramref name="to"/>). Both the shooter and
+    /// each cloud are folded into the player's own image across the wrap, so a hunter and a
+    /// screen just over the seam are measured against the same line the round would fly.
+    /// </summary>
+    public bool SmokeBlocks(Vector2 from, Vector2 to)
+    {
+        if (Smoke.Count == 0) return false;
+        Vector2 a = Torus.NearestImage(from, to);
+        foreach (var c in Smoke)
+        {
+            if (!c.Opaque) continue;
+            Vector2 centre = Torus.NearestImage(c.Position, to);
+            if (PointSegmentDistanceSq(centre, a, to) <= c.Radius * c.Radius) return true;
+        }
+        return false;
+    }
+
+    /// <summary>True if a point sits inside any live, opaque screen — what a round already in
+    /// the air is tested against, so a shot dies in the murk it flies into.</summary>
+    public bool SmokeAbsorbs(Vector2 at)
+    {
+        foreach (var c in Smoke)
+        {
+            if (!c.Opaque) continue;
+            if (Torus.DistanceSquared(at, c.Position) <= c.Radius * c.Radius) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Squared distance from point <paramref name="p"/> to segment a→b, all in one
+    /// planar frame — the caller has already resolved the torus wrap into common images.</summary>
+    private static float PointSegmentDistanceSq(Vector2 p, Vector2 a, Vector2 b)
+    {
+        Vector2 ab = b - a;
+        float len2 = ab.LengthSquared();
+        if (len2 < 1e-6f) return (p - a).LengthSquared();
+        float t = Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+        Vector2 proj = a + ab * t;
+        return (p - proj).LengthSquared();
+    }
+
+    /// <summary>
+    /// The mortar's burst where its lob came down: a splash on the whole cluster there, on either
+    /// crystal if it landed on one, and on any footprint it dropped against — the same reach and
+    /// damage a grenade always dealt, now delivered from above. Mirrors the rocket's detonation
+    /// but throws the shake onto the hull directly, since a tank has no soldier rig to feel it.
+    /// </summary>
+    private void DetonateMortar(Projectile p)
+    {
+        var at = new Vector3(p.Position.X, MathF.Max(0.4f, p.Height), p.Position.Y);
+        float reach = p.SplashRadius + EnemyTank.Radius;
+
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive) continue;
+            if (WithinHit(p.Position, e.Position, reach)) DamageEnemy(e, GrenadeDamage);
+        }
+
+        // The two monsters are bitten by planar proximity, not at the burst's own height: the
+        // shell comes down on the grid far below the core or crystal, so a height-gated check
+        // (the way a flat bolt is scored) would never land. A heavy detonation within reach of
+        // the column simply strikes the weak point — the exact bargain the thrown CRAB CORE
+        // strikes — for the smaller MortarBossDamage, so it takes a few good lobs, not one.
+        if (Boss is { Alive: true } boss
+            && WithinHit(p.Position, boss.Position, p.SplashRadius + CrabCore.CoreHitRadius))
+        {
+            if (boss.DamageCore(MortarBossDamage)) DestroyBoss(boss);
+            else Audio.PlayCoreHit(1f - boss.CoreFraction);
+        }
+        if (Maw is { Alive: true } maw
+            && WithinHit(p.Position, maw.Position, p.SplashRadius + MawRig.HitRadius))
+        {
+            if (maw.DamageCrystal(MortarBossDamage)) DestroyMaw(maw);
+            else Audio.PlayMawHurt(1f - maw.CrystalFraction);
+        }
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        for (int i = Structures.Count - 1; i >= 0; i--)
+        {
+            Structure s = Structures[i];
+            int n = s.Blockers(blockers);
+            for (int b = 0; b < n; b++)
+            {
+                var (bAt, r) = blockers[b];
+                if (!WithinHit(p.Position, bAt, p.SplashRadius + r)) continue;
+                if (p.Height > s.BlockHeight + p.SplashRadius) continue;
+                FellStructure(s);
+                break;
+            }
+        }
+
+        Debris.Burst(at, Palette.EliteFill, elite: true);
+        Audio.PlayRocketBlast(Torus.Distance(p.Position, Player.Position));
+
+        // Dropped too close and caught in your own burst: it bites, and the hull feels it.
+        float range = Torus.Distance(p.Position, Player.Position);
+        if (range < p.SplashRadius + PlayerTank.Radius)
+        {
+            DamagePlayer(GrenadeDamage);
+            Player.Jolt(0.4f);
+        }
+        else if (range < RocketShakeRange)
+        {
+            Player.Jolt(0.25f * (1f - range / RocketShakeRange));
+        }
     }
 
     // --- The SPIDER chassis -----------------------------------------------------
@@ -2494,14 +2781,15 @@ public sealed class World
 
     private void SpawnProjectile(Vector2 origin, Vector2 dir, bool fromPlayer,
         bool grenade = false, bool crabBomb = false,
-        float launchHeight = Projectile.BoltHeight, bool laser = false, float pitch = 0f)
+        float launchHeight = Projectile.BoltHeight, bool laser = false, float pitch = 0f,
+        bool piercing = false)
     {
         foreach (var p in _projectiles)
         {
             if (p.Active) continue;
             if (crabBomb) p.FireCrabBomb(origin, dir);
             else if (grenade) p.FireGrenade(origin, dir, fromPlayer);
-            else p.Fire(origin, dir, fromPlayer, launchHeight, laser, pitch);
+            else p.Fire(origin, dir, fromPlayer, launchHeight, laser, pitch, piercing);
             // The report of a barrel firing — same clip for player and enemy
             // shots, since both spawn through here. The thrown core gets a heavier
             // launch thud instead of the light bolt report, and the SPIDER's laser its
@@ -2539,6 +2827,12 @@ public sealed class World
             if (p.JustExpired && p.IsRocket)
                 DetonateRocket(p);
 
+            // The mortar's lob ends on the grid (or, rarely, at the very end of its life):
+            // it bursts where it came down, splashing whatever it was dropped onto. A thrown
+            // CRAB CORE is also flagged IsGrenade but is handled by its own branch above.
+            if (p.JustExpired && p.IsGrenade && !p.IsCrabBomb)
+                DetonateMortar(p);
+
             if (!p.Active) continue;
 
             // The skyline stops rounds — every round, from anyone. Tested before any
@@ -2558,6 +2852,23 @@ public sealed class World
                      || (Maw is { } rMaw && rMaw.HitsCrystal(p.Position, p.Height))))
                 {
                     DetonateRocket(p);
+                    p.Active = false;
+                    continue;
+                }
+
+                // A mortar (and only it) bursts on either boss it passes over. The lob flies a
+                // real arc, so unlike a flat bolt it can be dropped onto or lobbed across the
+                // column of a monster whose weak point hangs high overhead — a planar check, the
+                // same one the thrown CRAB CORE uses, since a heavy detonation this near strikes
+                // the core through the inert armour rather than needing to arrive at its height.
+                // This is the tank's indirect answer to a boss it can no longer leap up to hit.
+                if (p.IsGrenade && !p.IsCrabBomb
+                    && ((Boss is { Alive: true } gBoss
+                            && WithinHit(p.Position, gBoss.Position, p.SplashRadius + CrabCore.CoreHitRadius))
+                     || (Maw is { Alive: true } gMaw
+                            && WithinHit(p.Position, gMaw.Position, p.SplashRadius + MawRig.HitRadius))))
+                {
+                    DetonateMortar(p);
                     p.Active = false;
                     continue;
                 }
@@ -2593,27 +2904,40 @@ public sealed class World
                     continue;
                 }
 
-                // A round riding high over a hunter's hull passes over it. Only the
-                // directed rounds are tested this way — everything else in the pool
-                // travels flat at barrel height, where the check would be noise.
-                bool overhead = p.IsRocket && p.Height > EnemyTank.BodyHeight + 1f;
+                // A round riding high over a hunter's hull passes over it. The mortar joins
+                // the rocket here: while it is still up the arc it sails over the hunters
+                // massed in front of the target, and only meets them once it has come back
+                // down onto them. Everything else in the pool travels flat at barrel height,
+                // where the check would be noise.
+                bool overhead = (p.IsRocket || p.IsGrenade) && p.Height > EnemyTank.BodyHeight + 1f;
 
                 foreach (var e in Enemies)
                 {
                     if (!e.Alive || overhead) continue;
-                    if (WithinHit(p.Position, e.Position, EnemyTank.Radius))
+                    if (!WithinHit(p.Position, e.Position, EnemyTank.Radius)) continue;
+
+                    if (p.IsPiercing)
                     {
-                        if (p.IsCrabBomb)
-                            StageCrabBlast(p.Position); // erupts into the lance ring here
-                        else if (p.IsRocket)
-                            DetonateRocket(p);
-                        else if (p.IsGrenade)
-                            Detonate(p);           // area burst, damages the whole cluster
-                        else
-                            DamageEnemy(e, PlayerShotDamage);
-                        p.Active = false;
-                        break;
+                        // The AP slug bulls straight on through the line: bill each body once —
+                        // PierceLast guards the one it is currently crossing — and keep flying.
+                        if (!ReferenceEquals(e, p.PierceLast))
+                        {
+                            DamageEnemy(e, SlugDamage);
+                            p.PierceLast = e;
+                        }
+                        continue;
                     }
+
+                    if (p.IsCrabBomb)
+                        StageCrabBlast(p.Position); // erupts into the lance ring here
+                    else if (p.IsRocket)
+                        DetonateRocket(p);
+                    else if (p.IsGrenade)
+                        DetonateMortar(p);     // the shell has landed on the cluster
+                    else
+                        DamageEnemy(e, PlayerShotDamage);
+                    p.Active = false;
+                    break;
                 }
             }
             else
@@ -2629,12 +2953,24 @@ public sealed class World
                 // spared them while a set piece had them helpless; now that height no
                 // longer grants immunity, the cinematic hold has to say so outright — a
                 // player who cannot act must not be shot at by anything else.
+                // Enemy rounds die in a TANK's smoke the same way the shooters are blinded by
+                // it — a screen the player drove behind actually stops what is already in the
+                // air, not only what is about to be fired.
+                if (SmokeAbsorbs(p.Position))
+                {
+                    p.Active = false;
+                    continue;
+                }
+
                 float aimH = Player.Height + EnemyTank.AimHeight;
                 if (!Player.Captured
                     && WithinHit(p.Position, Player.Position, PlayerTank.Radius)
                     && MathF.Abs(p.Height - aimH) < EnemyHitVertical)
                 {
-                    DamagePlayer(EnemyShotDamage);
+                    // Directional armour: on the TANK the blow is turned by the sloped front,
+                    // taken square on the flanks and taken worse from behind (returns 1 for
+                    // every other chassis, which has no plating). Facing is the tank's defence.
+                    DamagePlayer(EnemyShotDamage * Player.ArmorMultiplierFromShot(p.Velocity));
                     p.Active = false;
                 }
             }

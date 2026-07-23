@@ -60,11 +60,17 @@ public sealed class CrabSeizure : ICinematicView
     /// yet), and close enough. The player must be on the grid — a craft caught
     /// mid-leap is spared, which keeps the jump meaningful as the escape it already
     /// is everywhere else in the game.
+    ///
+    /// A dug-in TANK is spared too, and for the mirror reason: it gave up the jump, so
+    /// planting is the escape the air used to be. Anchored on its locked tracks with the
+    /// front plate braced, it is simply too heavy for the claw to lift — the trade being
+    /// that it cannot move a metre while it holds the stance.
     /// </summary>
     public static bool CanSeize(CrabCore boss, PlayerTank player)
         => boss.Alive
         && boss.Phase == CrabCore.State.Pursuit
         && !player.IsAirborne
+        && !player.Planted
         && Torus.DistanceSquared(player.Position, boss.Position) <= GrabRadius * GrabRadius;
 
     // --- Geometry of the hold -------------------------------------------------
