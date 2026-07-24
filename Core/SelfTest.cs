@@ -19,7 +19,10 @@ public static class SelfTest
         failures += Check("the skyline is solid to the craft", StructuresBlockThePlayer);
         failures += Check("rounds stop at a wall and leave it standing", RoundsStopAtTheSkyline);
         failures += Check("a beam cuts a tower down and clears the wreck", BeamsCutStructuresDown);
+        failures += Check("a cut fractures locally; the crown falls, the base stands", LocalizedFractureSparesTheBase);
+        failures += Check("falling rubble crushes whatever is under it", FallingRubbleCrushesCharacters);
         failures += Check("player can destroy an enemy", PlayerKillsEnemy);
+        failures += Check("a kill leaves salvage on the field", KillsLeaveSalvage);
         failures += Check("enemy can damage the player", EnemyDamagesPlayer);
         failures += Check("enemies elevate onto a player in the air", EnemyReachesPlayerInTheAir);
         failures += Check("ammo is finite", AmmoDepletes);
@@ -843,6 +846,76 @@ public static class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// A tower comes apart <em>where it is cut</em>, not as one rigid topple. A hard hit at the
+    /// crown has to take the top off and leave the base standing — still fractured, still a
+    /// solid blocker — while a hit at the base pulls the supports out from under everything and
+    /// the whole thing comes down. Driven against the chunk model directly, so it pins the
+    /// localized-collapse behaviour without needing to aim a beam up a tower headlessly.
+    /// </summary>
+    private static string? LocalizedFractureSparesTheBase()
+    {
+        // A standalone tower, off the field, so it can be cut anywhere without the clearing
+        // radius or the seeded layout in the way.
+        var tower = new Structure(Vector2.Zero, 0f, StructureKind.Tower, variant: 0, scale: 1f);
+        var loosed = new List<DebrisSpawn>();
+
+        // Cut hard up at the crown: the top must come off, the base must stand.
+        bool crownFelled = tower.CutTower(new Vector3(0f, 40f, 0f), 6f, 1e6f, loosed, out bool first);
+        if (crownFelled) return "a hit at the crown brought the whole tower down";
+        if (!first) return "the first cut didn't fracture the tower";
+        if (tower.Falling) return "a crown hit put the whole tower into collapse";
+        if (tower.Fracture is not { AnyStanding: true }) return "the base didn't survive a crown hit";
+        if (loosed.Count == 0) return "a crown hit knocked nothing loose";
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        if (tower.Blockers(blockers) == 0) return "a half-standing tower stopped being solid";
+
+        // Now cut the base out: with its supports gone the whole thing has to come down, and
+        // once its last cell is clear it leaves the field.
+        bool baseFelled = tower.CutTower(new Vector3(0f, 2f, 0f), 6f, 1e6f, loosed, out _);
+        if (!baseFelled) return "cutting the base left the tower standing";
+        if (!tower.Falling) return "the base was cut but the tower isn't coming down";
+        if (tower.Blockers(blockers) != 0) return "a collapsing tower is still solid";
+        return null;
+    }
+
+    /// <summary>
+    /// A collapsing structure's rubble is not decoration: a chunk coming down on a character
+    /// crushes it. A hunter is stood on open grid, and a real mass-bearing chunk — the kind a
+    /// felled tower throws — is steered straight down onto it. One step of the crush pass has
+    /// to bill it and kill it, which proves the whole path is wired: mass on the shard, the
+    /// world reading it back, and the hit reaching the enemy.
+    /// </summary>
+    private static string? FallingRubbleCrushesCharacters()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        world.Enemies.Clear();
+        var mark = new Vector2(30f, 12f);   // clear of the origin, clear of any tower footprint
+        world.Enemies.Add(new Entities.EnemyTank(mark, elite: false));
+
+        // Throw a burst of structural rubble so the pool holds mass-bearing chunks, then steer
+        // one of them directly over the hunter, coming straight down at a section's speed —
+        // exactly the moment a piece of a felled tower would arrive on something beneath it.
+        world.Debris.Rubble(new Vector3(mark.X, 6f, mark.Y), Palette.StructureShell, chunks: 8, scale: 2f);
+
+        var shards = world.Debris.Shards;
+        bool placed = false;
+        for (int i = 0; i < shards.Length; i++)
+        {
+            if (!shards[i].Active || shards[i].Mass <= 0f) continue;
+            shards[i].Position = new Vector3(mark.X, 1.5f, mark.Y);
+            shards[i].Velocity = new Vector3(0f, -14f, 0f);
+            placed = true;
+            break;
+        }
+        if (!placed) return "no mass-bearing rubble was spawned to test the crush";
+
+        StepWithoutInput(world);   // Debris.Update moves it, then ResolveCrush bills it
+        return world.Enemies.Count == 0
+            ? null : "a chunk came down on a hunter and it walked away";
+    }
+
     private static string? PlayerKillsEnemy()
     {
         var world = new World.World { DynamicSpawning = false };
@@ -857,6 +930,34 @@ public static class SelfTest
             StepWithoutInput(world);
         }
         return world.Enemies.Count == 0 ? null : "enemy still alive after 8s of fire";
+    }
+
+    /// <summary>
+    /// Every kill now leaves salvage at the corpse — a battery or a handful of rounds — so
+    /// clearing a firefight feeds the craft that cleared it. Killing the seeded hunter has to
+    /// add exactly one pickup, and it has to be one of the two usable kinds.
+    /// </summary>
+    private static string? KillsLeaveSalvage()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        AimPlayerAtFirstEnemy(world);
+
+        int before = world.Pickups.Count;
+        for (int i = 0; i < 60 * 8 && world.Enemies.Count > 0; i++)
+        {
+            AimPlayerAtFirstEnemy(world);
+            world.FirePlayerShot();
+            StepWithoutInput(world);
+        }
+        if (world.Enemies.Count > 0) return "enemy still alive after 8s of fire";
+
+        int dropped = world.Pickups.Count - before;
+        if (dropped != 1) return $"a kill dropped {dropped} pickups, expected 1";
+
+        var kind = world.Pickups[^1].Kind;
+        if (kind is not (Entities.PickupKind.Battery or Entities.PickupKind.Ammo))
+            return $"a kill dropped a {kind}, expected a battery or rounds";
+        return null;
     }
 
     private static string? EnemyDamagesPlayer()

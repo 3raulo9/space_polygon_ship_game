@@ -55,8 +55,50 @@ public sealed class Structure
         Scale = scale;
         // Which way it goes over. Taken from the variant rather than rolled, so a given
         // building always falls the same way — the skyline is deterministic and its
-        // demolition should be too.
+        // demolition should be too. (Only arches still topple this way; towers come apart
+        // into chunks — see the fracture below.)
         _tip = (variant & 1) == 0 ? 1f : -1f;
+    }
+
+    // --- Localized fracture (towers) ----------------------------------------------
+
+    /// <summary>
+    /// The chunk model a tower fractures into the first time a beam cuts it, or null while it
+    /// still stands whole. Once present, the renderer draws its surviving cells in place of
+    /// the intact mesh — so a struck tower shows the local holes and the stump, and comes
+    /// apart where it was hit rather than toppling as one piece. Arches have none; they still
+    /// go over whole (see the topple state below).
+    /// </summary>
+    public Fracture? Fracture { get; private set; }
+
+    /// <summary>
+    /// Cuts a tower at <paramref name="worldImpact"/>: fractures it on the first hit (the
+    /// caller throws a dust flash to mask the swap from the intact mesh when
+    /// <paramref name="newlyFractured"/> comes back true), destroys the cells within
+    /// <paramref name="radius"/> with radial falloff, and cascades any section left without
+    /// support. Fills <paramref name="detached"/> with the cells knocked loose, in world
+    /// space, for the caller to turn into crushing debris. Returns true if the base gave way —
+    /// the whole tower is now coming down. A no-op (false) on an arch or a base already gone.
+    /// </summary>
+    public bool CutTower(Vector3 worldImpact, float radius, float amount,
+        List<DebrisSpawn> detached, out bool newlyFractured)
+    {
+        newlyFractured = false;
+        if (Kind != StructureKind.Tower || Falling) return false;
+
+        if (Fracture == null)
+        {
+            Fracture = new Fracture(Position, Heading, Scale, TowerHeight, TowerFootprint, Variant);
+            newlyFractured = true;
+        }
+
+        bool baseFell = Fracture.ApplyDamage(worldImpact, radius, amount, detached);
+        // The base giving way is what turns it from cover-with-a-hole into a thing coming
+        // down: it stops blocking and stops being an anchor. A crown hit leaves the base
+        // standing and none of that changes.
+        if (baseFell) Falling = true;
+        if (!Fracture.AnyStanding) Gone = true;
+        return baseFell;
     }
 
     // Footprint radii at scale 1, matching the meshes the renderer builds. These are
@@ -147,25 +189,39 @@ public sealed class Structure
     public float Sink { get; private set; }
 
     /// <summary>
-    /// Cuts it down. Returns false if it was already falling — which is what keeps a
-    /// five-second beam burning through a tower from re-staging its death sixty times a
-    /// second, and lets the caller sound the collapse exactly once.
+    /// Brings the whole thing down at once — a detonation, not a localized cut (the crab's
+    /// blast, a mortar against a wall, or whatever the soldier's anchor was hanging from).
+    /// A tower fractures if it hadn't already and every standing cell lets go, optionally
+    /// throwing real falling chunks into <paramref name="detached"/>; an arch topples as one
+    /// piece. Returns false if it was already coming down, so the caller sounds it just once.
     /// </summary>
-    public bool Strike()
+    public bool Strike(List<DebrisSpawn>? detached = null)
     {
         if (Falling) return false;
         Falling = true;
-        _age = 0f;
+
+        if (Kind == StructureKind.Tower)
+        {
+            Fracture ??= new Fracture(Position, Heading, Scale, TowerHeight, TowerFootprint, Variant);
+            Fracture.CollapseAll(detached);
+            if (!Fracture.AnyStanding) Gone = true;
+        }
+        else
+        {
+            _age = 0f;
+        }
         return true;
     }
 
     /// <summary>
-    /// Steps a collapse. Returns true on the single tick the mass hits the grid — the
-    /// beat the caller throws dust and sounds the impact. A no-op on anything standing.
+    /// Steps an arch's topple. Returns true on the single tick the mass hits the grid — the
+    /// beat the caller throws dust and sounds the impact. Towers no longer come this way:
+    /// their collapse is their falling chunks, which are debris the world steps, so this is a
+    /// no-op on a tower (and on anything still standing).
     /// </summary>
     public bool Update(float dt)
     {
-        if (!Falling || Gone) return false;
+        if (Kind != StructureKind.Arch || !Falling || Gone) return false;
 
         float was = _age;
         _age += dt;
@@ -216,9 +272,11 @@ public static class StructureField
 
     // How many the layout asks for. Deliberately sparse: a building is worth something
     // as cover and as a landmark, and both of those need the grid between them to be
-    // mostly empty. Ask for more and the void stops being a void.
-    private const int TowerCount = 60;
-    private const int ArchCount = 9;
+    // mostly empty. Ask for more and the void stops being a void. Nudged up a hair from
+    // the original 60/9 — dense enough to notice a fuller skyline only if you were
+    // counting, not so dense the sampler starves against the Gap (see below).
+    private const int TowerCount = 66;
+    private const int ArchCount = 10;
 
     /// <summary>
     /// Nothing may stand within this of the origin. Three separate things want it: the

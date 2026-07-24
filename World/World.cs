@@ -457,6 +457,10 @@ public sealed class World
         UpdatePickups(dt);
         if (DynamicSpawning) UpdateSpawning(dt);
         Debris.Update(dt);
+        // After the debris has moved this tick, bill any falling structural chunk that came
+        // down on a character. Run before the dead are swept so a hunter crushed this tick is
+        // removed with the rest rather than lingering a frame.
+        ResolveCrush(dt);
         Enemies.RemoveAll(e => !e.Alive);
     }
 
@@ -483,17 +487,28 @@ public sealed class World
             var s = Structures[i];
             if (!s.Falling) continue;
 
+            // Towers come apart into chunks at the moment they're cut (their falling pieces
+            // are debris the world already steps), so Update is a no-op on them and this block
+            // is only ever an arch going over as one piece. A felled tower simply waits here to
+            // be let go once its last cell is gone (Gone, below).
             if (s.Update(dt))
             {
-                // The impact: a long spray of dust down the line the mass fell along,
-                // rather than one puff at the middle, since the thing that just hit the
-                // grid is forty metres of it.
+                // The impact: a long spray of dust down the line the span fell along, rather
+                // than one puff at the middle, since the thing that just hit the grid is a
+                // whole arc of it.
                 var along = new Vector2(MathF.Cos(s.Heading), -MathF.Sin(s.Heading));
                 for (int k = 1; k <= 3; k++)
                     Debris.Burst(new Vector3(
                         s.Position.X + along.X * s.BlockHeight * 0.25f * k, 0.5f,
                         s.Position.Y + along.Y * s.BlockHeight * 0.25f * k),
                         Palette.StructureShell, elite: false);
+
+                // And the mass itself coming down: a wave of crushing rubble strewn along
+                // the same line, in sections heavy enough to kill whatever was slow to clear
+                // out of the topple's path. This is the payoff of the groan that warned it.
+                Debris.Collapse(new Vector3(s.Position.X, 0.6f, s.Position.Y), along,
+                    s.BlockHeight * 0.75f, Palette.StructureShell, s.Scale);
+
                 Audio.PlayExplosionAt(Torus.Distance(s.Position, Player.Position));
             }
 
@@ -502,8 +517,12 @@ public sealed class World
     }
 
     /// <summary>
-    /// Cuts down whatever standing structure is nearest along a beam, and stages the
-    /// collapse: dust off it at several heights and a blast pitched by the distance.
+    /// Cuts into whatever standing structures a beam passes through, dealing
+    /// <paramref name="structureDamage"/> to each — scaled by how squarely the shaft strikes
+    /// it (dead on the axis lands full, a graze at the edge barely scratches) — and staging
+    /// the collapse on any that this bite finally fails. A bite that leaves it standing
+    /// throws localized chips off the exact point struck, the visible carving that precedes
+    /// the topple; multiple bites on the same spot compound toward the rupture.
     ///
     /// Only beams do this. A round of any kind — the cannon, the heavy grenade, an
     /// enemy's shot, the SPIDER's laser bolt — stops dead against a wall and leaves it
@@ -511,14 +530,17 @@ public sealed class World
     /// point of the buildings: they are cover, and cover you can shoot through is not
     /// cover. What defeats them is the thing that was never a bullet in the first place —
     /// the Crab-Core's lance, the SPIDER's charged beam, the ring thrown off a detonating
-    /// CRAB CORE — and a wall coming down under one of those should be worth watching.
+    /// CRAB CORE — and a wall coming down under one of those should be worth watching. A
+    /// decisive siege beam carries far more than any tower's integrity in a single bite, so
+    /// it fells on contact as it always did; only a dwelling beam is billed by attrition.
     ///
     /// The whole shaft is swept rather than stopping at the first hit, because a beam
     /// that has already cut through one tower has visibly not stopped, and a second wall
     /// standing untouched in the same light would read as a bug.
     /// </summary>
-    /// <returns>How many structures this cut down.</returns>
-    private int CutStructuresAlong(Vector3 origin, Vector3 direction, float length, float radius)
+    /// <returns>How many structures this bite felled.</returns>
+    private int CutStructuresAlong(Vector3 origin, Vector3 direction, float length, float radius,
+        float structureDamage)
     {
         var originXZ = new Vector2(origin.X, origin.Z);
         var dirXZ = new Vector2(direction.X, direction.Z);
@@ -533,25 +555,110 @@ public sealed class World
 
         foreach (var s in Structures)
         {
+            // A structure already coming down yields no blockers, so a beam sweeping the
+            // wreck neither re-fells it nor showers fresh chips off a corpse.
             int n = s.Blockers(blockers);
             for (int b = 0; b < n; b++)
             {
                 var (at, r) = blockers[b];
                 Vector2 near = Torus.NearestImage(at, originXZ);
                 float along = Math.Clamp(Vector2.Dot(near - originXZ, dirXZ), 0f, length);
-                if (Vector2.Distance(near, originXZ + dirXZ * along) > r + radius) continue;
+                float miss = Vector2.Distance(near, originXZ + dirXZ * along);
+                if (miss > r + radius) continue;
 
                 // Passing overhead is passing overhead, however wide the shaft is.
                 float beamY = origin.Y + slope * along;
                 if (beamY > s.BlockHeight + radius) continue;
 
-                if (FellStructure(s)) cut++;
+                // Radial falloff from the shaft's axis: full on centre, tapering to nothing at
+                // the edge of its reach, so an edge graze bites less than a square hit. Where
+                // on the mass it struck — the footprint centre nearest the beam, at the beam's
+                // height clamped to the body — is the point the tower comes apart around.
+                float falloff = Math.Clamp(1f - miss / (r + radius), 0f, 1f);
+                float impactY = Math.Clamp(beamY, 0.4f, s.BlockHeight);
+                var impact = new Vector3(near.X, impactY, near.Y);
+
+                if (s.Kind == StructureKind.Arch)
+                {
+                    // An arch has no chunk model — a beam takes the whole span down.
+                    if (FellStructure(s, impact)) cut++;
+                }
+                else
+                {
+                    // A tower comes apart where it is cut. The impact pocket reaches a little
+                    // wider than the shaft so a bite clears a believable hole, and a square low
+                    // hit takes out the whole base cross-section (so a full lance still fells a
+                    // tower outright) while a hit high up only lets the crown go.
+                    _detached.Clear();
+                    bool felled = s.CutTower(impact, radius + BeamImpactMargin,
+                        structureDamage * falloff, _detached, out bool newlyFractured);
+                    EmitTowerFractureDebris(s, impact, _detached, newlyFractured, felled);
+                    if (felled) cut++;
+                }
                 break;   // one strike per structure, whichever leg it was
             }
         }
 
         return cut;
     }
+
+    /// <summary>Reused scratch list of the cells a cut knocks loose, so the beam passes
+    /// allocate nothing per tick. Never held across calls.</summary>
+    private readonly List<DebrisSpawn> _detached = new();
+
+    /// <summary>How much wider than the beam's own shaft a cut's impact pocket reaches into a
+    /// tower — the "~2–5m impact radius". Wide enough that a bite clears a believable pocket
+    /// and a square low hit clears the whole base cross-section, narrow enough that a hit high
+    /// up leaves the base standing.</summary>
+    private const float BeamImpactMargin = 5f;
+
+    /// <summary>Cap on how many loosed cells one cut turns into debris in a single frame, so a
+    /// whole tower coming apart at once can't swamp the shared debris pool.</summary>
+    private const int MaxChunksPerCut = 40;
+
+    /// <summary>
+    /// Dresses a tower cut: throws the cells knocked loose as crushing rubble where they stood,
+    /// a dust flash to mask the first frame's swap from the intact mesh to the chunk model, and
+    /// the right report — a groan when a support fails and the mass starts down, otherwise a
+    /// crack of masonry shearing (played only on ticks a cell actually broke, so a dwelling beam
+    /// reads as stone breaking rather than one clip stuttering at sixty hertz).
+    /// </summary>
+    private void EmitTowerFractureDebris(Structure s, Vector3 impact,
+        List<DebrisSpawn> detached, bool newlyFractured, bool felled)
+    {
+        float dist = Torus.Distance(new Vector2(impact.X, impact.Z), Player.Position);
+
+        if (newlyFractured)
+            Debris.Burst(impact, Palette.StructureShell, elite: false);
+
+        int spawned = 0;
+        foreach (var d in detached)
+        {
+            Debris.RubbleChunk(d.Pos, d.Size, d.Color);
+            if (++spawned >= MaxChunksPerCut) break;
+        }
+
+        if (felled)
+        {
+            Audio.PlayStructureGroan(dist);
+            Audio.PlayExplosionAt(dist);
+        }
+        else if (detached.Count > 0 && Random.Shared.NextSingle() < 0.5f)
+        {
+            Audio.PlayStructureCrack(dist);
+        }
+    }
+
+    /// <summary>Integrity a dwelling enemy beam chews per second — a scale-1 tower's cells
+    /// take a few tenths of a second of steady contact to shear, sloughing chunks the whole
+    /// way, rather than a section vanishing the instant the shaft grazes it.</summary>
+    private const float CrabBeamStructureRate = 200f;
+
+    /// <summary>What a charged siege lance deals to a tower's cells in its one synchronous
+    /// bite: far more than any cell can soak, so every block inside the impact pocket lets go
+    /// at once — a square low hit clears the base cross-section and the whole tower comes
+    /// down, which is the decisive collapse a full lance always bought.</summary>
+    private const float LanceStructureDamage = 100000f;
 
     /// <summary>
     /// Starts a structure's collapse and dresses it: chunks blown off the mass at three
@@ -560,15 +667,40 @@ public sealed class World
     /// Silently does nothing to something already on its way down.
     /// </summary>
     private bool FellStructure(Structure s)
+        => FellStructure(s, new Vector3(s.Position.X, s.BlockHeight * 0.5f, s.Position.Y));
+
+    /// <summary>
+    /// As <see cref="FellStructure(Structure)"/>, but told where on the mass the killing blow
+    /// landed so the rupture erupts there — heavier, crushing rubble blown off the exact
+    /// strike point, so a wall cut down beside a hunter buries it then and there rather than
+    /// only dressing the base. A groan sounds the support failing, the warning that the
+    /// ~1.6s topple has begun.
+    /// </summary>
+    private bool FellStructure(Structure s, Vector3 impact)
     {
-        if (!s.Strike()) return false;
+        _detached.Clear();
+        if (!s.Strike(_detached)) return false;
 
         float top = s.BlockHeight;
         for (int i = 1; i <= 3; i++)
             Debris.Burst(new Vector3(s.Position.X, top * (i / 4f), s.Position.Y),
                 i == 1 ? Palette.StructureGlow : Palette.StructureShell, elite: i == 3);
 
-        Audio.PlayExplosionAt(Torus.Distance(s.Position, Player.Position));
+        // A detonated tower throws its own cells as crushing rubble where they stood.
+        int spawned = 0;
+        foreach (var d in _detached)
+        {
+            Debris.RubbleChunk(d.Pos, d.Size, d.Color);
+            if (++spawned >= MaxChunksPerCut) break;
+        }
+        // An arch has no cells; give it a burst of rubble off the strike point instead so a
+        // felled span still rains something that can crush.
+        if (s.Kind == StructureKind.Arch)
+            Debris.Rubble(impact, Palette.StructureShell, chunks: 6, scale: s.Scale);
+
+        float dist = Torus.Distance(s.Position, Player.Position);
+        Audio.PlayStructureGroan(dist);
+        Audio.PlayExplosionAt(dist);
         return true;
     }
 
@@ -728,12 +860,13 @@ public sealed class World
             return;
         }
 
-        // Whatever the lance is standing in, it cuts down. Swept every tick it burns
-        // rather than once when it lights: the shaft is fixed but the buildings are only
-        // struck once each (Structure.Strike refuses a second), so this costs one pass
-        // over a short list and gains the case where the first tower falls out of the way
-        // and reveals the next one in line, which then goes too.
-        CutStructuresAlong(boss.BeamOrigin, boss.BeamDirection, CrabCore.BeamLength, CrabCore.BeamRadius);
+        // Whatever the lance is standing in, it cuts down. Swept every tick it burns rather
+        // than once when it lights: the shaft is fixed, but a dwelling beam now chews through
+        // integrity rather than felling on the first touch, so it chips a tower for a
+        // fraction of a second before it goes — and the moment one falls out of the way, the
+        // sweep reaches the next in line and starts on that.
+        CutStructuresAlong(boss.BeamOrigin, boss.BeamDirection, CrabCore.BeamLength,
+            CrabCore.BeamRadius, CrabBeamStructureRate * dt);
 
         // Measure the player against the boss's nearest image across the torus, so a
         // beam fired near the world's edge still burns the craft standing just over it.
@@ -1566,8 +1699,10 @@ public sealed class World
 
         // A charged beam is a lance, not a round: what it meets, it fells. Which is the
         // payoff for whatever the shot cost — two seconds rooted in the open, or a slice
-        // of the body the emitter is running on.
-        CutStructuresAlong(origin, direction, length, radius);
+        // of the body the emitter is running on. One bite carries far more than any tower's
+        // integrity, so a full lance drops on contact; the chips it sheds are the eruption
+        // at the strike point, not a war of attrition.
+        CutStructuresAlong(origin, direction, length, radius, LanceStructureDamage);
 
         // A hunter is treated as the standing block it is drawn as, not as a point:
         // the shaft has to pass within its planar radius *and* be somewhere between the
@@ -3046,6 +3181,93 @@ public sealed class World
             var origin = new Vector3(enemy.Position.X, 1.6f, enemy.Position.Y);
             Color body = enemy.IsElite ? Palette.EliteFill : Palette.EnemyFill;
             Debris.Burst(origin, body, enemy.IsElite);
+
+            // Every kill leaves salvage: a stray round or a battery cell, dropped at the
+            // corpse and stowed the instant the craft drives over it, exactly as the floating
+            // salvage is. Left on the field rather than out in the fog, so clearing a
+            // firefight is worth doubling back through. Unlike the ambient drip it ignores the
+            // salvage cap — a kill you earned always leaves its reward.
+            var kind = Random.Shared.NextSingle() < DropBatteryShare
+                ? PickupKind.Battery : PickupKind.Ammo;
+            Pickups.Add(new Pickup(enemy.Position, kind));
+        }
+    }
+
+    /// <summary>What fraction of a kill's drop is a battery (the "heal"); the rest are stray
+    /// rounds. Weighted toward ammo so a firefight feeds the gun it was fought with, and the
+    /// battery is the rarer prize.</summary>
+    private const float DropBatteryShare = 0.45f;
+
+    // --- Falling-debris crush -----------------------------------------------------
+
+    /// <summary>How long the player is immune to further crush after taking a chunk: the
+    /// brief invulnerability that stops one collapse deleting the craft in three frames, and
+    /// paces being pinned under rubble into damage-over-time rather than an instant erase.</summary>
+    private const float CrushInvuln = 0.6f;
+
+    /// <summary>Turns a chunk's mass × impact speed into hit points. Tuned so a chip stings,
+    /// a chunk staggers and a full section coming down at speed is lethal.</summary>
+    private const float CrushDamagePerImpulse = 3f;
+
+    private float _crushInvuln;
+
+    /// <summary>
+    /// Bills every falling structural chunk that lands on a character this tick. Only pieces
+    /// carrying <see cref="Shard.Mass"/> count — cosmetic sparks and hull shards are skipped —
+    /// and only while a chunk is near the ground and actually coming down, so one still
+    /// fountaining up off a strike point hasn't crushed anyone yet. Damage is mass × speed, so
+    /// a slow-settling flake is harmless where a section at speed kills.
+    ///
+    /// The player gets brief i-frames after a hit and, while any shield holds, cannot be
+    /// one-shot — a section guts the shield but doesn't end the run in a single blow. An enemy
+    /// caught under a chunk is crushed outright, and the chunk is spent (mass zeroed, so it
+    /// tumbles on as cosmetic wreckage) so one section doesn't erase a whole line of them.
+    /// </summary>
+    private void ResolveCrush(float dt)
+    {
+        if (_crushInvuln > 0f) _crushInvuln -= dt;
+
+        var shards = Debris.Shards;
+        for (int i = 0; i < shards.Length; i++)
+        {
+            ref Shard c = ref shards[i];
+            if (!c.Active || c.Mass <= 0f) continue;
+            // Near the grid and descending: a chunk higher than head height, or one still on
+            // its way up off the rupture, is not landing on anybody this tick.
+            if (c.Position.Y > 3f || c.Velocity.Y > 1f) continue;
+
+            float speed = c.Velocity.Length();
+            float damage = c.Mass * speed * CrushDamagePerImpulse;
+            if (damage < 1f) continue;
+
+            var atXZ = new Vector2(c.Position.X, c.Position.Z);
+            float chunkR = c.Size * 0.6f;
+
+            // The player: grounded-ish, not mid-cinematic, and off i-frames.
+            if (_crushInvuln <= 0f && !Player.Captured && Player.Height < 3f)
+            {
+                float reach = PlayerTank.Radius + chunkR;
+                if (Torus.DistanceSquared(atXZ, Player.Position) <= reach * reach)
+                {
+                    float dmg = damage;
+                    // An active shield eats a would-be one-shot: a section can gut it but not
+                    // end the run in a single blow while any of the shield remains.
+                    if (dmg >= Player.Shield && Player.Shield > 1f) dmg = Player.Shield - 1f;
+                    DamagePlayer(dmg);
+                    _crushInvuln = CrushInvuln;
+                }
+            }
+
+            // Enemies: a chunk that lands on a hunter crushes it and is spent.
+            foreach (var e in Enemies)
+            {
+                if (!e.Alive) continue;
+                float reach = EnemyTank.Radius + chunkR;
+                if (Torus.DistanceSquared(atXZ, e.Position) > reach * reach) continue;
+                DamageEnemy(e, damage);
+                c.Mass = 0f;   // spent — no longer bills anyone, keeps tumbling as wreckage
+                break;
+            }
         }
     }
 
