@@ -68,8 +68,14 @@ public sealed class SpiderClaw
     /// because a grab that also out-damaged the gun would make the gun pointless. What
     /// the hold is worth is the cover and the throw; the crush is the clock running on
     /// a body you are already using for something else.
+    ///
+    /// It is also what stops the shield being permanent. At this rate a standard hunter
+    /// lasts about four seconds in the hand before it comes apart, an elite about six,
+    /// and every round either of them eats takes a bite out of that. So a catch is a
+    /// window, not a state: long enough to cross a street behind, nowhere near long
+    /// enough to live behind.
     /// </summary>
-    public const float CrushRate = 1.6f;
+    public const float CrushRate = 0.8f;
 
     /// <summary>
     /// What the held body loses each time it eats a round meant for the player. A flat

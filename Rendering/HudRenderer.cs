@@ -54,6 +54,7 @@ internal static class HudRenderer
         // bloom into brackets and read the water), so a second one here would double up.
         if (p.IsMachine) DrawCrosshair(p);
         if (p.Spider is { } spider) DrawChargeMeter(spider, p);
+        if (p.Claw is { } claw) DrawClawStatus(claw);
         // The TANK's siege readouts: the three timed/stateful pieces of its kit the vital
         // bars don't already cover. Only on that chassis — nothing else plants, smokes or slugs.
         if (p.Class == PlayerClass.Tank) DrawTankStatus(p);
@@ -98,6 +99,19 @@ internal static class HudRenderer
 
         Raylib.DrawRectangle(ChargeX, ChargeTop, ChargeW, barH, new Color(10, 20, 24, 220));
 
+        // Broken: a round found the core mid-wind and took the charge with it. The gauge
+        // says so plainly for the beat the emitter is dead, because the player is about to
+        // pull a trigger that isn't going to do anything and should know why.
+        if (spider.Broken)
+        {
+            int dead = (int)MathF.Round(barH * spider.BreakFraction);
+            Raylib.DrawRectangle(ChargeX, ChargeBottom - dead, ChargeW, dead,
+                Scale(Palette.Warning, 0.55f));
+            Raylib.DrawRectangleLines(ChargeX, ChargeTop, ChargeW, barH, Palette.Warning);
+            PixelFont.DrawCentered("BRK", ChargeX + ChargeW / 2, ChargeTop - 9, 1, Palette.Warning);
+            return;
+        }
+
         if (filled > 0)
         {
             // The fill rides from the core's resting magenta to a blown-out white as it
@@ -126,6 +140,38 @@ internal static class HudRenderer
         bool afford = p.Ammo >= cost;
         PixelFont.DrawCentered("-" + cost, ChargeX + ChargeW / 2, ChargeBottom + 4, 1,
             afford ? Palette.Flag : Palette.Warning);
+    }
+
+    /// <summary>
+    /// What is in the claw, on the opposite edge from the meter — the craft's two front
+    /// limbs, one instrument each side of the frame.
+    ///
+    /// It reads out the one number that decides how the next few seconds go: how much of
+    /// the held body is left. That figure is being spent by two things at once — the
+    /// squeeze draining it, and every round the hostage eats on the player's behalf — and
+    /// when it runs out the SPIDER's exposed core is uncovered again, which the player
+    /// would very much rather find out about a second early than a second late.
+    /// </summary>
+    private static void DrawClawStatus(Entities.SpiderClaw claw)
+    {
+        if (claw.Victim is not { } body) return;
+
+        const int x = 12;
+        int y = ChargeBottom;
+
+        PixelFont.Draw("HELD", x, y - 9, 1, Palette.HudChrome);
+
+        // A short integrity stub for the catch. Rides warning-red as it comes apart, so a
+        // shield about to fail is visibly about to fail.
+        const int w = 26, h = 3;
+        float f = Math.Clamp(body.Shield / (body.IsElite ? 5f : 3f), 0f, 1f);
+        Raylib.DrawRectangle(x, y, w, h, new Color(10, 20, 24, 220));
+        Raylib.DrawRectangle(x, y, (int)MathF.Round(w * f), h,
+            f > 0.4f ? Palette.EnemyFill : Palette.Warning);
+        Raylib.DrawRectangleLines(x, y, w, h, Scale(Palette.HudChrome, 0.5f));
+
+        if (claw.Soaked > 0)
+            PixelFont.Draw("+" + claw.Soaked, x + w + 3, y - 1, 1, Palette.Flag);
     }
 
     // --- Equip slots (R T Y U): the crafted CRAB CORE lives here ---

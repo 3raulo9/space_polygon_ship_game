@@ -51,6 +51,12 @@ public static class SelfTest
         failures += Check("loadout points reach the player's live stats", LoadoutDrivesPlayerStats);
         failures += Check("the spider's lance costs rounds and burns a line", SpiderLanceKills);
         failures += Check("charging the spider's lance roots the craft", SpiderChargeRootsTheCraft);
+        failures += Check("the spider wears its core on the front", SpiderWearsItsCoreOnTheFront);
+        failures += Check("a round in the core breaks the wind-up", SpiderCoreHitBreaksTheCharge);
+        failures += Check("the meter buys damage, reach and width", SpiderLanceScalesWithTheMeter);
+        failures += Check("the claw grabs, crushes and throws", SpiderClawGrabsCrushesAndThrows);
+        failures += Check("out of reach, the same trigger is the emitter", SpiderClawFallsBackToTheLaser);
+        failures += Check("the legs kick off walls and stand on roofs", SpiderPouncesUpTheCity);
         failures += Check("the mouse turns the whole craft, not a turret", MouseTurnsTheWholeCraft);
         failures += Check("the tank's gun is stopped short of the sky", TankGunElevationIsShallow);
         failures += Check("the spider's gun cranes the full way up", SpiderGunCranesAllTheWay);
@@ -801,8 +807,8 @@ public static class SelfTest
     /// <summary>
     /// Directional armour: the tank's sloped glacis turns a frontal shot, its flanks take a hit
     /// square, and its thin rear plate takes it worse — so which way the hull faces when a round
-    /// arrives is the whole difference. Planting hardens the front further, and no other chassis
-    /// has plating at all.
+    /// arrives is the whole difference. Planting hardens the front further, and none of the three
+    /// bodies has plating at all.
     /// </summary>
     private static string? TankArmorTurnsFrontAndRear()
     {
@@ -820,10 +826,280 @@ public static class SelfTest
         if (!(planted < front)) return $"planting ({planted:F2}) didn't harden the front ({front:F2})";
         tank.TogglePlant();
 
+        var soldier = new Entities.PlayerTank(Vector2.Zero,
+            loadout: new Loadout { Class = PlayerClass.Soldier });
+        if (MathF.Abs(soldier.ArmorMultiplierFromShot(new Vector2(0f, -1f)) - 1f) > 1e-4f)
+            return "a body had directional armour";
+        return null;
+    }
+
+    /// <summary>
+    /// The SPIDER's plating is the tank's read backwards, which is what the class-select
+    /// screen has always claimed and what the chassis never did: the core is on the front,
+    /// so a round into it bills <em>more</em>, and the shell and the legs turn one aside.
+    /// Bracing a lance hardens everything except the face the emitter fires out of.
+    /// </summary>
+    private static string? SpiderWearsItsCoreOnTheFront()
+    {
         var spider = new Entities.PlayerTank(Vector2.Zero,
             loadout: new Loadout { Class = PlayerClass.Spider });
-        if (MathF.Abs(spider.ArmorMultiplierFromShot(new Vector2(0f, -1f)) - 1f) > 1e-4f)
-            return "a non-tank chassis had directional armour";
+        if (spider.Spider is not { } emitter) return "spider chassis has no emitter";
+
+        var fromFront = new Vector2(0f, -1f);
+        var fromSide = new Vector2(1f, 0f);
+        var fromBehind = new Vector2(0f, 1f);
+
+        float core = spider.ArmorMultiplierFromShot(fromFront);
+        float flank = spider.ArmorMultiplierFromShot(fromSide);
+        float back = spider.ArmorMultiplierFromShot(fromBehind);
+
+        if (!(core > 1f)) return $"a shot into the core billed {core:F2}, expected worse than full";
+        if (!(flank < 1f)) return $"the shell didn't turn a flanking shot ({flank:F2})";
+        if (!(back < flank)) return $"the carapace's back ({back:F2}) wasn't the hardest face";
+        if (!spider.StruckInTheCore(fromFront)) return "a frontal round didn't count as a core hit";
+        if (spider.StruckInTheCore(fromBehind)) return "a round from behind counted as a core hit";
+
+        // Braced: the meter is winding, the legs are planted and the shell is up.
+        emitter.Hold(0.2f);
+        float bracedFlank = spider.ArmorMultiplierFromShot(fromSide);
+        float bracedCore = spider.ArmorMultiplierFromShot(fromFront);
+        if (!(bracedFlank < flank)) return $"bracing didn't harden the flank ({bracedFlank:F2} vs {flank:F2})";
+        if (MathF.Abs(bracedCore - core) > 1e-4f)
+            return "bracing covered the core, which is the one thing it must not do";
+        return null;
+    }
+
+    /// <summary>
+    /// A round that finds the core while the lance is winding takes the wind with it: the
+    /// meter empties, the emitter is dead for a beat, and holding the trigger through the
+    /// lockout gets nothing. A hit anywhere else leaves the charge alone — that is what
+    /// bracing is for.
+    /// </summary>
+    private static string? SpiderCoreHitBreaksTheCharge()
+    {
+        var spider = new Entities.PlayerTank(Vector2.Zero,
+            loadout: new Loadout { Class = PlayerClass.Spider });
+        if (spider.Spider is not { } emitter) return "spider chassis has no emitter";
+
+        // A hit on the shell while winding: the charge survives it.
+        emitter.Hold(1f);
+        float wound = emitter.Charge;
+        if (spider.StruckInTheCore(new Vector2(1f, 0f)))
+            return "a flanking round counted as a core hit";
+        if (MathF.Abs(emitter.Charge - wound) > 1e-4f) return "a flank hit disturbed the meter";
+
+        // And one into the core: gone, and locked out.
+        if (!emitter.Break()) return "a core hit didn't break a live charge";
+        if (emitter.Charge != 0f) return $"the meter kept {emitter.Charge} through a break";
+        if (!emitter.Broken) return "the emitter wasn't locked out after a break";
+
+        emitter.Hold((float)Config.FixedDt);
+        if (emitter.Charging || emitter.Charge > 0f)
+            return "the emitter wound up again while it was still locked out";
+
+        // The lockout runs down on the weapon's own clock.
+        for (int i = 0; i < 120 && emitter.Broken; i++) emitter.Update((float)Config.FixedDt);
+        if (emitter.Broken) return "the break lockout never cleared";
+        emitter.Hold((float)Config.FixedDt);
+        if (!emitter.Charging) return "the emitter never came back after its lockout";
+
+        // A break takes the charge outright; an interruption that isn't a shot stows it.
+        var other = new Entities.SpiderWeapon();
+        other.Hold(1f);
+        float stowed = other.Charge;
+        other.Cancel();
+        other.Hold((float)Config.FixedDt);
+        if (other.Charge < stowed)
+            return $"a stowed charge came back at {other.Charge}, less than the {stowed} put down";
+        return null;
+    }
+
+    /// <summary>
+    /// The claw: it closes on a hunter in reach, carries it out in front of the core,
+    /// crushes it while it is in there, and throws it. A held body stops driving, stops
+    /// shooting, and slows the craft carrying it.
+    /// </summary>
+    private static string? SpiderClawGrabsCrushesAndThrows()
+    {
+        var lo = new Loadout { Class = PlayerClass.Spider };
+        var world = new World.World(lo) { DynamicSpawning = false };
+        if (world.Player.Claw is not { } claw) return "spider chassis has no claw";
+
+        world.Enemies.Clear();
+        world.Player.Heading = 0f;   // faces +Z
+
+        // Out in front, inside arm's reach.
+        var prey = new Entities.EnemyTank(
+            world.Player.Position + new Vector2(0f, Entities.SpiderClaw.Reach - 1f), elite: false);
+        world.Enemies.Add(prey);
+
+        float loose = world.Player.TopSpeed;
+        if (!claw.TryGrab(prey)) return "the claw refused a hunter standing inside its reach";
+        if (!prey.Grabbed) return "a caught hunter didn't know it was caught";
+        if (!(world.Player.TopSpeed < loose))
+            return $"carrying a hunter didn't slow the craft ({world.Player.TopSpeed} vs {loose})";
+
+        // The brain is off while it is up there: a stepped hunter neither drives nor fires.
+        Vector2 wasAt = prey.Position;
+        if (prey.Update((float)Config.FixedDt, world.Player.Position, 0f, out _, out _, out _))
+            return "a hunter fired from inside the claw";
+        if (Vector2.Distance(prey.Position, wasAt) > 1e-4f) return "a held hunter drove itself";
+
+        // Squeezing drains it, and the hold parks it in front of the craft.
+        float shield0 = prey.Shield;
+        for (int i = 0; i < 30; i++)
+        {
+            float bite = claw.Hold((float)Config.FixedDt,
+                world.Player.Position + world.Player.Forward * Entities.SpiderClaw.HoldReach,
+                Entities.SpiderClaw.HoldHeight, world.Player.Heading);
+            prey.TakeDamage(bite);
+        }
+        if (!(prey.Shield < shield0)) return "the squeeze didn't cost the held body anything";
+        if (prey.Height <= 0f) return "a held hunter was still standing on the grid";
+
+        // It shields the core: a round arriving from the front is the hostage's problem.
+        if (!claw.ShieldsFrom(new Vector2(0f, -1f), world.Player.Forward))
+            return "the held body didn't cover a round arriving from the front";
+        if (claw.ShieldsFrom(new Vector2(0f, 1f), world.Player.Forward))
+            return "the held body covered a round arriving from behind";
+
+        // And the throw: it leaves the hand, and it leaves it travelling.
+        var thrown = claw.Throw(new Vector3(0f, 0f, 1f));
+        if (!ReferenceEquals(thrown, prey)) return "the throw didn't hand back what was held";
+        if (claw.Holding) return "the claw was still full after a throw";
+        if (prey.Grabbed) return "a thrown hunter still thought it was held";
+        if (!prey.Flung || prey.Toss.Z <= 0f) return "a thrown hunter wasn't going anywhere";
+
+        // The world flies it and lands it.
+        for (int i = 0; i < 60 * 4 && prey.Flung; i++) world.StepForTest((float)Config.FixedDt);
+        if (prey.Flung) return "a thrown hunter never came down";
+        if (prey.Alive && prey.Height != 0f) return "a landed hunter didn't come back to the grid";
+        return null;
+    }
+
+    /// <summary>
+    /// The other half of the trigger: with nothing in reach the same button is the
+    /// emitter, and it costs exactly what the tank's cannon costs. The two never overlap,
+    /// which is the whole reason they fit on one button.
+    /// </summary>
+    private static string? SpiderClawFallsBackToTheLaser()
+    {
+        var lo = new Loadout { Class = PlayerClass.Spider };
+        var world = new World.World(lo) { DynamicSpawning = false };
+        if (world.Player.Claw is not { } claw) return "spider chassis has no claw";
+
+        world.Enemies.Clear();
+        world.Player.Heading = 0f;
+        world.Player.Ammo = world.Player.MaxAmmo;
+
+        // A hunter well out of arm's reach — the range the emitter is for.
+        var far = new Entities.EnemyTank(
+            world.Player.Position + new Vector2(0f, Entities.SpiderClaw.Reach + 25f), elite: false);
+        world.Enemies.Add(far);
+
+        int ammo0 = world.Player.Ammo;
+        world.FirePlayerShot(laser: true);
+        if (world.Player.Ammo != ammo0 - 1) return "a laser didn't cost exactly one round";
+        if (claw.Holding) return "the claw grabbed something a whole street away";
+
+        // And it gets there: the round is fast and flat, so a hunter twenty-five units out
+        // is dead well inside a second.
+        for (int i = 0; i < 60 && far.Alive; i++)
+        {
+            world.StepForTest((float)Config.FixedDt);
+            if (far.Alive) world.FirePlayerShot(laser: true);
+        }
+        if (far.Alive) return "a line of lasers left a hunter standing at open range";
+        return null;
+    }
+
+    /// <summary>
+    /// The legs: a kick off a wall carries the craft up, costs the reserve, and — chained
+    /// — puts it on top of the city, where it stands on the roof rather than falling
+    /// through it.
+    /// </summary>
+    private static string? SpiderPouncesUpTheCity()
+    {
+        var lo = new Loadout { Class = PlayerClass.Spider };
+        var world = new World.World(lo) { DynamicSpawning = false };
+        world.Enemies.Clear();
+
+        // Stand the craft against the nearest tower, just outside its footprint.
+        World.Structure? tower = null;
+        foreach (var s in world.Structures)
+        {
+            if (s.Kind != World.StructureKind.Tower) continue;
+            tower = s;
+            break;
+        }
+        if (tower is null) return "the city has no towers to climb";
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[World.Structure.MaxBlockers];
+        int n = tower.Blockers(blockers);
+        if (n == 0) return "the tower has no footprint";
+        var (wall, radius) = blockers[0];
+
+        world.Player.Position = wall + new Vector2(radius + Entities.PlayerTank.Radius + 1f, 0f);
+        world.Player.Height = 0f;
+        world.Player.Hyper = world.Player.MaxHyper;
+
+        float hyper0 = world.Player.Hyper;
+        if (!world.Player.TryPounce(new Vector2(1f, 0f))) return "the legs refused a wall in reach";
+        if (!(world.Player.Hyper < hyper0)) return "a pounce cost nothing";
+
+        for (int i = 0; i < 20; i++) world.StepForTest((float)Config.FixedDt);
+        if (!(world.Player.Height > 0f)) return "a pounce didn't get the craft off the grid";
+
+        // A craft parked on a roof stands on it: grounded, at the parapet's height, and not
+        // shoved off the side by the wall pass. Dropped onto it from a little above with no
+        // momentum carried in, which is what arriving at the top of a climb looks like —
+        // still rising off the last kick it would legitimately read as airborne, because it
+        // would be.
+        world.Player.ResetMomentum();
+        world.Player.Position = wall;
+        world.Player.Height = tower.BlockHeight + 0.4f;
+        for (int i = 0; i < 40; i++) world.StepForTest((float)Config.FixedDt);
+
+        if (MathF.Abs(world.Player.Height - tower.BlockHeight) > 0.5f)
+            return $"a craft on a roof fell to {world.Player.Height}, expected {tower.BlockHeight}";
+        if (world.Player.IsAirborne)
+            return $"a craft standing on a roof read as airborne "
+                 + $"(at {world.Player.Height}, floor {world.Player.GroundHeight})";
+        if (Torus.Delta(wall, world.Player.Position).Length() > radius)
+            return "the wall pass shoved a craft off the roof it was standing on";
+        return null;
+    }
+
+    /// <summary>
+    /// The meter buys three things at once now — damage, reach and width — so a full lance
+    /// visibly is a bigger beam rather than the same beam with a bigger number. And it
+    /// costs half what it used to, because the root was always the real price.
+    /// </summary>
+    private static string? SpiderLanceScalesWithTheMeter()
+    {
+        var weak = new Entities.SpiderWeapon();
+        var full = new Entities.SpiderWeapon();
+
+        weak.Hold(Entities.SpiderWeapon.MinCharge / Entities.SpiderWeapon.ChargeRate);
+        for (int i = 0; i < 200 && full.Charge < Entities.SpiderWeapon.MaxCharge; i++)
+            full.Hold((float)Config.FixedDt);
+
+        if (!(full.Damage > weak.Damage)) return "a full meter didn't hit harder";
+        if (!(full.AmmoCost > weak.AmmoCost)) return "a full meter didn't cost more";
+        if (full.AmmoCost > Entities.SpiderWeapon.MaxBeamAmmo)
+            return $"a full lance billed {full.AmmoCost}, over its own ceiling";
+
+        float shortReach = Entities.SpiderWeapon.LengthAt(weak.ChargeFraction);
+        float longReach = Entities.SpiderWeapon.LengthAt(full.ChargeFraction);
+        if (!(longReach > shortReach)) return "the meter didn't buy any reach";
+        if (!(Entities.SpiderWeapon.RadiusAt(1f) > Entities.SpiderWeapon.RadiusAt(0f)))
+            return "the meter didn't buy any width";
+
+        // A shot under the floor is a clean refusal rather than a wasted round.
+        var fizzle = new Entities.SpiderWeapon();
+        fizzle.Hold(Entities.SpiderWeapon.MinCharge * 0.5f / Entities.SpiderWeapon.ChargeRate);
+        if (fizzle.Release(Vector3.Zero, new Vector3(0f, 0f, 1f), out _))
+            return "a charge under the floor still fired";
         return null;
     }
 
