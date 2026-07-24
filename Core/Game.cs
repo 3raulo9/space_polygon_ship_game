@@ -610,6 +610,12 @@ public sealed class Game : IDisposable
     {
         _menuTime += Raylib.GetFrameTime();
 
+        // The wire turns on the lobby screen as well as in the world. It has to: the
+        // handshake that seats a joiner happens entirely between two machines that are both
+        // still standing here, and a lobby that only listened once the match had started
+        // would never start one.
+        _session?.PumpLobby();
+
         // Keep the roster line honest while people arrive.
         if (_session?.World is { } w) _lobby.Seated = w.Players.Count;
 
@@ -644,6 +650,7 @@ public sealed class Game : IDisposable
             case LobbyScreen.Action.Launch:
                 if (_session?.World is { } ready)
                 {
+                    _session.StartMatch();
                     _world = ready;
                     _inventoryOpen = false;
                     BeginFade(() => _state = GameState.Playing);
@@ -651,9 +658,11 @@ public sealed class Game : IDisposable
                 break;
         }
 
-        // A client is dropped into the world the moment the host answers — there is no
-        // launch button on that end, the host owns when the match starts.
-        if (_session is { IsHost: false, LocalSeat: >= 0 } joined && joined.World is { } jw)
+        // A client comes in when the host presses LAUNCH — there is no launch button on that
+        // end, the host owns when the match starts. Being seated only means the host knows
+        // you are there.
+        if (_session is { IsHost: false, MatchStarted: true, LocalSeat: >= 0 } joined
+            && joined.World is { } jw)
         {
             _world = jw;
             _inventoryOpen = false;

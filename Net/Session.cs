@@ -1,4 +1,4 @@
-using VoidTanks.Core;
+﻿using VoidTanks.Core;
 
 namespace VoidTanks.Net;
 
@@ -13,6 +13,8 @@ public enum Msg : byte
     Input = 3,
     /// <summary>Host → client, at <see cref="Session.SnapshotHz"/>: the world.</summary>
     State = 4,
+    /// <summary>Host → client: the host pressed LAUNCH, come in.</summary>
+    Start = 5,
 }
 
 /// <summary>
@@ -50,6 +52,37 @@ public sealed class Session
 
     /// <summary>Which seat this machine drives. Always 0 on the host.</summary>
     public int LocalSeat { get; private set; }
+
+    /// <summary>
+    /// True once the host has actually started the match. A client is seated the moment it
+    /// says hello, which is not the same thing — the host may still be sitting in the lobby
+    /// deciding the rules, and a client that walked in on being seated would find itself
+    /// standing in a world nobody is stepping yet.
+    /// </summary>
+    public bool MatchStarted { get; private set; }
+
+    /// <summary>Host-side: LAUNCH. Tells everyone to come in, reliably — a client that
+    /// missed this would sit in the lobby while the match ran without them.</summary>
+    public void StartMatch()
+    {
+        MatchStarted = true;
+        Span<byte> p = stackalloc byte[1];
+        p[0] = (byte)Msg.Start;
+        _net.Broadcast(p, reliable: true);
+    }
+
+    /// <summary>
+    /// Network without simulation: drains the socket and answers what is on it, and nothing
+    /// else. This is what the lobby runs — the handshake that seats a joiner has to happen
+    /// while both machines are still on the lobby screen, long before either has a world
+    /// worth describing.
+    /// </summary>
+    public void PumpLobby()
+    {
+        _net.Pump();
+        while (_net.TryReceive(out int from, out byte[] payload))
+            Handle(from, payload);
+    }
 
     /// <summary>The most recent tick a client has heard about, so a packet that overtook a
     /// newer one on the wire is dropped rather than snapping the world backwards.</summary>
@@ -195,6 +228,10 @@ public sealed class Session
                 World.SetInput(seat, InputFrame.Read(payload.AsSpan(5, InputFrame.Size)));
                 break;
             }
+
+            case Msg.Start when !IsHost:
+                MatchStarted = true;
+                break;
 
             case Msg.State when !IsHost:
             {

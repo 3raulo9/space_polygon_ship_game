@@ -143,6 +143,7 @@ public static class SelfTest
         failures += Check("a snapshot survives the wire and lands where it was sent", SnapshotRoundTrips);
         failures += Check("a client sees the host's craft move, over a bad wire", ClientTracksTheHost);
         failures += Check("a join code decodes back to the host who read it out", JoinCodesRoundTrip);
+        failures += Check("the handshake completes on the lobby screen alone", LobbyHandshakeSeatsAJoiner);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1606,6 +1607,57 @@ public static class SelfTest
         // And nonsense stays rejected rather than dialling somebody at random.
         if (Net.SteamNet.Decode("AAAA") != null) return "a four-character code was accepted";
         if (Net.SteamNet.Decode("AEIOU01") != null) return "a code full of excluded letters was accepted";
+        return null;
+    }
+
+    private static string? LobbyHandshakeSeatsAJoiner()
+    {
+        // The bug this exists to prevent: the wire was only turned once a match was running,
+        // so two machines both sitting on the lobby screen never exchanged a word. The
+        // connection came up, the joiner said hello into it, and the host — which was not
+        // draining its socket until it was already playing — never answered. It looked
+        // exactly like a network failure and was nothing of the kind.
+        //
+        // So: nothing here steps a world or pumps a tick. Only what the lobby itself runs.
+        var net = new LoopbackNet(2, LinkQuality.Typical, seed: 99);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4, Revives = 5 });
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Fish);
+
+        for (int i = 0; i < 120; i++)
+        {
+            net.Advance();
+            host.PumpLobby();
+            client.PumpLobby();
+        }
+
+        if (client.LocalSeat != 1)
+            return $"two seconds on the lobby screen and the joiner was still seated at {client.LocalSeat}";
+        if (hostWorld.Players.Count != 2) return "the host never seated the joiner";
+        if (hostWorld.Players[1].Fish is null)
+            return "the joiner asked for a fish and the host seated something else";
+
+        // The host's rules reach the client with the seat, so both ends agree before anyone
+        // is in the world.
+        if (client.World!.Match.Revives != 5)
+            return $"the client thinks the match has {client.World.Match.Revives} revives, not 5";
+
+        // And being seated is not being in: the client waits on LAUNCH.
+        if (client.MatchStarted) return "the client walked in before the host started the match";
+
+        host.StartMatch();
+        for (int i = 0; i < 60; i++)
+        {
+            net.Advance();
+            host.PumpLobby();
+            client.PumpLobby();
+        }
+        if (!client.MatchStarted) return "the host pressed LAUNCH and the client never heard";
         return null;
     }
 
