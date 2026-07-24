@@ -129,6 +129,31 @@ public static class Audio
         if (_enabled) Raylib.PlaySound(_warning);
     }
 
+    /// <summary>
+    /// A support giving way — the groan that warns a topple has begun and a second or so of
+    /// falling mass is coming, giving anything under it time to move. A low stone-grind (the
+    /// same the thrown core makes, dropped in level), mixed down with range.
+    /// </summary>
+    public static void PlayStructureGroan(float distance)
+    {
+        if (!_enabled) return;
+        float vol = Math.Clamp(1f - distance / 220f, 0.12f, 0.9f);
+        PlaySynth(SfxSynth.CrabBlastGrind(_sfxRng), vol);
+    }
+
+    /// <summary>
+    /// A crack of masonry shearing off where a beam is biting a structure — short and hard,
+    /// jittered across the synth pool so a dwelling beam reads as stone breaking rather than
+    /// one clip stuttering. Quieter and shorter-ranged than a detonation: it is a chip, not
+    /// the collapse.
+    /// </summary>
+    public static void PlayStructureCrack(float distance)
+    {
+        if (!_enabled) return;
+        float vol = Math.Clamp(1f - distance / 160f, 0.1f, 0.6f);
+        PlaySynth(SfxSynth.RifleCrack(_sfxRng), vol);
+    }
+
     // --- The Crab-Core's lance: charge, three warnings, then the beam ---------
 
     /// <summary>
