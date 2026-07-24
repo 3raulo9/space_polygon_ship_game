@@ -59,10 +59,10 @@ public static class ClassCatalog
             "SALVAGED CRAB-CORE",
             new[]
             {
-                "A CRAB-CORE CUT DOWN TO YOUR SIZE. THE RED CORE",
-                "IN THE MIDDLE IS THE WEAK POINT - AND IT IS YOURS.",
-                "LEFT THROWS LASERS. RIGHT WINDS THE LANCE: HOLD",
-                "IT TO FILL THE METER. YOU CANNOT MOVE WHILE IT DOES.",
+                "THE RED CORE IN THE MIDDLE IS THE WEAK POINT, AND",
+                "IT IS YOURS - SHOTS TO THE FRONT HURT MORE. LEFT",
+                "GRABS WHAT IS IN REACH AND THROWS IT, LASERS WHAT",
+                "IS NOT. RIGHT WINDS THE LANCE. Q KICKS OFF WALLS.",
             },
             Available: true,
             PartNames: new[] { "CARAPACE", "BASE", "LEGS", "CORE" },

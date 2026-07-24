@@ -71,7 +71,17 @@ public sealed class CrabSeizure : ICinematicView
         && boss.Phase == CrabCore.State.Pursuit
         && !player.IsAirborne
         && !player.Planted
+        && player.Height <= GrabCeiling
         && Torus.DistanceSquared(player.Position, boss.Position) <= GrabRadius * GrabRadius;
+
+    /// <summary>
+    /// How far off the grid the catch can be and still be reachable. Standing still counts
+    /// as standing still whatever you are standing <em>on</em> — and the SPIDER can be on
+    /// top of a tower now, where "not airborne" stops meaning "within reach of a claw".
+    /// Set at the height the arm actually carries a body to, so the rule is the rig's
+    /// rather than a guess: anything the hand could lift you to, it can lift you from.
+    /// </summary>
+    private static readonly float GrabCeiling = CrabRig.HoldWorldY;
 
     // --- Geometry of the hold -------------------------------------------------
 
