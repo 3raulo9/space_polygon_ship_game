@@ -144,6 +144,8 @@ public static class SelfTest
         failures += Check("a client sees the host's craft move, over a bad wire", ClientTracksTheHost);
         failures += Check("a join code decodes back to the host who read it out", JoinCodesRoundTrip);
         failures += Check("the handshake completes on the lobby screen alone", LobbyHandshakeSeatsAJoiner);
+        failures += Check("a snapshot carries each seat's chassis, and the client rebuilds it", ChassisCrossesTheWire);
+        failures += Check("two players open close enough to see each other", SeatsOpenWithinSight);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1490,6 +1492,62 @@ public static class SelfTest
         return lost <= 0.001f
             ? "friendly fire was on and four seconds of point-blank fire did nothing"
             : null;
+    }
+
+    private static string? ChassisCrossesTheWire()
+    {
+        // A joiner who picked a fish has to arrive as a fish on every other screen — the whole
+        // point of the class byte in the snapshot. The client's roster starts as placeholder
+        // tanks, so this also exercises the rebuild that swaps one for the real chassis.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.AddPlayer(new Loadout { Class = PlayerClass.Fish });
+        host.AddPlayer(new Loadout { Class = PlayerClass.Soldier });
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();   // seat 1, a placeholder tank
+        client.AddPlayer();   // seat 2, a placeholder tank
+        client.LocalIndex = 0;
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.Write(host, forSeat: 0, tick: 5u, buf);
+        Snapshot.Apply(client, buf.AsSpan(0, n));
+
+        if (client.Players[1].Class != PlayerClass.Fish)
+            return $"seat 1 picked a fish and arrived as {client.Players[1].Class}";
+        if (client.Players[2].Class != PlayerClass.Soldier)
+            return $"seat 2 picked a soldier and arrived as {client.Players[2].Class}";
+        // The rebuilt craft actually has the rig, not just the label.
+        if (client.Players[1].Fish is null) return "the fish arrived without a fish rig";
+        if (client.Players[2].Soldier is null) return "the soldier arrived without a soldier rig";
+
+        // Seat 0 is this client's own craft and must never be rebuilt out from under it.
+        if (!ReferenceEquals(client.Player, client.Players[0]))
+            return "the local craft was replaced by a snapshot";
+        return null;
+    }
+
+    private static string? SeatsOpenWithinSight()
+    {
+        // Two players in a fresh match have to open close enough, and facing the right way,
+        // that each is in the other's view on the first frame — the thing that makes "did the
+        // other player actually connect" answerable by looking rather than by driving around.
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 8 });
+        PlayerTank a = world.Player;
+        PlayerTank b = world.AddPlayer()!;
+
+        float gap = Torus.Distance(a.Position, b.Position);
+        if (gap > 30f) return $"two players opened {gap:0} apart, too far to see each other";
+        if (gap < 4f) return $"two players opened {gap:0} apart, all but on top of each other";
+
+        // The joiner faces back toward the host, so the host looking forward sees them. Their
+        // forward should point roughly from b toward a.
+        Vector2 bToA = Torus.Delta(b.Position, a.Position);
+        float align = Vector2.Dot(Vector2.Normalize(bToA), b.Forward);
+        if (align < 0.5f) return "the joiner opened facing away from the host";
+        return null;
     }
 
     private static string? SnapshotRoundTrips()

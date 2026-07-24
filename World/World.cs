@@ -2380,6 +2380,13 @@ public sealed class World : IAnchorField
     /// </summary>
     private const float SeatRing = 26f;
 
+    /// <summary>How far ahead of the host the joiners open — close enough that the two of you
+    /// are looking at each other on the first frame, far enough not to be nose to nose.</summary>
+    private const float SeatAhead = 16f;
+
+    /// <summary>Sideways gap between joiners fanning out along the opening line.</summary>
+    private const float SeatSpacing = 9f;
+
     /// <summary>
     /// Seats another player and hands back their craft, or null when the match is full.
     ///
@@ -2391,12 +2398,18 @@ public sealed class World : IAnchorField
     {
         if (Full) return null;
 
-        // Fan the seats around the clearing rather than stacking them: seat n sits at its
-        // own bearing on the ring, facing out, so twenty craft open looking away from each
-        // other instead of nose to nose.
+        // Open the joiners clustered just ahead of the host and facing back toward the
+        // origin, so on the first frame everyone can already see everyone — which is the
+        // whole point while there are only a few of them and you want to check the other
+        // craft is really there, really the right chassis, and really moving. They fan out
+        // along a short line rather than stacking: seat 1 dead ahead, seat 2 a lane to its
+        // left, seat 3 to its right, and so on, so nobody opens inside anybody.
         int seat = Players.Count;
-        float bearing = MathF.Tau * seat / MathF.Max(2, Match.MaxPlayers);
-        var at = new Vector2(MathF.Sin(bearing), MathF.Cos(bearing)) * SeatRing;
+        float lane = ((seat + 1) / 2) * SeatSpacing * ((seat & 1) == 1 ? 1f : -1f);
+        var at = new Vector2(lane, SeatAhead);
+
+        // Faced at the origin the host sits on, so the craft is looking back at seat 0.
+        float bearing = MathF.Atan2(-at.X, -at.Y);
 
         var craft = new PlayerTank(Torus.Wrap(at), bearing, loadout ?? new Loadout())
         {
@@ -2409,6 +2422,24 @@ public sealed class World : IAnchorField
         if (craft.Soldier != null) StandTheSoldierInTheCity(craft);
         if (craft.Fish != null) SwimTheFishOffTheDeck(craft);
         return craft;
+    }
+
+    /// <summary>
+    /// Swaps the craft in a seat for one of a different chassis, keeping its place in the
+    /// roster. Client-side only: the host tells a client what everyone is driving through the
+    /// snapshot, and a placeholder tank becomes the fish it always was the moment it is named.
+    /// The new craft opens where the old one stood so it does not jump on the frame it changes.
+    /// </summary>
+    public void ReplacePlayer(int seat, PlayerClass chassis)
+    {
+        if ((uint)seat >= (uint)Players.Count) return;
+        PlayerTank old = Players[seat];
+        var build = new Loadout { Class = chassis };
+        Players[seat] = new PlayerTank(old.Position, old.Heading, build)
+        {
+            Height = old.Height,
+            Lives = old.Lives,
+        };
     }
 
     /// <summary>

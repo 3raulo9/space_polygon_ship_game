@@ -135,6 +135,20 @@ public sealed class EntityRenderer
             _maw.DrawLasers(maw, cameraPos, mawShift);
         }
 
+        // The other players. This is a first-person game, so a craft on screen never existed
+        // outside the hangar's turntable — which is exactly the draw reused here, one per
+        // seat that is not the eye behind the camera. Drawn at each craft's own height, so a
+        // team-mate's jump lifts their whole chassis; skipped for a spent player, whose craft
+        // is gone from the field even though their camera lingers to spectate.
+        for (int seat = 0; seat < world.Players.Count; seat++)
+        {
+            if (seat == world.LocalIndex) continue;
+            PlayerTank mate = world.Players[seat];
+            if (!mate.Alive) continue;
+            DrawCraft(mate, Torus.NearestImage(mate.Position, eyeXZ), cameraPos,
+                      (float)Raylib.GetTime());
+        }
+
         foreach (var e in world.Enemies)
         {
             if (!e.Alive) continue;
@@ -609,6 +623,34 @@ public sealed class EntityRenderer
     /// so in words instead, so nothing is drawn here and the middle of the hangar is
     /// left as empty grid, which is the honest picture of a build the machine can't make.
     /// </summary>
+    /// <summary>
+    /// Draws another player's craft out in the world, as their chosen chassis, at the height
+    /// they are actually at — so a team-mate's jump lifts their whole body and a fish hangs
+    /// where it is swimming.
+    ///
+    /// It reuses the hangar's turntable draw wholesale. That draw places every chassis on the
+    /// grid; the height is added by translating the whole modelview up before it runs, which
+    /// works for all five without a height parameter on any of them, because every part of
+    /// every craft is ultimately a DrawTriangle3D through the current matrix. The pose is the
+    /// idle one the hangar shows — a remote player's exact limbs and recoil are not on the
+    /// wire yet, so what a team-mate reads is the right chassis, moving, jumping and firing,
+    /// rather than the precise crouch of the player driving it.
+    /// </summary>
+    public void DrawCraft(PlayerTank craft, Vector2 pos, Vector3 cameraPos, float elapsed)
+    {
+        if (craft.Height > 0.001f)
+        {
+            Rlgl.PushMatrix();
+            Rlgl.Translatef(0f, craft.Height, 0f);
+            DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
+            Rlgl.PopMatrix();
+        }
+        else
+        {
+            DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
+        }
+    }
+
     public void DrawLoadoutShowcase(Loadout loadout, Vector2 pos, float heading,
         Vector3 cameraPos, float elapsed)
     {

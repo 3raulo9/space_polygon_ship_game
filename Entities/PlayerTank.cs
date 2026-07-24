@@ -187,6 +187,10 @@ public sealed class PlayerTank
     /// the same heavy momentum whatever you are piloting.</summary>
     public PlayerClass Class { get; private set; } = PlayerClass.Tank;
 
+    /// <summary>The hangar build this craft was made from — its chassis and its paint.
+    /// Read only from the outside, to draw another player's craft in third person.</summary>
+    public Loadout Build { get; private set; } = new();
+
     /// <summary>
     /// The SPIDER's emitter, or null on every other chassis. Held here rather than in
     /// the world because it is part of the craft: it cools on the craft's clock and it
@@ -431,6 +435,11 @@ public sealed class PlayerTank
         // harness): fall back to the standard chassis on a straight 5/5/5, which is
         // exactly the craft this game shipped with before the hangar existed.
         loadout ??= new Loadout();
+        // Kept so the craft can be drawn from the outside — in the hangar it was always
+        // the local player, whose chassis is never on screen, but a second player's is, and
+        // the renderer needs the class and the paint to know what to draw. See
+        // EntityRenderer's third-person pass.
+        Build = loadout;
         Class = loadout.Class;
         MaxShield = loadout.MaxShield;
         MaxAmmo = loadout.MaxAmmo;

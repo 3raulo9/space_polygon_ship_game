@@ -126,7 +126,11 @@ public sealed class LobbyScreen
             }
         }
 
-        if (InputMap.MenuConfirm && Selected == Row.Launch) return Action.Launch;
+        // LAUNCH only fires once someone else is actually in the room — a one-player
+        // multiplayer match is not a thing, and the renderer already refuses to pulse the
+        // word until then, so pressing it early should do nothing rather than start an
+        // empty match.
+        if (InputMap.MenuConfirm && Selected == Row.Launch && Seated > 1) return Action.Launch;
         return Action.None;
     }
 
@@ -171,5 +175,14 @@ public sealed class LobbyScreen
         Trouble = why;
         Where = Phase.Choosing;
         Typed = "";
+    }
+
+    /// <summary>Back to the opening choice with nothing carried over — what backing out of the
+    /// hangar during setup returns to.</summary>
+    public void Reset()
+    {
+        Where = Phase.Choosing;
+        Typed = "";
+        Trouble = null;
     }
 }

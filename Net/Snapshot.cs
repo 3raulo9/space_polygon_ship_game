@@ -60,9 +60,9 @@ public static class Snapshot
         Rooted = 1 << 3,
     }
 
-    /// <summary>Bytes per craft on the wire: seat, flags, x, y, height, heading, pitch,
-    /// shield, hyper, lives, ammo.</summary>
-    private const int PlayerBytes = 1 + 1 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 1 + 1;
+    /// <summary>Bytes per craft on the wire: seat, class, flags, x, y, height, heading,
+    /// pitch, shield, hyper, lives, ammo.</summary>
+    private const int PlayerBytes = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 1 + 1;
 
     /// <summary>Bytes per hunter: x, y, heading, flags.</summary>
     private const int EnemyBytes = 2 + 2 + 2 + 1;
@@ -105,6 +105,7 @@ public static class Snapshot
             if (p.Rooted) mark |= Mark.Rooted;
 
             dst[at++] = (byte)world.Seat(p);
+            dst[at++] = (byte)p.Class;   // so the client knows which chassis to draw
             dst[at++] = (byte)mark;
             BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(p.Position.X, PosScale)); at += 2;
             BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(p.Position.Y, PosScale)); at += 2;
@@ -185,6 +186,7 @@ public static class Snapshot
             for (int i = 0; i < players; i++)
             {
                 int seat = src[at++];
+                var chassis = (PlayerClass)src[at++];
                 var mark = (Mark)src[at++];
                 float x = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
                 float y = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
@@ -200,6 +202,14 @@ public static class Snapshot
                 // is a player we have not been told about yet, so it waits for the next one.
                 if (seat < 0 || seat >= world.Players.Count) continue;
                 if (seat == world.LocalIndex) continue;   // ours to drive, not to be told
+
+                // A client's roster starts as placeholder tanks; the host is the authority on
+                // who is actually driving what. The first snapshot that names a seat's real
+                // chassis rebuilds that craft as the right one — a fish where a tank stood in.
+                // Cheap, and only ever on the frame the class first differs, since a craft's
+                // chassis never changes after that.
+                if (world.Players[seat].Class != chassis)
+                    world.ReplacePlayer(seat, chassis);
 
                 PlayerTank p = world.Players[seat];
                 p.Position = Torus.Wrap(new Vector2(x, y));

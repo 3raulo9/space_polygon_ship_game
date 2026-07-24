@@ -47,6 +47,13 @@ public sealed class Game : IDisposable
     private Net.SteamNet? _steam;
     private Net.Session? _session;
 
+    // Which side of a match this machine is setting up, remembered across the class-select
+    // detour: choosing HOST or JOIN sends the player to the hangar to pick a chassis, and
+    // this is what tells the hangar where to go when they are done rather than starting a
+    // solo run. None the rest of the time, which is every single-player launch.
+    private enum MpRole { None, Host, Join }
+    private MpRole _mpRole = MpRole.None;
+
     /// <summary>True while a match is running, so the loop knows to pump the wire.</summary>
     private bool InMatch => _session != null;
 
@@ -128,6 +135,26 @@ public sealed class Game : IDisposable
             {
                 Vector2 to = at - _world.Player.Position;
                 _world.Player.Heading = MathF.Atan2(to.X, to.Y);
+            }
+
+            // VOIDTANKS_MP_PEER=<class index> seats a second player in front of the first, as
+            // that chassis, so the third-person craft render can be photographed without two
+            // machines and a wire. It reuses the seat placement the real match uses, so what
+            // this shows is what a host actually sees when a friend joins.
+            string? peer = Environment.GetEnvironmentVariable("VOIDTANKS_MP_PEER");
+            if (peer != null && int.TryParse(peer, out int pc)
+                && Enum.IsDefined((PlayerClass)pc))
+            {
+                _world.Match = new MatchSettings { MaxPlayers = 4 };
+                var mate = _world.AddPlayer(new Loadout { Class = (PlayerClass)pc });
+                // Look straight at them, and give them a little height if they can hold it, so
+                // the picture shows the whole craft rather than its feet.
+                if (mate is not null)
+                {
+                    Vector2 to = mate.Position - _world.Player.Position;
+                    _world.Player.Heading = MathF.Atan2(to.X, to.Y);
+                    if (mate.Class is PlayerClass.Fish or PlayerClass.Virus) mate.Height = 6f;
+                }
             }
         }
     }
@@ -410,10 +437,23 @@ public sealed class Game : IDisposable
         switch (_classSelect.Update())
         {
             case ClassSelectScreen.Action.Launch:
-                BeginFade(EnterSinglePlayer);
+                BeginFade(_mpRole switch
+                {
+                    MpRole.Host => StartHosting,
+                    MpRole.Join => StartJoining,
+                    _ => EnterSinglePlayer,
+                });
                 break;
             case ClassSelectScreen.Action.Back:
-                BeginFade(() => _state = GameState.Menu);
+                // In a match, the hangar's back button returns to the lobby it came from
+                // rather than all the way out to the title.
+                if (_mpRole != MpRole.None)
+                {
+                    _mpRole = MpRole.None;
+                    _lobby.Reset();
+                    BeginFade(() => _state = GameState.Lobby);
+                }
+                else BeginFade(() => _state = GameState.Menu);
                 break;
         }
     }
@@ -616,8 +656,14 @@ public sealed class Game : IDisposable
         // would never start one.
         _session?.PumpLobby();
 
-        // Keep the roster line honest while people arrive.
-        if (_session?.World is { } w) _lobby.Seated = w.Players.Count;
+        // Keep the roster line honest while people arrive, and keep the host's rules on the
+        // world it already built so a friendly-fire or seat-cap change made while waiting
+        // actually takes.
+        if (_session is { IsHost: true } host && host.World is { } hw)
+        {
+            hw.Match = _lobby.Match.Clamped();
+            _lobby.Seated = hw.Players.Count;
+        }
 
         // A dial that failed, or a host that went away, puts the player back on the choice
         // rather than leaving them watching dots forever.
@@ -631,25 +677,24 @@ public sealed class Game : IDisposable
                 break;
 
             case LobbyScreen.Action.HostMatch:
-                _steam = Net.SteamNet.Host();
-                if (_steam == null) { _lobby.Fail("COULD NOT OPEN A SOCKET"); break; }
-                // The host builds the world now so joiners have seats to be put in; it is
-                // not stepped until LAUNCH.
-                _session = new Net.Session(_steam, host: true);
-                _session.HostMatch(new World.World(_loadout, _lobby.Match.Clamped()));
+                // The chassis comes first: both players pick in the hangar, and only then
+                // does anyone open a socket, so a joiner's HELLO already carries the class
+                // they chose rather than whatever the hangar last held.
+                _mpRole = MpRole.Host;
+                BeginFade(() => _state = GameState.ClassSelect);
                 break;
 
             case LobbyScreen.Action.JoinMatch:
-                _steam = Net.SteamNet.Connect(_lobby.Typed);
-                if (_steam == null) { _lobby.Fail("THAT IS NOT A CODE"); break; }
-                _session = new Net.Session(_steam, host: false);
-                _session.JoinMatch(new World.World(_loadout) { DynamicSpawning = false });
-                _session.SendHello(_loadout.Class);
+                _mpRole = MpRole.Join;
+                BeginFade(() => _state = GameState.ClassSelect);
                 break;
 
             case LobbyScreen.Action.Launch:
                 if (_session?.World is { } ready)
                 {
+                    // Anyone seated before the host settled on a revive count gets it now, so
+                    // the number on every HUD matches the one the host launched with.
+                    foreach (var p in ready.Players) p.Lives = ready.Match.Revives + 1;
                     _session.StartMatch();
                     _world = ready;
                     _inventoryOpen = false;
@@ -682,6 +727,32 @@ public sealed class Game : IDisposable
         _steam?.Dispose();
         _steam = null;
         _session = null;
+    }
+
+    /// <summary>Opens the socket and builds the host's world with the chosen chassis, then
+    /// drops back onto the lobby screen — now the hosting face, with the code and the rules —
+    /// to wait for people and press LAUNCH.</summary>
+    private void StartHosting()
+    {
+        _mpRole = MpRole.None;
+        _steam = Net.SteamNet.Host();
+        if (_steam == null) { _lobby.Fail("COULD NOT OPEN A SOCKET"); _state = GameState.Lobby; return; }
+        _session = new Net.Session(_steam, host: true);
+        _session.HostMatch(new World.World(_loadout, _lobby.Match.Clamped()));
+        _state = GameState.Lobby;
+    }
+
+    /// <summary>Dials the host with the chosen chassis and waits on the lobby's joining face
+    /// until they press LAUNCH.</summary>
+    private void StartJoining()
+    {
+        _mpRole = MpRole.None;
+        _steam = Net.SteamNet.Connect(_lobby.Typed);
+        if (_steam == null) { _lobby.Fail("THAT IS NOT A CODE"); _state = GameState.Lobby; return; }
+        _session = new Net.Session(_steam, host: false);
+        _session.JoinMatch(new World.World(_loadout) { DynamicSpawning = false });
+        _session.SendHello(_loadout.Class);
+        _state = GameState.Lobby;
     }
 
     private void EnterSinglePlayer()
