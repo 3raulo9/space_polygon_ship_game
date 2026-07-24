@@ -46,7 +46,9 @@ public sealed class SoldierRenderer
     public void Draw(World.World world, Vector3 cameraPos, float elapsed)
     {
         PlayerTank p = world.Player;
-        if (p.Soldier is not { } rig) return;
+        // Whoever's rig it is — the SOLDIER's own, or one a VIRUS is wearing off a stolen
+        // body. The kit looks the same from the inside either way, because it is the same kit.
+        if (p.Rig is not { } rig) return;
 
         // The camera's own frame, rebuilt here rather than passed down: the viewmodel
         // has to hang off exactly the basis the Renderer aimed the camera along,
@@ -104,8 +106,11 @@ public sealed class SoldierRenderer
     /// <paramref name="along"/> is the direction it is travelling or has bitten into;
     /// the flukes fan off the back of that, which is what makes a flying hook look
     /// thrown and an anchored one look driven in.
+    ///
+    /// Internal rather than private because the enemy squads throw the same steel and it
+    /// should look the same in the air — see <see cref="EnemySoldierRenderer"/>.
     /// </summary>
-    private static void DrawHook(Vector3 at, Vector3 along, bool anchored, float scale = 1f)
+    internal static void DrawHook(Vector3 at, Vector3 along, bool anchored, float scale = 1f)
     {
         if (along.LengthSquared() < 1e-6f) along = new Vector3(0f, 0f, 1f);
         along = Vector3.Normalize(along);
@@ -199,8 +204,12 @@ public sealed class SoldierRenderer
     /// between two points is a curve, and a taut one is a straight line, so how bent it
     /// is <em>is</em> the readout of whether the player is currently being pulled. It
     /// costs one sine per segment and tells the player more than any HUD element could.
+    ///
+    /// Internal for the same reason the hook is: an enemy squad's lines are the same lines,
+    /// and reading how taut one of <em>theirs</em> is turns out to be the single best way to
+    /// tell whether that soldier is about to arrive.
     /// </summary>
-    private static void DrawCable(GrappleHook h, Vector3 from, Vector2 eyeXZ)
+    internal static void DrawCable(GrappleHook h, Vector3 from, Vector2 eyeXZ)
     {
         if (h.State == HookState.Stowed) return;
 
@@ -379,7 +388,7 @@ public sealed class SoldierRenderer
     /// </summary>
     public static void DrawScreenEffects(World.World world, float elapsed)
     {
-        if (world.Player.Soldier is not { } rig) return;
+        if (world.Player.Rig is not { } rig) return;
 
         const int w = Config.InternalWidth;
         const int h = Config.InternalHeight;

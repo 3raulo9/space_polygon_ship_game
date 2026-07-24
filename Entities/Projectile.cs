@@ -70,6 +70,23 @@ public sealed class Projectile
     public EnemyTank? PierceLast;
 
     private const float Speed = 90f;
+
+    /// <summary>
+    /// How fast the SPIDER's laser leaves. The one difference this class's ordinary
+    /// trigger has from the tank's, and it is deliberately not a damage difference: the
+    /// bolt costs the same round, cools on the same clock and bites for the same amount.
+    /// It simply arrives.
+    ///
+    /// That is worth more than it sounds. At the cannon's ninety a hunter at its
+    /// stand-off range is nearly half a second downrange, so hitting one is a matter of
+    /// leading it — which is a fine skill and belongs to the tank, whose shell also arcs.
+    /// At this speed the lead is small enough to ignore and the shot is simply where the
+    /// crosshair was, so the SPIDER's minute-to-minute is precision rather than
+    /// prediction. Two chassis firing the same round for the same price, that play
+    /// nothing alike.
+    /// </summary>
+    private const float LaserSpeed = 165f;
+
     private const float GrenadeSpeed = 60f;   // heavier, so it lobs slower
     private const float MaxLife = 2.4f;
     public const float GrenadeSplash = 7f;    // blast radius in world units
@@ -133,8 +150,9 @@ public sealed class Projectile
     {
         Vector2 d = Vector2.Normalize(dir);
         float cp = MathF.Cos(pitch);
+        float speed = laser ? LaserSpeed : Speed;
         Position = origin;
-        Velocity = d * Speed * cp;
+        Velocity = d * speed * cp;
         FromPlayer = fromPlayer;
         IsGrenade = false;
         IsLaser = laser;
@@ -145,7 +163,9 @@ public sealed class Projectile
         IsAcid = false;
         IsPiercing = piercing;
         PierceLast = null;
-        _climb = MathF.Sin(pitch) * Speed;
+        Seeds = false;
+        FromAlly = false;
+        _climb = MathF.Sin(pitch) * speed;
         SplashRadius = 0f;
         Height = launchHeight;
         JustExpired = false;
@@ -191,6 +211,8 @@ public sealed class Projectile
         IsAcid = false;
         IsPiercing = false;
         PierceLast = null;
+        Seeds = false;
+        FromAlly = false;
         SplashRadius = GrenadeSplash;
         Height = MortarLaunchHeight;   // leaves the muzzle low and climbs from there
         _descentRate = 0f;
@@ -221,6 +243,8 @@ public sealed class Projectile
         IsAcid = false;
         IsPiercing = false;
         PierceLast = null;
+        Seeds = false;
+        FromAlly = false;
         SplashRadius = 0f;      // the beams carry the damage, not a splash sphere
         Height = 0.7f;
         _descentRate = 0f;
@@ -239,9 +263,15 @@ public sealed class Projectile
     /// The climb is carried as its own velocity rather than as the air shot's fixed
     /// descent, so a round fired at the sky genuinely goes up and a round fired at the
     /// grid from the top of a swing genuinely comes down where it was pointed.
+    ///
+    /// <paramref name="fromPlayer"/> is false for exactly one shooter: an enemy soldier's
+    /// rifle. They carry the same weapon the player's SOLDIER does and fire it the same
+    /// way — down a full 3D line from wherever in the air they happen to be — so it would
+    /// be perverse to give them a different round. It is the same round, pointed the other
+    /// way.
     /// </summary>
     public void FireDirected(Vector3 origin, Vector3 dir, float speed, bool rocket,
-        bool acid = false)
+        bool acid = false, bool fromPlayer = true, bool seeds = false, bool fromAlly = false)
     {
         Vector3 d = Vector3.Normalize(dir);
 
@@ -252,9 +282,11 @@ public sealed class Projectile
         _climb = d.Y * speed;
         _gravity = 0f;   // the rifle and the rocket fly the line they were given, straight
 
-        FromPlayer = true;
+        FromPlayer = fromPlayer;
         IsRocket = rocket;
         IsAcid = acid;
+        Seeds = seeds;
+        FromAlly = fromAlly;
         IsTracer = !rocket && !acid;
         IsGrenade = false;      // a rocket carries its own splash; it is not the heavy round
         IsCrabBomb = false;
@@ -275,6 +307,23 @@ public sealed class Projectile
     /// as a tracer does — the flag only changes what it is drawn as.
     /// </summary>
     public bool IsAcid { get; private set; }
+
+    /// <summary>
+    /// Fired by something on the player's side that is not the player: a turned carrier, or a
+    /// squad flying cover for a worn body. It travels as the player's round — that is how it
+    /// comes to bite hunters at all — but it must not bite the rest of its own side, and
+    /// nothing else in the pool carries enough information to work that out. One flag, and
+    /// the plague stops shooting itself.
+    /// </summary>
+    public bool FromAlly { get; private set; }
+
+    /// <summary>
+    /// A VIRUS round, whatever body fired it. Unlike every other flag on this class it
+    /// changes what the round <em>does</em> rather than what it looks like: what it carries
+    /// is the corruption, so a person it strikes is seeded with it as well as hurt. Set for
+    /// every round the mote and its worn bodies put in the air, and for nothing else.
+    /// </summary>
+    public bool Seeds { get; private set; }
 
     /// <summary>Vertical velocity for a directed round, in units a second. Zero for
     /// everything that travels flat.</summary>

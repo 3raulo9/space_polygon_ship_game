@@ -107,6 +107,32 @@ public static class Palette
     // different hue from every pickup and every enemy, so it reads as architecture.
     public static readonly Color StructureGlow = new(60, 142, 150, 255);
 
+    // --- Enemy soldiers ------------------------------------------------------
+    // The squads that fly. They are people, and the palette says so by refusing them a
+    // single bright thing: dark cloth, dead webbing, and the only light on the whole
+    // figure coming off the steel they are holding. Deliberately *not* the dried-blood
+    // red the hunters wear — a soldier crossing the sky at thirty metres a second must
+    // never be mistaken for a tank sitting on the grid, at any distance.
+
+    // #232C33 — cold slate, near enough to the void that a figure at range is a
+    // silhouette against the sky and nothing more. Which is the point of them.
+    public static readonly Color SoldierCloth = new(35, 44, 51, 255);
+
+    // #6B6250 — dead olive-tan webbing: the harness, the boots, the gloves. The one
+    // warmish tone on the model, and what keeps the limbs readable against the cloth.
+    public static readonly Color SoldierWebbing = new(107, 98, 80, 255);
+
+    // #8E9AA3 — the launchers and the cable spools. Machined, cold, unremarkable.
+    public static readonly Color SoldierSteel = new(142, 154, 163, 255);
+
+    // #DCE8F0 — the blades. The brightest thing they carry by a long way, and the only
+    // warning the player gets that this one is on a run rather than an arc.
+    public static readonly Color SoldierBlade = new(220, 232, 240, 255);
+
+    // #A33A34 — the squad leader's mark. A single band of a red close enough to the
+    // hunters' to read as the same faction, worn by exactly one of the four.
+    public static readonly Color SoldierMark = new(163, 58, 52, 255);
+
     // --- Floating pickups ----------------------------------------------------
     // Salvage that drifts on the grid: a battery cell that recharges shield + hyper,
     // and a stray round that restocks ammo. Both read as "good" — a cool charged

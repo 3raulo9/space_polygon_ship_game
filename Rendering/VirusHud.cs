@@ -36,10 +36,17 @@ internal static class VirusHud
     private static readonly Color Host = new(226, 96, 178, 235);  // the mote's magenta
     private static readonly Color Bad = new(220, 70, 70, 235);
 
+    /// <summary>
+    /// The decay meter, the state shout and the mote's own sight. The sight is skipped while
+    /// a stolen body's launchers are in the player's hands: that kit draws its own reticle,
+    /// and that one has to win, because it is the one that brackets an anchor. Two crosshairs
+    /// on one screen is not twice the information — it is a smudge in the middle of the
+    /// frame at the exact moment the player is trying to read a wall forty metres away.
+    /// </summary>
     public static void DrawOverlay(World.World world, VirusRig v, PlayerTank p)
     {
         DrawDecayMeter(v);
-        DrawCrosshair(v, p);
+        if (p.Rig == null) DrawCrosshair(v, p);
         DrawState(v, (float)Raylib.GetTime());
     }
 
@@ -75,6 +82,9 @@ internal static class VirusHud
         {
             Entities.VirusHost.Crab => "CRAB",
             Entities.VirusHost.Maw => "MAW",
+            // A worn person is the one host where the meter is genuinely urgent — it lasts
+            // under half what a hunter does — so it says what it is rather than "HOST".
+            Entities.VirusHost.Soldier => "BODY",
             _ => "HOST",
         };
 

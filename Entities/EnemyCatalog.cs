@@ -14,6 +14,7 @@ public enum EnemyKind
     ShipScout,
     CrabCoreBoss, // the Stalker — animated state-machine boss
     MawCore,      // the Hanging Mouth — the Stalker's top half, floating and hungry
+    Soldier,      // the squads — people on cables, and the only enemy that flies
 }
 
 /// <summary>
@@ -56,5 +57,11 @@ public static class EnemyCatalog
         // one bite of a digestion (15% of a 100-point shield), since that is what it
         // actually costs you rather than the little lasers it throws to keep you still.
         new EnemyArchetype(EnemyKind.MawCore,         "MAW-CORE",    "DEVOURER",     5f, 15f),
+
+        // The squads. Health is one soldier's, not the four's, because one is what you
+        // ever get to shoot at; the damage figure is the blades, since a pass landing is
+        // what actually kills people and the rifle is only what keeps them honest between
+        // passes (that one is 7).
+        new EnemyArchetype(EnemyKind.Soldier,         "VERTICAL",    "SQUAD",        2f, 20f),
     };
 }

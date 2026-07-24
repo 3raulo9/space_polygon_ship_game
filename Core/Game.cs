@@ -101,7 +101,11 @@ public sealed class Game : IDisposable
             // A fish is exempt for the same reason a soldier is, and more so: it opens
             // thirty metres up looking out across the city, and swinging it round to face
             // a hunter crawling about on the grid throws away the entire picture.
-            Vector2? subject = _world!.Player.Soldier != null || _world.Player.Fish != null ? null
+            // A squad capture has already aimed itself — the world turned the craft onto
+            // the tower it hung them from, pitch and all, and pointing at anything else
+            // throws that away.
+            Vector2? subject = _world!.Squads.Count > 0
+                || _world.Player.Soldier != null || _world.Player.Fish != null ? null
                 : _world.Maw?.Position
                 ?? (Vector2?)_world.Boss?.Position
                 ?? (_world.Enemies.Count > 0 ? _world.Enemies[0].Position : null);
@@ -235,6 +239,10 @@ public sealed class Game : IDisposable
                 // 'J' does the same for the hanging mouth.
                 if (InputMap.DebugSpawnMawPressed)
                     _world!.SpawnMawAhead();
+
+                // 'H' raises a soldier squad on a tower out in the fog.
+                if (InputMap.DebugSpawnSquadPressed)
+                    _world!.SpawnSoldierSquad();
             }
 
             // Accumulate real elapsed time and step the sim in fixed increments,
@@ -740,6 +748,40 @@ public sealed class Game : IDisposable
                 }
             }
 
+            // The squads. "soldier" raises one on a tower, seeds the nearest of them and
+            // stands the mote on the body so the possession runs through the same contact
+            // test play uses — the only way to photograph a worn person, since catching one
+            // otherwise takes a human. "plague" wears a hunter instead and spends it in the
+            // middle of the squad, so the outbreak can be caught mid-spray.
+            if (virusBeat is "soldier" or "plague")
+            {
+                if (_frame == 1)
+                {
+                    if (virusBeat == "plague")
+                        _world.Enemies.Add(new EnemyTank(_world.Player.Position, elite: false));
+                    _world.SpawnSoldierSquad(_world.Player.Position + _world.Player.Forward * 40f);
+                }
+
+                if (_frame == 3 && _world.Soldiers.Count > 0)
+                {
+                    // Bring them in close: a capture wants the fight at knife range, not the
+                    // forty metres a squad would honestly take a few seconds to cross.
+                    for (int i = 0; i < _world.Soldiers.Count; i++)
+                        _world.Soldiers[i].Position = Torus.Wrap(_world.Player.Position
+                            + new Vector2(4f + i * 3f, 2f));
+                }
+
+                if (virusBeat == "soldier" && _frame == 4 && _world.Soldiers.Count > 0)
+                {
+                    var mark = _world.Soldiers[0];
+                    mark.Tag();
+                    _world.Player.Position = mark.Position;
+                    _world.Player.Height = mark.Height;
+                }
+
+                if (virusBeat == "plague" && _frame == 6) _world.OverloadVirusForTest();
+            }
+
             if (virusBeat == "maw")
             {
                 if (_frame == 1) _world.SpawnMawAhead();
@@ -749,6 +791,17 @@ public sealed class Game : IDisposable
                     _world.Player.Height = MawRig.CrystalWorldY;
                 }
             }
+        }
+
+        // Squad capture: keep the view on one of them for the whole run. They are the only
+        // enemy in the game that is never in the same place twice, so a fixed camera
+        // photographs the city they have already left.
+        // =track follows one of them through their arcs; =pose holds one crossing the frame
+        // at knife range so the figure itself can be looked at.
+        switch (Environment.GetEnvironmentVariable("VOIDTANKS_SQUAD_NEAR"))
+        {
+            case "track": _world!.FaceTheSquad(); break;
+            case "pose": _world!.PoseSoldierForCapture(); break;
         }
 
         // Blast cinematic capture: stage a CRAB CORE detonation dead ahead on the first

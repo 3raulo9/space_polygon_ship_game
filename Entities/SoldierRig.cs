@@ -59,6 +59,18 @@ public sealed class GrappleHook
     /// is coming down stops being something to hang from, mid-swing or not.</summary>
     public Structure? Holding;
 
+    /// <summary>
+    /// What shape that building was in when the hook went into it — the fracture model's
+    /// version at the moment of the bite, or zero for a tower nobody has cut yet.
+    ///
+    /// Towers no longer topple as one piece; they come apart where they are hit, so a hook
+    /// can be left holding a chunk of wall that has already fallen off while the stump goes
+    /// on standing perfectly happily underneath it. Comparing this against the live version
+    /// is how a holder notices, and it costs one int and one comparison a tick against the
+    /// alternative of testing a point against a few dozen cells.
+    /// </summary>
+    public int HoldingVersion;
+
     /// <summary>The live constraint length. Reeling shortens it; paying out lets it go.</summary>
     public float Length;
 

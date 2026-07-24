@@ -131,6 +131,15 @@ public static class CrabRig
         => (leg.Mount.Z - Foot.X * MathF.Sin(CentreGripYaw(leg))) * Scale;
 
     /// <summary>
+    /// The same reach on the cut-down chassis the player drives. The rig is one shape at
+    /// two sizes, so the SPIDER's own grab (see <see cref="Entities.SpiderClaw"/>) is
+    /// solved from the same geometry the boss's seizure is rather than from a number
+    /// somebody liked the look of — swap the scales and both hands move together.
+    /// </summary>
+    public static float PlayerCentreGripReach(in Leg leg)
+        => CentreGripReach(leg) / Scale * PlayerScale;
+
+    /// <summary>
     /// How far the <em>holding</em> limb is swung off that centre line, in radians. The
     /// striking hand converges dead ahead — it is supposed to fill the view — but the
     /// holding one must not, and this is what keeps it out of the way.

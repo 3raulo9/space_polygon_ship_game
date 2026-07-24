@@ -109,7 +109,20 @@ public sealed class PlayerTank
     /// </summary>
     private float _speedScale = 1f;
 
-    public float TopSpeed => MaxSpeed * _speedScale;
+    public float TopSpeed => MaxSpeed * DriveScale;
+
+    /// <summary>
+    /// Everything the drive is multiplied by: the hangar's speed track, and whatever the
+    /// craft is currently carrying. A SPIDER with a hunter in its claws has two fewer legs
+    /// on the grid and several tons out past its own centre of gravity, and it should feel
+    /// like it — that weight is most of what stops the grab from being free, and it is why
+    /// hauling a body somewhere is a decision rather than a habit.
+    ///
+    /// Folded into acceleration as well as into the ceiling, for the same reason the speed
+    /// track is: a craft that eventually gets up to a slow top speed is not a heavy craft,
+    /// it is a craft with a long wind-up.
+    /// </summary>
+    private float DriveScale => _speedScale * (Claw is { Holding: true } ? SpiderClaw.CarryScale : 1f);
 
     /// <summary>How much slower the craft steps sideways than it drives forward. A tank
     /// on its tracks is happiest going where it points, so a strafe is a shove off to the
@@ -122,7 +135,20 @@ public sealed class PlayerTank
     private const float FallGravity = 13f;  // gentler pull coming down → floats + hangs longer
     private const float JumpForwardDrift = 4f; // small forward glide while airborne — carries you a bit further to the front
 
-    public bool IsAirborne => Height > 0.001f;
+    /// <summary>
+    /// The floor under the craft this tick. Zero for the whole of this game's life, and
+    /// non-zero for one reason: the SPIDER can now get on top of the city (see the
+    /// pounce, below, and the world's roof pass). A craft standing on a roof is
+    /// <em>grounded</em> — it can jump again, it is not spared a seizure, its shots leave
+    /// level — it simply does so forty metres up.
+    ///
+    /// Written by the world each tick after the craft has moved, because only the world
+    /// knows where the buildings are. Everything else here reads it rather than assuming
+    /// the grid is at nought.
+    /// </summary>
+    public float GroundHeight;
+
+    public bool IsAirborne => Height > GroundHeight + 0.001f;
 
     /// <summary>
     /// How high the peak of a leap carries the craft, in world units. Solved from the
@@ -155,6 +181,14 @@ public sealed class PlayerTank
     public SpiderWeapon? Spider { get; private set; }
 
     /// <summary>
+    /// The SPIDER's hands, or null on every other chassis. Lives beside the emitter and
+    /// for the same reason — it is part of the craft, not a thing the world does to it —
+    /// and the two are deliberately exclusive at the trigger: one pair of front limbs,
+    /// and they are either holding a machine or bracing a lance.
+    /// </summary>
+    public SpiderClaw? Claw { get; private set; }
+
+    /// <summary>
     /// The SOLDIER's twin cable launcher, or null on every other chassis. Unlike the
     /// spider's emitter this is not a weapon bolted onto the standard physics — it
     /// <em>replaces</em> them. While it exists, <see cref="Update"/> hands the whole
@@ -180,6 +214,20 @@ public sealed class PlayerTank
     /// currently owns the transform.
     /// </summary>
     public VirusRig? Virus { get; private set; }
+
+    /// <summary>
+    /// The cable rig currently driving this craft, whoever it belongs to: the SOLDIER's own,
+    /// or the one a VIRUS is wearing off a stolen body.
+    ///
+    /// Everything that cares about cables reads this rather than <see cref="Soldier"/> — the
+    /// renderer that draws the lines and the arms, the audio beds for the reel and the wind,
+    /// the collision pass that turns a fast wall into a crash. There is exactly one thing in
+    /// this game that swings on two hooks, and it should look and sound the same whichever
+    /// side of it the player got in through. What it is emphatically <em>not</em> is a test
+    /// for the chassis: a worn soldier is still a VIRUS, and the trigger routing goes on
+    /// asking <see cref="Virus"/> first.
+    /// </summary>
+    public SoldierRig? Rig => Soldier ?? Virus?.WornRig;
 
     /// <summary>
     /// How high the eye sits above the craft's own origin. A tank's camera rides up on
@@ -227,11 +275,26 @@ public sealed class PlayerTank
     /// </summary>
     public bool Planted { get; private set; }
 
-    /// <summary>Broadband view shake, 0..1 — a lurch kicking off, a ram connecting. Read by
-    /// the Renderer exactly as the FISH's and SOLDIER's Shake are, and rung down here on the
-    /// craft's own clock so it settles whatever the camera is otherwise doing.</summary>
+    /// <summary>
+    /// Broadband view shake, 0..1 — a lurch kicking off, a ram connecting, a blade going
+    /// through the craft. Read by the Renderer exactly as the FISH's and SOLDIER's Shake
+    /// are, and rung down on the craft's own clock so it settles whatever the camera is
+    /// otherwise doing.
+    ///
+    /// The ring-down happens at the very top of <see cref="Update"/> rather than in the
+    /// chassis's own step, and that is not a tidiness choice. This used to be raised only by
+    /// the tank and rung down only on the tank's path, which was true right up until
+    /// something started jolting it on the other chassis — at which point it pinned at
+    /// whatever it was set to and shook the camera for the rest of the run, because nothing
+    /// on those paths ever came back to clear it. Screen feedback has to decay for whoever
+    /// is driving, including nobody: it settles through a cinematic too.
+    /// </summary>
     public float Shake { get; private set; }
     public void Jolt(float amount) => Shake = MathF.Min(1f, MathF.Max(Shake, amount));
+
+    /// <summary>How fast the hull's rattle settles, per second. A quarter-second from a full
+    /// jolt to nothing.</summary>
+    private const float ShakeDecay = 4f;
 
     // The lurch: a violent track-boost dodge, paid for out of the same Hyper the jump used
     // to cost. Carried as its own decaying world velocity rather than folded into _speed, so
@@ -281,6 +344,25 @@ public sealed class PlayerTank
     private const float FrontArmor = 0.55f;
     private const float FrontArmorPlanted = 0.35f;
     private const float RearArmor = 1.5f;
+
+    // The SPIDER's plating, which is the tank's read backwards — and it has to be, because
+    // the class-select screen has been promising it since the day the chassis shipped: "THE
+    // RED CORE IN THE MIDDLE IS THE WEAK POINT - AND IT IS YOURS." It was decoration. A
+    // salvaged Crab-Core carries its core exposed on the front of the body, which is the
+    // one thing every player already knows about this enemy, because killing the boss is
+    // done by shooting exactly that. Turning the same rule on the player is the whole
+    // design of the class: the tank's discipline is to keep its nose to the threat, and
+    // this one's is the opposite, in a craft whose mouse aims the whole body. You cannot
+    // shoot a thing without showing it your core.
+    //
+    // The counterplay is the two things the chassis has that nothing else does. Bracing a
+    // lance turns the carapace and plants the legs, hardening everything that isn't the
+    // core; and the claw can pick a hunter up and hold it in front of the core, which is
+    // the only cover this craft will ever get and is why the grab exists at all.
+    private const float SpiderCoreArmor = 1.35f;       // straight into the crystal
+    private const float SpiderFlankArmor = 0.8f;       // legs and shell
+    private const float SpiderCarapaceArmor = 0.6f;    // the shell's thick back
+    private const float SpiderBracedArmor = 0.45f;     // braced, off the core: dug in behind it
 
     // Hyper Engine: the reserve for tactical moves. Slowly refills on its own,
     // so jumping and hyperspacing are rationed, not free. Jump takes a quarter of
@@ -341,7 +423,11 @@ public sealed class PlayerTank
         _speedScale = loadout.SpeedScale;
         // Open on four fifths of the magazine, as the craft always has.
         Ammo = (int)MathF.Round(MaxAmmo * 0.8f);
-        if (Class == PlayerClass.Spider) Spider = new SpiderWeapon();
+        if (Class == PlayerClass.Spider)
+        {
+            Spider = new SpiderWeapon();
+            Claw = new SpiderClaw();
+        }
         if (Class == PlayerClass.Soldier)
         {
             Soldier = new SoldierRig();
@@ -410,6 +496,15 @@ public sealed class PlayerTank
         // to drive.
         Spider?.Update(dt);
 
+        // And the same again for the hull's own rattle: it is a thing happening to the
+        // camera, so it rings down for every chassis and through every set piece rather
+        // than only on the path that happens to raise it most often. See Shake.
+        if (Shake > 0f)
+        {
+            Shake -= dt * ShakeDecay;
+            if (Shake < 0f) Shake = 0f;
+        }
+
         // A cinematic has the wheel: it writes the transform itself this tick.
         if (Captured) return;
 
@@ -442,6 +537,11 @@ public sealed class PlayerTank
         if (Virus is { } mote)
         {
             mote.Step(dt, this);
+            // One exception to that: a virus wearing a person is flying on their gas bottle,
+            // and a bottle that never refilled would leave the host useless within a few
+            // seconds of taking it. Same trickle the chassis that owns a rig lives on.
+            if (mote.WornRig != null && Hyper < MaxHyper)
+                Hyper = MathF.Min(MaxHyper, Hyper + SoldierGasRegen * dt);
             return;
         }
 
@@ -609,24 +709,57 @@ public sealed class PlayerTank
     }
 
     /// <summary>
-    /// The tank's plating multiplier for a shot travelling along <paramref name="shotVelocity"/>.
-    /// A sloped glacis shrugs a frontal hit down, the flanks take it in full, and the thin
-    /// rear plate takes it worse; planting turns the front harder still. Non-tank chassis have
-    /// no plating and always take the whole blow (returns 1). This is why facing is the tank's
-    /// discipline: a hull that keeps its nose to the threat is a different amount of alive from
-    /// one caught from behind.
+    /// The craft's plating multiplier for a shot travelling along <paramref name="shotVelocity"/>,
+    /// on the two chassis that have plating at all.
+    ///
+    /// The TANK's is the honest one: a sloped glacis shrugs a frontal hit down, the flanks take
+    /// it in full, and the thin rear plate takes it worse; planting turns the front harder
+    /// still. This is why facing is the tank's discipline — a hull that keeps its nose to the
+    /// threat is a different amount of alive from one caught from behind.
+    ///
+    /// The SPIDER's is that rule inverted, because its core is on the front of it and always
+    /// has been in the fiction. A round into the crystal bills a third again; the shell and the
+    /// legs turn one aside; and the thick back of the carapace turns it harder than anything
+    /// else on the craft. Bracing a lance plants the legs and puts the shell up, which improves
+    /// everything except the one face the emitter has to be pointed out of — you cannot brace
+    /// your core, you are firing out of it.
+    ///
+    /// The three bodies have no plating and always take the whole blow (returns 1).
     /// </summary>
     public float ArmorMultiplierFromShot(Vector2 shotVelocity)
     {
-        if (Class != PlayerClass.Tank) return 1f;
+        if (!IsMachine) return 1f;
         if (shotVelocity.LengthSquared() < 1e-6f) return 1f;
         // The round travels toward the hull, so the plate it meets faces back up the incoming
         // line — the source direction is the negated velocity.
         Vector2 srcDir = Vector2.Normalize(-shotVelocity);
         float align = Vector2.Dot(srcDir, Forward);   // +1 dead ahead, -1 dead behind
+
+        if (Class == PlayerClass.Spider)
+        {
+            if (align > 0.5f) return SpiderCoreArmor;
+            bool braced = Spider is { Braced: true };
+            if (align < -0.5f) return braced ? SpiderBracedArmor : SpiderCarapaceArmor;
+            return braced ? SpiderBracedArmor : SpiderFlankArmor;
+        }
+
+        if (Class != PlayerClass.Tank) return 1f;
         if (align > 0.5f) return Planted ? FrontArmorPlanted : FrontArmor;
         if (align < -0.5f) return RearArmor;
         return 1f;
+    }
+
+    /// <summary>
+    /// True when a round travelling along <paramref name="shotVelocity"/> would arrive
+    /// through the SPIDER's exposed core — the one arc that both bills extra and, while
+    /// the lance is winding, breaks the charge. One place, so the plate that takes the
+    /// hit and the plate that loses the wind are the same plate.
+    /// </summary>
+    public bool StruckInTheCore(Vector2 shotVelocity)
+    {
+        if (Class != PlayerClass.Spider) return false;
+        if (shotVelocity.LengthSquared() < 1e-6f) return false;
+        return Vector2.Dot(Vector2.Normalize(-shotVelocity), Forward) > 0.5f;
     }
 
     // --- The SOLDIER's two triggers -------------------------------------------
@@ -800,9 +933,9 @@ public sealed class PlayerTank
         if (!locked && InputMap.Back) fwd -= 1f;
 
         if (fwd > 0f)
-            _speed += Accel * _speedScale * dt;
+            _speed += Accel * DriveScale * dt;
         else if (fwd < 0f)
-            _speed -= Accel * _speedScale * ReverseFactor * dt;
+            _speed -= Accel * DriveScale * ReverseFactor * dt;
         else
             _speed = MoveToward(_speed, 0f, Drag * dt);
 
@@ -818,7 +951,7 @@ public sealed class PlayerTank
         if (!locked && InputMap.TurnLeft) lat -= 1f;
 
         if (lat != 0f)
-            _strafe += lat * Accel * _speedScale * dt;
+            _strafe += lat * Accel * DriveScale * dt;
         else
             _strafe = MoveToward(_strafe, 0f, Drag * dt);
 
@@ -861,28 +994,77 @@ public sealed class PlayerTank
             // the craft a small bit further to the front than a dead-vertical hop.
             Position += Forward * JumpForwardDrift * dt;
 
-            if (Height <= 0f)
+            // Down onto whatever is under the craft — the grid, or a roof the world put
+            // there this tick.
+            if (Height <= GroundHeight)
             {
-                Height = 0f;
+                Height = GroundHeight;
                 _verticalVel = 0f;
             }
         }
     }
 
+    // --- The SPIDER's legs ---------------------------------------------------------
+    // The one thing this chassis had that no other one did was six legs, and until now
+    // they were decoration: it hopped on the same Hyper the fish and the mote hop on and
+    // went nowhere a tank couldn't drive. The city is forty metres tall and full of flat
+    // roofs, and the class that ought to be able to get up there was the class that
+    // couldn't. This is the kick that fixes it.
+
+    /// <summary>The kick off a wall. Harder than the standing hop, because it is six legs
+    /// against a solid surface rather than a jump out of a crouch — chained, it is what
+    /// actually gets the craft up the face of a tower.</summary>
+    private const float PounceVel = 23f;
+
+    /// <summary>How much of the kick goes sideways, away from the wall. Small on purpose:
+    /// a kick that shoved the craft off the building would end the climb on the first
+    /// rung. Just enough that the legs are visibly pushing against something.</summary>
+    public const float PounceOff = 7f;
+
+    /// <summary>What one costs. Cheaper than the hop, because a climb is several of them
+    /// and the reserve refills slowly — but not free, so a tower is a real expenditure
+    /// and the top of one is somewhere you had to decide to go.</summary>
+    private const float PounceHyperCost = 16f;
+
+    /// <summary>How far off a wall the legs can still reach it.</summary>
+    public const float PounceReach = 3.2f;
+
     /// <summary>
-    /// Runs the tank's siege clocks: the discharger cooldown, the shake ring-down, and the
-    /// lurch — which bleeds its surge out over its short life so the dash eases rather than
-    /// stopping dead. All harmless no-ops on a craft that never plants, lurches or rams, so
-    /// it costs nothing to run for the SPIDER that shares this integrator.
+    /// Kicks off a wall: up hard, and a shove away from <paramref name="outward"/> (the
+    /// unit vector from the wall toward the craft). The world finds the wall — it is the
+    /// only thing that knows where the buildings are — and calls this when the player asks
+    /// for it with something in reach.
+    ///
+    /// Chainable by design: it does not care whether the craft is already airborne, which
+    /// is exactly what makes a tower climbable rather than a single stunt. What rations it
+    /// is the reserve.
+    /// </summary>
+    public bool TryPounce(Vector2 outward)
+    {
+        if (Class != PlayerClass.Spider || Rooted || Captured) return false;
+        if (Hyper < PounceHyperCost) return false;
+
+        _verticalVel = PounceVel;
+        _lurchVel = outward * PounceOff;
+        _lurchTime = 0.25f;
+        Hyper -= PounceHyperCost;
+        Jolt(0.25f);
+        return true;
+    }
+
+    /// <summary>
+    /// Runs the tank's siege clocks: the discharger cooldown and the lurch — which bleeds
+    /// its surge out over its short life so the dash eases rather than stopping dead. All
+    /// harmless no-ops on a craft that never plants, lurches or rams, so it costs nothing to
+    /// run for the SPIDER that shares this integrator.
+    ///
+    /// The shake used to ring down here too, which was a bug waiting for its first caller
+    /// from another chassis. It is at the top of <see cref="Update"/> now, where everything
+    /// that is about the camera rather than about the craft belongs.
     /// </summary>
     private void UpdateSiege(float dt)
     {
         if (_smokeCooldown > 0f) _smokeCooldown -= dt;
-        if (Shake > 0f)
-        {
-            Shake -= dt * 4f;
-            if (Shake < 0f) Shake = 0f;
-        }
 
         if (_lurchTime > 0f)
         {

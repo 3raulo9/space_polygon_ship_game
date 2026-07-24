@@ -123,6 +123,51 @@ public sealed class PolyMesh
     }
 
     /// <summary>
+    /// Draws the mesh as an <em>outline</em>: the solid filled in the void's own near-black
+    /// so it occludes whatever is behind it, and every edge stroked in
+    /// <paramref name="edge"/> over the top.
+    ///
+    /// This is how the world looks to a thing with no eyes. The exposed VIRUS mote does not
+    /// see matter — it sees movement, as a shape with a bright wire around it and nothing
+    /// inside — and at 320×240 a black body with white creases reads as a solid object
+    /// perceived by something that isn't using light far better than any shading trick
+    /// would. The fill is what makes it read as a <em>body</em> rather than as a cloud of
+    /// lines: without it you see every edge of the far side through the near side and the
+    /// shape collapses into noise.
+    ///
+    /// No fog fade, and deliberately: what perceives this is not looking through air.
+    /// </summary>
+    public void DrawWire(Vector2 position, float heading, float height, Vector3 cameraPos,
+        float scale, Color edge, float pitch = 0f, float roll = 0f)
+    {
+        var cameraXZ = new Vector2(cameraPos.X, cameraPos.Z);
+        if (Vector2.Distance(position, cameraXZ) > UnseenRange) return;
+
+        float cos = MathF.Cos(heading);
+        float sin = MathF.Sin(heading);
+
+        foreach (var f in _faces)
+        {
+            Vector3 a = Transform(f.A, cos, sin, position, height, scale, pitch, roll);
+            Vector3 b = Transform(f.B, cos, sin, position, height, scale, pitch, roll);
+            Vector3 c = Transform(f.C, cos, sin, position, height, scale, pitch, roll);
+
+            Raylib.DrawTriangle3D(a, b, c, Hollow);
+            Raylib.DrawLine3D(a, b, edge);
+            Raylib.DrawLine3D(b, c, edge);
+            Raylib.DrawLine3D(c, a, edge);
+        }
+    }
+
+    /// <summary>How far a moving thing can be perceived without eyes. Shorter than the fog,
+    /// which is the point: unhosted, the world shrinks to whatever is close enough to feel.</summary>
+    public const float UnseenRange = 95f;
+
+    /// <summary>What fills an outlined solid. Not quite the void, so one shape overlapping
+    /// another still separates from it.</summary>
+    private static readonly Color Hollow = new(3, 4, 7, 255);
+
+    /// <summary>
     /// Scale about the model origin, tip it on its own axes, rotate about Y
     /// (heading), then translate to world position.
     ///

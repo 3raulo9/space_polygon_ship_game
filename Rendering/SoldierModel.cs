@@ -67,6 +67,7 @@ public sealed class SoldierModel
     private readonly PolyMesh _harness = BuildHarness();
     private readonly PolyMesh _launcher = BuildLauncher();
     private readonly PolyMesh _hook = BuildHook();
+    private readonly PolyMesh _blade = BuildBlade();
 
     /// <summary>
     /// Draws the figure, posed for <paramref name="elapsed"/>. The turntable's own
@@ -76,16 +77,41 @@ public sealed class SoldierModel
     /// check the hook seated in it.
     /// </summary>
     public void Draw(Loadout loadout, Vector2 pos, float heading, Vector3 cameraPos, float elapsed)
+        => DrawPosed(pos, 0f, heading, cameraPos,
+            loadout.PartColor(PlayerClass.Soldier, 0),
+            loadout.PartColor(PlayerClass.Soldier, 1),
+            loadout.PartColor(PlayerClass.Soldier, 2),
+            loadout.PartColor(PlayerClass.Soldier, 3),
+            Pose.Idle(elapsed), blades: false, Color.White);
+
+    /// <summary>
+    /// Draws one of the enemy squads' soldiers, out in the world at <paramref name="height"/>
+    /// metres off the grid and posed for whatever they are currently doing.
+    ///
+    /// The same skeleton the hangar turntable shows, which is the whole reason it is here
+    /// rather than in a renderer of its own: the thing hunting the player is built out of
+    /// exactly the parts the player's own chassis is built out of, and it should be — they
+    /// are wearing the same kit and flying it the same way. Only the pose and the colours
+    /// differ, and the pose is where all the character is.
+    /// </summary>
+    public void DrawFlier(Vector2 pos, float height, float heading, Vector3 cameraPos,
+        Color cloth, Color webbing, Color steel, Color cable, Color blade, in FlightPose flight,
+        float scale = 1f)
+        => DrawPosed(pos, height, heading, cameraPos, cloth, webbing, steel, cable,
+            Pose.Flight(flight), flight.Blades, blade, scale);
+
+    private void DrawPosed(Vector2 pos, float height, float heading, Vector3 cameraPos,
+        Color cloth, Color webbing, Color steel, Color cable, in Pose pose,
+        bool blades, Color bladeTint, float scale = 1f)
     {
-        Color cloth = loadout.PartColor(PlayerClass.Soldier, 0);
-        Color webbing = loadout.PartColor(PlayerClass.Soldier, 1);
-        Color steel = loadout.PartColor(PlayerClass.Soldier, 2);
-        Color cable = loadout.PartColor(PlayerClass.Soldier, 3);
-
-        var pose = Pose.Idle(elapsed);
-
         // The torso and everything hanging off it ride the breath and the weight shift.
+        // Everything below is laid out in the model's own metres and blown up by
+        // <paramref name="scale"/> at draw time — which is why the world height is *not*
+        // folded into the root the way the sway and the breath are: those are part of the
+        // body and scale with it, and being thirty metres up a tower is not.
         var root = new Vector3(pose.Sway, pose.Rise, 0f);
+        _scale = scale;
+        _baseY = height;
 
         DrawPart(_torso, pos, heading, cameraPos, root + new Vector3(0f, HipY, 0f),
             cloth, pitch: pose.Lean, roll: pose.Tilt);
@@ -120,8 +146,15 @@ public sealed class SoldierModel
             // one flat colour from the neck down, and at this size a silhouette needs
             // something breaking it up at the ends of the limbs or the arms disappear
             // into the torso entirely.
-            DrawPart(_glove, pos, heading, cameraPos,
-                elbow + Swing(SegLen, upper + bend, splay), webbing, upper + bend, splay);
+            Vector3 wrist = elbow + Swing(SegLen, upper + bend, splay);
+            DrawPart(_glove, pos, heading, cameraPos, wrist, webbing, upper + bend, splay);
+
+            // And the blade, when there is one drawn. It runs out of the fist along the
+            // forearm's own line, which is what makes an enemy on a committed run readable
+            // at any range: the one bright thing in the frame, held out ahead of a body
+            // that is already pointed at you.
+            if (blades)
+                DrawPart(_blade, pos, heading, cameraPos, wrist, bladeTint, upper + bend, splay);
         }
 
         // --- Legs: hip → knee → boot. ---
@@ -182,10 +215,17 @@ public sealed class SoldierModel
     /// Draws one part at a pivot given in the <em>model's</em> frame, turning that pivot
     /// into a world placement. The mesh's own draw handles the rest, so a part is placed
     /// and posed in one call and nothing here has to know about matrices.
+    ///
+    /// The two things that are the same for every part of one figure — how big it is and
+    /// how far off the grid it stands — are held on the model rather than threaded through
+    /// a dozen call sites. The skeleton above is written in the figure's own metres and
+    /// knows nothing about either.
     /// </summary>
-    private static void DrawPart(PolyMesh mesh, Vector2 pos, float heading, Vector3 cameraPos,
+    private void DrawPart(PolyMesh mesh, Vector2 pos, float heading, Vector3 cameraPos,
         Vector3 pivot, Color tint, float pitch = 0f, float roll = 0f)
     {
+        pivot *= _scale;
+
         float c = MathF.Cos(heading), s = MathF.Sin(heading);
         // The same X/Z rotation PolyMesh.Transform applies, so a pivot offset turns with
         // the figure instead of staying pinned to the world's axes.
@@ -193,8 +233,62 @@ public sealed class SoldierModel
             pos.X + pivot.X * c + pivot.Z * s,
             pos.Y - pivot.X * s + pivot.Z * c);
 
-        mesh.Draw(at, heading, pivot.Y, cameraPos, 1f, tint, pitch, roll);
+        if (_wire)
+            mesh.DrawWire(at, heading, _baseY + pivot.Y, cameraPos, _scale, _edge, pitch, roll);
+        else
+            mesh.Draw(at, heading, _baseY + pivot.Y, cameraPos, _scale, tint, pitch, roll);
     }
+
+    /// <summary>
+    /// Draws the same figure as an outline — the shape a VIRUS with no body of its own
+    /// perceives when a person moves near it. Every joint angle, every limb and the whole
+    /// pose come through unchanged; only the surface is gone. A person is by some distance
+    /// the most legible thing in that mode, because a wireframe of something articulated
+    /// still reads as a person moving, and a wireframe of a tank reads as a box.
+    /// </summary>
+    public void DrawGhost(Vector2 pos, float height, float heading, Vector3 cameraPos,
+        Color edge, in FlightPose flight, float scale = 1f)
+    {
+        _wire = true;
+        _edge = edge;
+        DrawPosed(pos, height, heading, cameraPos, edge, edge, edge, edge,
+            Pose.Flight(flight), flight.Blades, edge, scale);
+        _wire = false;
+    }
+
+    /// <summary>Whether this draw is an outline, and what colour its edges are. Set for the
+    /// duration of one figure, like the scale and the base height above it.</summary>
+    private bool _wire;
+    private Color _edge = Color.White;
+
+    /// <summary>How big this figure is drawn, and how far off the grid its boots are. Set
+    /// once at the top of a draw and read by every part of it.</summary>
+    private float _scale = 1f;
+    private float _baseY;
+
+    // --- The flying pose --------------------------------------------------------
+
+    /// <summary>
+    /// Everything about a soldier out in the world that changes how they are drawn. Kept as
+    /// a plain struct handed in by the renderer rather than as a reference to the entity, so
+    /// this file goes on knowing nothing at all about the simulation.
+    /// </summary>
+    public readonly record struct FlightPose(
+        /// <summary>Metres a second, planar. Drives how hard the body streamlines.</summary>
+        float Speed,
+        /// <summary>The lean into the arc, in radians — the entity's own bank.</summary>
+        float Bank,
+        /// <summary>Both boots on the grid: running, not flying.</summary>
+        bool Grounded,
+        /// <summary>Clung to a wall on a short cable, weight on the feet.</summary>
+        bool Perched,
+        /// <summary>Blades drawn — a committed run.</summary>
+        bool Blades,
+        /// <summary>Seconds of stagger left, if they have just met something hard.</summary>
+        float Stagger,
+        /// <summary>Wall-clock seconds, for the cycles that are not driven by anything
+        /// else — the breath, the run's stride.</summary>
+        float Time);
 
     // --- The idle pose ----------------------------------------------------------
 
@@ -259,6 +353,93 @@ public sealed class SoldierModel
                 // And the checked launcher rides up with the hand holding it.
                 LeftRig: 0f,
                 RightRig: check * 0.30f);
+        }
+
+        /// <summary>
+        /// The other performance: a person in the air on two cables. Three silhouettes,
+        /// and between them they carry the whole of what an enemy soldier is doing, read
+        /// at a glance from a long way off — which matters more here than anywhere else in
+        /// this game, because these are the only enemies the player has to <em>track</em>.
+        ///
+        /// <list type="bullet">
+        /// <item><b>Flying.</b> Folded almost horizontal: the chest pitched down the line of
+        /// travel, the legs trailing and tucked, both arms up and forward on the launchers.
+        /// The faster they go the harder they fold, so speed is legible in the shape itself
+        /// rather than only in how quickly it crosses the frame.</item>
+        /// <item><b>Perched.</b> Crouched against the wall, knees up under them, one hand
+        /// on the line — coiled, and unmistakably about to leave.</item>
+        /// <item><b>Running.</b> Upright, stride cycling, arms pumping. The state they are
+        /// in when they are catchable, and it looks like it.</item>
+        /// </list>
+        /// </summary>
+        public static Pose Flight(in FlightPose f)
+        {
+            float breath = MathF.Sin(f.Time * 2.1f);
+
+            if (f.Grounded)
+            {
+                // A run: one stride cycle, legs opposed, arms opposed to the legs.
+                float stride = f.Time * 11f;
+                float swing = MathF.Sin(stride);
+                float lift = MathF.Max(0f, MathF.Cos(stride));
+                float fall = MathF.Max(0f, -MathF.Cos(stride));
+                // A stagger folds them over their own knees instead.
+                float hurt = Math.Clamp(f.Stagger, 0f, 1f);
+
+                return new Pose(
+                    Rise: -0.05f * lift - 0.10f * hurt, Sway: 0f,
+                    Lean: 0.22f + 0.45f * hurt, Tilt: 0f,
+                    HeadYaw: 0f, HeadNod: -0.12f + 0.5f * hurt,
+                    LeftArm: -0.55f * swing, RightArm: 0.55f * swing,
+                    LeftElbow: 0.75f, RightElbow: 0.75f,
+                    LeftSplay: -0.12f, RightSplay: -0.12f,
+                    LeftThigh: 0.7f * swing + 0.6f * hurt, RightThigh: -0.7f * swing + 0.2f * hurt,
+                    LeftKnee: -0.5f * lift - 0.7f * hurt, RightKnee: -0.5f * fall - 0.4f * hurt,
+                    LeftRig: 0f, RightRig: 0f);
+            }
+
+            if (f.Perched)
+            {
+                // Coiled on the wall. Knees drawn up, weight forward on the line, the head
+                // up and watching — a figure waiting rather than a figure resting.
+                return new Pose(
+                    Rise: breath * 0.010f, Sway: 0f,
+                    Lean: 0.30f, Tilt: 0f,
+                    HeadYaw: MathF.Sin(f.Time * 0.6f) * 0.18f, HeadNod: -0.22f,
+                    LeftArm: -0.75f, RightArm: -1.15f,
+                    LeftElbow: 0.95f, RightElbow: 1.15f,
+                    LeftSplay: -0.22f, RightSplay: -0.20f,
+                    LeftThigh: -0.95f, RightThigh: -0.80f,
+                    LeftKnee: -1.25f, RightKnee: -1.05f,
+                    LeftRig: 0f, RightRig: 0.06f);
+            }
+
+            // In the air. How hard they are folded is how fast they are going.
+            float fold = Math.Clamp(f.Speed / 26f, 0.25f, 1f);
+            // The blades change the arms and nothing else: swept out and back off the
+            // shoulders, so the run reads as a shape with two bright edges on it.
+            float arm = f.Blades ? 0.85f : -1.05f * fold;
+            float elbow = f.Blades ? 0.15f : 0.45f;
+            float splay = f.Blades ? -0.55f : -0.25f - 0.15f * fold;
+
+            return new Pose(
+                Rise: breath * 0.008f, Sway: 0f,
+                // Pitched down the line of travel. This one number is most of the
+                // silhouette: at full fold the body is nearly horizontal, which is the
+                // shape everything about this enemy is built to make.
+                Lean: 0.55f + 0.55f * fold,
+                Tilt: -f.Bank,
+                HeadYaw: 0f,
+                // The head stays up while the body goes flat — they are looking where they
+                // are going, and a person who has tucked their chin has stopped being one.
+                HeadNod: -0.45f - 0.25f * fold,
+                LeftArm: arm + breath * 0.02f, RightArm: arm - breath * 0.02f,
+                LeftElbow: elbow, RightElbow: elbow,
+                LeftSplay: splay, RightSplay: splay,
+                // Trailing, and tucked tighter the faster they go.
+                LeftThigh: 0.55f + 0.55f * fold, RightThigh: 0.45f + 0.60f * fold,
+                LeftKnee: 0.35f + 0.55f * fold, RightKnee: 0.45f + 0.45f * fold,
+                LeftRig: 0f, RightRig: 0f);
         }
     }
 
@@ -380,6 +561,22 @@ public sealed class SoldierModel
         var m = new PolyMesh();
         m.AddBox(Color.White, 1.4f * U, 1.8f * U, -2f * U, 1.6f * U);
         m.AddBoxSpan(Color.White, -0.9f * U, 0.9f * U, 1.8f * U, 5f * U, -1.2f * U, 0.6f * U);
+        return m;
+    }
+
+    /// <summary>
+    /// One blade: a long flat wedge running out of the fist, tapering to a point. Only the
+    /// enemy squads draw these — the player's own chassis has a rifle instead — and it is
+    /// deliberately the largest single thing on the figure, because it is the one part that
+    /// has to be legible against a city at sixty metres.
+    /// </summary>
+    private static PolyMesh BuildBlade()
+    {
+        var m = new PolyMesh();
+        // Held pointing forward from the wrist, out along the forearm's line.
+        m.AddBox(Color.White, 0.55f * U, 3.2f * U, 0.25f * U, 0.9f * U, -9f * U, -1.5f * U);
+        // The hilt, so it reads as held rather than as growing out of the glove.
+        m.AddBox(Color.White, 0.9f * U, 1.1f * U, -1.6f * U, 0.4f * U);
         return m;
     }
 

@@ -76,6 +76,16 @@ public static class SelfTest
         failures += Check("rifle rounds fly exactly where the crosshair points", SoldierRifleFliesTrue);
         failures += Check("a felled building stops being an anchor", SoldierAnchorDiesWithItsTower);
         failures += Check("weak material tears out from under a swing", SoldierWeakAnchorTears);
+        failures += Check("a squad arrives four strong, hung off a tower", SquadArrivesOnATower);
+        failures += Check("the squad calls once and all four come", SquadCallsAndCloses);
+        failures += Check("they cross the city on cables, not on jets", SoldiersFlyOnTheirCables);
+        failures += Check("one blade at a time, and the turn goes round", SquadStrikesInTurn);
+        failures += Check("a soldier is shot out of the air, not off the floor", SoldiersAreHitAtTheirOwnHeight);
+        failures += Check("killing one drops the body's salvage", SoldierKillLeavesSalvage);
+        failures += Check("a run that connects costs the player shield", SoldierBladesCut);
+        failures += Check("cutting a wall drops what was hanging on it", SoldierAnchorDiesWithItsWall);
+        failures += Check("a soldier is never a target standing still", SoldiersNeverLoiter);
+        failures += Check("the city offers anchors ahead, above and solid", AnchorQueryReadsTheCity);
         failures += Check("a fish opens already swimming, never on the deck", FishStartsSwimming);
         failures += Check("the tail is an impulse, not a throttle", FishBeatIsAnImpulse);
         failures += Check("beats cost breath and only coasting gives it back", FishBreathIsARhythm);
@@ -97,6 +107,18 @@ public static class SelfTest
         failures += Check("an exposed mote withers only after its grace", VirusWithersAfterGrace);
         failures += Check("the crab can be worn, and its lance breaks", VirusWearsTheCrab);
         failures += Check("the maw can be worn, and it hovers", VirusWearsTheMaw);
+        failures += Check("a virus round seeds a person rather than only hurting one", VirusSeedsASoldier);
+        failures += Check("a seed nobody claims turns them on their squad", SeedRootsIntoACarrier);
+        failures += Check("a seeded soldier can be worn, kit and all", VirusWearsASoldier);
+        failures += Check("an overload sprays the whole squad", OverloadSpreadsThePlague);
+        failures += Check("a carrier with nothing left to fight comes apart", CarrierStarvesOut);
+        failures += Check("the grab reaches a body a swing away", VirusLungeCatchesASoldier);
+        failures += Check("an exposed mote is blind and passes through walls", ExposedMoteIsIncorporeal);
+        failures += Check("a squad does not recognise one of its own", WornSoldierPassesForOneOfThem);
+        failures += Check("the squad flies cover for a worn comrade", SquadEscortsTheWornBody);
+        failures += Check("an escort shoots the enemy, and holds fire without one", EscortPicksItsFights);
+        failures += Check("shooting an escort loses it", BetrayedEscortTurns);
+        failures += Check("view shake rings down on every chassis", ShakeAlwaysSettles);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1025,6 +1047,14 @@ public static class SelfTest
         // Spend some shield and hyper so a later charge has room to land.
         world.Player.TakeDamage(50f);
         world.Player.TryHyperspace(); // drains most of the Hyper reserve
+
+        // A jump can land the craft inside a building, and the step's own collision pass
+        // then slides it several metres clear of where it arrived — far enough to leave a
+        // pickup dropped on the landing spot out of reach, which is nothing to do with what
+        // this is testing. So the settling step happens first, and the battery goes down
+        // where the craft actually ended up.
+        StepWithoutInput(world);
+
         float shield0 = world.Player.Shield;
         float hyper0 = world.Player.Hyper;
 
@@ -1995,6 +2025,516 @@ public static class SelfTest
         return world;
     }
 
+    // --- The enemy SOLDIER squads ------------------------------------------------
+
+    /// <summary>
+    /// The arrival. Four of them, exactly one wearing the leader's mark, and — the part
+    /// that actually matters — already hanging off the side of a building rather than
+    /// standing on the grid or floating in mid-air. The first thing a player ever sees of a
+    /// squad is four figures on a spire, and that only happens if the spawn genuinely finds
+    /// one and pins them to it.
+    /// </summary>
+    private static string? SquadArrivesOnATower()
+    {
+        var world = SquadWorld();
+
+        int perched = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            world.Soldiers.Clear();
+            world.Squads.Clear();
+            world.SpawnSoldierSquad();
+
+            if (world.Soldiers.Count != Entities.SoldierSquad.Size)
+                return $"a squad arrived {world.Soldiers.Count} strong, wanted {Entities.SoldierSquad.Size}";
+
+            int leaders = 0;
+            foreach (var s in world.Soldiers) if (s.IsLeader) leaders++;
+            if (leaders != 1) return $"{leaders} of the four wore the leader's mark";
+
+            bool up = true;
+            foreach (var s in world.Soldiers)
+            {
+                if (s.Move != Entities.SoldierMove.Perched) { up = false; break; }
+                if (s.Height < 5f) return $"a perched soldier opened {s.Height:0.0}m up — that is the floor";
+                if (!s.Right.Anchored) return "a perched soldier is holding on to nothing";
+                if (s.PerchedOn == null) return "a perched soldier is clung to no building";
+            }
+            if (up) perched++;
+        }
+
+        // A bearing that lands on open grid is a real outcome and the squad walks in from
+        // there; a city this dense should not produce four of them in a row.
+        return perched > 0 ? null : "four squads in a row found nothing to perch on";
+    }
+
+    /// <summary>
+    /// Seeing the player and doing something about it. The call goes out exactly once — a
+    /// squad that re-alerted every tick would be a klaxon — and then the distance has to
+    /// actually close, which is the whole test: it is one thing to write a flier and quite
+    /// another for it to arrive.
+    /// </summary>
+    private static string? SquadCallsAndCloses()
+    {
+        var world = SquadWorld();
+        world.SpawnSoldierSquad();
+        var squad = world.Squads[0];
+
+        float opening = NearestSoldier(world);
+        int calls = 0;
+
+        for (int i = 0; i < 60 * 30; i++)
+        {
+            StepWithoutInput(world);
+            if (squad.JustCalled) calls++;
+            if (world.Soldiers.Count == 0) break;
+            if (NearestSoldier(world) < 45f) break;
+        }
+
+        if (calls != 1) return $"the squad called {calls} times, wanted exactly one";
+        if (!squad.Alerted) return "the squad never noticed the player at all";
+
+        float closed = NearestSoldier(world);
+        if (closed > 45f)
+            return $"thirty seconds on, the nearest of them is still {closed:0} out (opened at {opening:0})";
+        return null;
+    }
+
+    /// <summary>
+    /// The claim the whole enemy rests on: they get around on the cables. Their jets are
+    /// deliberately feeble — enough to bend a line, nowhere near enough to fly — so any
+    /// speed appreciably past what a jet alone could ever produce is proof that a taut
+    /// steel line put it there. If this fails, what is on screen is a drone with legs.
+    /// </summary>
+    private static string? SoldiersFlyOnTheirCables()
+    {
+        var world = SquadWorld();
+        world.SpawnSoldierSquad();
+
+        float fastest = 0f;
+        int anchoredTicks = 0;
+        int airTicks = 0;
+
+        for (int i = 0; i < 60 * 25 && world.Soldiers.Count > 0; i++)
+        {
+            StepWithoutInput(world);
+            foreach (var s in world.Soldiers)
+            {
+                fastest = MathF.Max(fastest, s.PlanarSpeed);
+                if (s.AnyAnchored) anchoredTicks++;
+                if (s.Height > 2f) airTicks++;
+            }
+        }
+
+        if (airTicks == 0) return "nobody in the squad left the ground";
+        if (anchoredTicks == 0) return "nobody in the squad ever put a hook into anything";
+        if (fastest < 16f)
+            return $"the fastest of them managed {fastest:0.0} m/s — the jets alone would do that";
+        return null;
+    }
+
+    /// <summary>
+    /// The squad's whole contribution: exactly one of them is committed at a time, so the
+    /// fight is a rhythm the player can read rather than four knives at once. And the turn
+    /// has to actually go round — a rota that hands every run to the same soldier is not a
+    /// rota, it is one enemy and three spectators.
+    /// </summary>
+    private static string? SquadStrikesInTurn()
+    {
+        var world = SquadWorld();
+        world.SpawnSoldierSquad();
+        var squad = world.Squads[0];
+
+        int worst = 0;
+        var tookATurn = new HashSet<int>();
+        int windows = 0;
+        Entities.EnemySoldier? last = null;
+
+        for (int i = 0; i < 60 * 45 && world.Soldiers.Count > 0; i++)
+        {
+            StepWithoutInput(world);
+
+            int out_ = 0;
+            foreach (var s in world.Soldiers) if (s.BladesOut) out_++;
+            worst = Math.Max(worst, out_);
+
+            if (squad.Striker is { } who)
+            {
+                tookATurn.Add(who.Slot);
+                if (!ReferenceEquals(who, last)) windows++;
+                last = who;
+            }
+            else last = null;
+        }
+
+        if (worst > 1) return $"{worst} of them had blades out at once — the rota is not holding";
+        if (windows == 0) return "nobody was ever sent in across forty-five seconds";
+        if (world.Soldiers.Count > 1 && tookATurn.Count < 2)
+            return "every run went to the same soldier — the turn never passed";
+        return null;
+    }
+
+    /// <summary>
+    /// Where they live is the whole defence. A soldier thirty metres up a tower has to be
+    /// missed by the flat round every gun in this game fires along the grid, and hit by one
+    /// that was actually aimed at them — which, for the player, means looking up. Both
+    /// halves are checked against the same target from the same spot, so the only thing that
+    /// differs between the pass and the fail is where the crosshair was pointing.
+    /// </summary>
+    private static string? SoldiersAreHitAtTheirOwnHeight()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+
+        // Thirty metres out along the opening view, twelve metres up.
+        const float Out = 30f, Up = 12f;
+        Vector2 at = Torus.Wrap(p.Position + p.Forward * Out);
+        var mark = new Entities.EnemySoldier(at, Up, leader: false, slot: 0);
+        mark.SeedPerch(at, Up + 3f, null, p.Heading + MathF.PI);
+        world.Soldiers.Add(mark);
+
+        // Level first: a flat round down the barrel line passes a long way under them.
+        p.Pitch = 0f;
+        for (int i = 0; i < 60 * 2; i++)
+        {
+            world.FireSoldierRifleForTest();
+            StepWithoutInput(world);
+        }
+        if (mark.Shield < Entities.EnemySoldier.BaseShield)
+            return "a level round reached somebody twelve metres overhead";
+
+        // Now aimed at their chest. Solved rather than guessed, so the check is about the
+        // hit test and not about whether the number was typed in correctly.
+        float rise = Up + Entities.EnemySoldier.AimHeight - p.Eye.Y;
+        p.Pitch = MathF.Atan2(rise, Out);
+        for (int i = 0; i < 60 * 3 && mark.Alive; i++)
+        {
+            world.FireSoldierRifleForTest();
+            StepWithoutInput(world);
+        }
+
+        return mark.Alive
+            ? $"three seconds of aimed fire left them on {mark.Shield:0.0} shield"
+            : null;
+    }
+
+    /// <summary>A body dropped out of the air still pays out, and it pays out where it
+    /// fell — a kill you earned by tracking one across a skyline is worth doubling back
+    /// through.</summary>
+    private static string? SoldierKillLeavesSalvage()
+    {
+        var world = SoldierWorld();
+        var mark = new Entities.EnemySoldier(world.Player.Position + new Vector2(0f, 12f),
+            8f, leader: false, slot: 0);
+        world.Soldiers.Add(mark);
+
+        int before = world.Pickups.Count;
+        // Straight through the world's own damage path — a rocket detonated on them.
+        world.Player.Pitch = MathF.Atan2(8f + 1f - world.Player.Eye.Y, 12f);
+        world.Player.Heading = 0f;
+        for (int i = 0; i < 60 * 2 && mark.Alive; i++)
+        {
+            world.FireSoldierRifleForTest();
+            StepWithoutInput(world);
+        }
+
+        if (mark.Alive) return "the target survived two seconds of point-blank fire";
+        if (world.Pickups.Count <= before) return "the body left nothing behind";
+        return null;
+    }
+
+    /// <summary>
+    /// The blades. A pass that arrives at the player's body, level with it and still
+    /// carrying the arc that got it there, has to cost real shield — and having landed one,
+    /// that soldier has to break off rather than grind away on the spot, which is what keeps
+    /// four of them from being a blender.
+    /// </summary>
+    private static string? SoldierBladesCut()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+        p.Height = 6f;
+
+        // Placed just outside the blades' reach, already travelling at the player fast
+        // enough for the pass to count, and told to commit.
+        Vector2 at = Torus.Wrap(p.Position + new Vector2(0f, 3f));
+        var killer = new Entities.EnemySoldier(at, 6f, leader: false, slot: 0)
+        {
+            Velocity = new Vector3(0f, 0f, -18f),
+        };
+        killer.CommitRunForTest();
+        world.Soldiers.Add(killer);
+
+        float shield = p.Shield;
+        for (int i = 0; i < 12 && p.Shield >= shield; i++) StepWithoutInput(world);
+
+        if (p.Shield >= shield) return "a run straight through the player cost them nothing";
+        if (killer.BladeReady) return "the blades landed but were not spent — they can cut again at once";
+        if (killer.Move == Entities.SoldierMove.Diving)
+            return "the soldier is still on the run it just finished";
+        return null;
+    }
+
+    /// <summary>
+    /// The one question a soldier asks the world, and the four properties of a good answer.
+    /// This is where the flying comes from: an anchor behind them brakes, one at arm's
+    /// length does nothing, one below them cannot be swung under, and one on the smallest
+    /// quarter of the skyline tears out mid-arc. Get this wrong and the physics above it
+    /// still works perfectly — it just looks like flailing.
+    /// </summary>
+    private static string? AnchorQueryReadsTheCity()
+    {
+        var world = SoldierWorld();
+        var p = world.Player;
+
+        var from = new Vector3(p.Position.X, 14f, p.Position.Y);
+        var wish = new Vector3(p.Forward.X, 0.2f, p.Forward.Y);
+
+        if (!world.TryFindSwing(from, wish, Entities.SoldierRig.MaxRange,
+                out Vector3 point, out Structure? holding))
+            return "the opening view of a city offered nothing to swing from";
+        if (holding == null) return "an anchor was found that belongs to no building";
+
+        Vector2 delta = new Vector2(point.X, point.Z) - new Vector2(from.X, from.Z);
+        float range = delta.Length();
+        if (range > Entities.SoldierRig.MaxRange)
+            return $"the anchor is {range:0} out, past a cable's {Entities.SoldierRig.MaxRange:0}";
+        if (point.Y <= from.Y)
+            return "the anchor is level with or below the flier — that is a rope, not a swing";
+
+        Vector2 wishXZ = Vector2.Normalize(new Vector2(wish.X, wish.Z));
+        float ahead = Vector2.Dot(Vector2.Normalize(delta), wishXZ);
+        if (ahead <= 0f) return $"the anchor sits behind the direction of travel (dot {ahead:0.00})";
+
+        // And the answer has to genuinely follow the question, asked all the way round the
+        // compass rather than only down the one bearing that was bound to work.
+        //
+        // Stated carefully, because the rule has a deliberate exception in it: a cable
+        // behind you is a brake and picking one is the most recognisable mistake an amateur
+        // makes — but a soldier falling through a gap in the skyline with nothing ahead of
+        // them takes the brake and lives, so the query prefers rather than requires. What is
+        // checked here is exactly that: whenever the city genuinely does have something
+        // standing along the bearing, the answer has to be along the bearing.
+        var fromXZ = new Vector2(from.X, from.Z);
+        for (int i = 0; i < 8; i++)
+        {
+            float a = i * MathF.Tau / 8f;
+            var spin = new Vector3(MathF.Sin(a), 0.2f, MathF.Cos(a));
+            var spinXZ = new Vector2(spin.X, spin.Z);
+
+            // Is there anything out that way at all? Towers only, and only ones that reach
+            // above the flier: an arch is eight metres of leg holding a span nothing can
+            // bite, so a soldier fourteen metres up has no more use for one than for open
+            // grid. Measured well inside the query's own band, so a building it would reject
+            // for being too close or too far can't be mistaken for one it ignored.
+            bool anythingAhead = false;
+            foreach (var st in world.Structures)
+            {
+                if (st.Kind != StructureKind.Tower) continue;
+                if (st.BlockHeight * 0.92f < from.Y + 4f) continue;
+                // Solid stone only. A spire ahead losing to good stone a few degrees off the
+                // bearing is the query working, not failing � weak material tears out from
+                // under a swing, and reading the city for that is the skill being modelled.
+                if (st.Scale < Entities.SoldierRig.WeakScale) continue;
+                Vector2 d = Torus.Delta(fromXZ, st.Position);
+                float len = d.Length();
+                if (len < 24f || len > Entities.SoldierRig.MaxRange - 10f) continue;
+                if (Vector2.Dot(d / len, spinXZ) <= 0.4f) continue;
+                anythingAhead = true;
+                break;
+            }
+            if (!anythingAhead) continue;
+
+            if (!world.TryFindSwing(from, spin, Entities.SoldierRig.MaxRange,
+                    out Vector3 got, out _))
+                return $"a bearing with a building standing along it came back empty";
+
+            Vector2 toIt = new Vector2(got.X, got.Z) - fromXZ;
+            if (Vector2.Dot(Vector2.Normalize(toIt), spinXZ) <= 0.1f)
+                return "there was solid stone along the bearing and it picked something behind";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Shoot the wall, not the man. A cable is only as good as what it is bitten into, so
+    /// the building coming apart has to take the anchor with it — and, because towers come
+    /// apart <em>where they are hit</em> rather than toppling whole, a cut that leaves the
+    /// stump standing has to count too, or a hook goes on holding a chunk of wall that is
+    /// already rubble on the floor.
+    ///
+    /// The other half is what they do about it, and it is the half that decides whether
+    /// this is a way to kill one or merely a way to annoy one: the line has to be back out
+    /// and into something else within a second or so. Driven against a one-tower city so
+    /// the check is about the reflex and not about which spire they happened to pick.
+    /// </summary>
+    private static string? SoldierAnchorDiesWithItsWall()
+    {
+        var city = new TwoTowers();
+        var soldier = new Entities.EnemySoldier(new Vector2(0f, -30f), 20f, leader: false, slot: 0)
+        {
+            Order = Entities.SoldierOrder.Press,
+        };
+
+        // Let it fly and get a line into the first tower.
+        for (int i = 0; i < 60 * 4 && !soldier.AnyAnchored; i++)
+            soldier.Update((float)Config.FixedDt, new Vector2(0f, 60f), 0f, city);
+        if (!soldier.AnyAnchored) return "the soldier never anchored to anything at all";
+
+        Structure held = soldier.Left.Anchored ? soldier.Left.Holding! : soldier.Right.Holding!;
+
+        // Cut a hole in it, well away from the base, so it is emphatically still standing.
+        // Hard enough that cells genuinely break — a scratch that leaves the shape intact is
+        // not a cut and should not shake anybody off.
+        var detached = new List<DebrisSpawn>();
+        held.CutTower(new Vector3(held.Position.X, 30f, held.Position.Y), 7f, 90f, detached, out _);
+        if (held.Falling) return "the test cut felled the whole tower — that is not the case under test";
+        if (held.Fracture is not { Version: > 0 })
+            return "the test cut broke nothing — the tower is unmarked and nobody should let go";
+
+        soldier.Update((float)Config.FixedDt, new Vector2(0f, 60f), 0f, city);
+        if (soldier.Left.Anchored && ReferenceEquals(soldier.Left.Holding, held))
+            return "the left cable is still holding a wall that has been shot out";
+        if (soldier.Right.Anchored && ReferenceEquals(soldier.Right.Holding, held))
+            return "the right cable is still holding a wall that has been shot out";
+
+        // And they have to go and find another one, quickly. The cut tower is now the worse
+        // of the two, so the honest answer is the other one.
+        city.Standing = city.Far;
+        int ticks = 0;
+        for (; ticks < 60 * 2 && !soldier.AnyAnchored; ticks++)
+            soldier.Update((float)Config.FixedDt, new Vector2(0f, 60f), 0f, city);
+
+        if (!soldier.AnyAnchored)
+            return "two seconds after losing their line they are still falling";
+        if (ticks > 90)
+            return $"it took them {ticks / 60f:0.0}s to find another wall — they are not re-anchoring, they are recovering";
+        return null;
+    }
+
+    /// <summary>
+    /// The rule that makes them a fight rather than a shooting gallery: they are never a
+    /// stationary target. A pendulum that runs out of swing hangs, and a soldier hanging in
+    /// the air taking pot-shots has thrown away every advantage the chassis has — so the
+    /// rig forbids it outright and drops whatever line it is on rather than loiter.
+    ///
+    /// Measured as the worst case rather than the average, because an average hides exactly
+    /// the thing that matters: one member parked in the air for four seconds is a free kill
+    /// however busy the other three were.
+    /// </summary>
+    private static string? SoldiersNeverLoiter()
+    {
+        var world = SquadWorld();
+        world.SpawnSoldierSquad();
+
+        var still = new Dictionary<Entities.EnemySoldier, int>();
+        int worst = 0;
+        float fastest = 0f;
+        double sum = 0;
+        int samples = 0;
+
+        for (int i = 0; i < 60 * 40 && world.Soldiers.Count > 0; i++)
+        {
+            StepWithoutInput(world);
+            foreach (var s in world.Soldiers)
+            {
+                // Only while genuinely flying and genuinely able to fly. Walking is slow by
+                // design, and a soldier who has just put themselves through a wall is
+                // *supposed* to hang there with nothing to give — that window is the reward
+                // for having flown them into it, not a failure of this rule.
+                if (s.Height < 2f || s.Move == Entities.SoldierMove.Perched || s.Stagger > 0f)
+                {
+                    still[s] = 0;
+                    continue;
+                }
+
+                sum += s.PlanarSpeed;
+                samples++;
+                fastest = MathF.Max(fastest, s.PlanarSpeed);
+
+                // Measured on the whole velocity, not just the planar part: a soldier
+                // dropping forty metres between anchors is doing something difficult to
+                // shoot at, whatever their ground track says. What this is looking for is a
+                // body that is simply *there*, in one place, for long enough to line up.
+                int run = s.Velocity.Length() < 5f ? still.GetValueOrDefault(s) + 1 : 0;
+                still[s] = run;
+                worst = Math.Max(worst, run);
+            }
+        }
+
+        if (samples == 0) return "the squad never got airborne, so there was nothing to measure";
+
+        // The bar is derived rather than tuned until it went green, and it is worth stating
+        // where it comes from, because it is not zero and cannot be. A swing that has
+        // genuinely traded all its speed for height is slow at the top of the arc � that is
+        // the physics working, and it is the same hang the player's own chassis gets � and
+        // the guard's grace plus a whole apex � decelerating into the top of a climb and
+        // accelerating back out of it under the eased hang pull � is a couple of seconds all
+        // on its own, with nobody hovering anywhere. What this is policing is a soldier *parked*: hovering, holding
+        // position, taking pot-shots off a rope. That has no floor and gets none.
+        float parked = worst / 60f;
+        if (parked > 3f)
+            return $"one of them hung in the air going nowhere for {parked:0.0}s";
+
+        float average = (float)(sum / samples);
+        if (average < 9f)
+            return $"they average {average:0.0} m/s in the air — that is drifting, not swinging";
+        return null;
+    }
+
+    /// <summary>
+    /// A city of exactly two towers, one near and one far, and a switch for which one it is
+    /// willing to offer. Everything a flier can ask the world is one question, so a fake
+    /// that answers that question is a whole world as far as the rig is concerned — which is
+    /// the entire reason the query is an interface.
+    /// </summary>
+    private sealed class TwoTowers : Entities.IAnchorField
+    {
+        public readonly Structure Near = new(new Vector2(0f, 10f), 0f, StructureKind.Tower, 0, 1.5f);
+        public readonly Structure Far = new(new Vector2(0f, 45f), 0f, StructureKind.Tower, 2, 1.5f);
+
+        public Structure? Standing;
+
+        public bool TryFindSwing(Vector3 from, Vector3 wish, float maxRange,
+            out Vector3 point, out Structure? holding)
+        {
+            holding = Standing ??= Near;
+            var at = new Vector2(holding.Position.X, holding.Position.Y);
+            var delta = new Vector2(at.X - from.X, at.Y - from.Z);
+            float d = delta.Length();
+            if (d > maxRange || d < 1e-3f)
+            {
+                point = default;
+                holding = null;
+                return false;
+            }
+
+            // On the near face, well above them — the answer the real city gives.
+            Vector2 surface = at - delta / d * 5f;
+            point = new Vector3(surface.X, MathF.Max(from.Y + 8f, 28f), surface.Y);
+            return true;
+        }
+    }
+
+    /// <summary>A stage with nothing in it but the city and a squad — no hunters, no spawn
+    /// director — so the checks above are measuring the squad and not a firefight.</summary>
+    private static World.World SquadWorld()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        world.Enemies.Clear();
+        return world;
+    }
+
+    /// <summary>How far the nearest living soldier is from the player.</summary>
+    private static float NearestSoldier(World.World world)
+    {
+        float best = float.MaxValue;
+        foreach (var s in world.Soldiers)
+            if (s.Alive) best = MathF.Min(best, Torus.Distance(s.Position, world.Player.Position));
+        return best;
+    }
+
     // --- The FISH ---------------------------------------------------------------
 
     /// <summary>
@@ -2768,6 +3308,445 @@ public static class SelfTest
         foreach (var q in world.Projectiles)
             if (q.Active && q.IsAcid) return null;
         return "the worn maw's spit is not an acid bolt";
+    }
+
+    // --- The plague: what a VIRUS does to people -------------------------------------
+
+    /// <summary>
+    /// The round that changed. Against a machine the mote's bolt is a bolt; against a person
+    /// it is an infection, and the seed has to land — otherwise every rule below it is
+    /// unreachable. Checked through the world's own fire path against a live soldier, so
+    /// what is measured is the thing the player actually does.
+    /// </summary>
+    private static string? VirusSeedsASoldier()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+
+        var mark = PlantSoldier(world, ahead: 14f);
+        p.Pitch = MathF.Atan2(mark.Height + Entities.EnemySoldier.AimHeight - p.Eye.Y, 14f);
+
+        for (int i = 0; i < 60 * 2 && mark.Tagged <= 0f && mark.Alive; i++)
+        {
+            world.FireVirusRoundForTest();
+            StepWithoutInput(world);
+        }
+
+        if (!mark.Alive) return "the round killed them outright — nothing was seeded";
+        if (mark.Tagged <= 0f) return "two seconds of fire and the corruption never took";
+        if (mark.Carrier) return "the seed rooted on the tick it landed — there is no window";
+        return null;
+    }
+
+    /// <summary>
+    /// And what happens when the mote does not come to collect. The seed roots on its own,
+    /// and the body it roots in stops being the squad's — which is the whole twist: a shot
+    /// you fire and then ignore is not a wasted shot, it is an ally with a short life.
+    /// </summary>
+    private static string? SeedRootsIntoACarrier()
+    {
+        var world = SquadWorld();
+        world.SpawnSoldierSquad();
+        var squad = world.Squads[0];
+        var mark = world.Soldiers[0];
+
+        mark.Tag();
+        int had = squad.Members.Count;
+
+        for (int i = 0; i < 60 * 5 && !mark.Carrier; i++) StepWithoutInput(world);
+        // One more, because the squads think at the top of a step and the soldiers turn
+        // inside it: the tick a seed roots is a tick its old squad has already been through.
+        StepWithoutInput(world);
+
+        if (!mark.Carrier) return "five seconds on, the seed still had not rooted";
+        if (squad.Members.Contains(mark)) return "the squad is still giving orders to a carrier";
+        if (squad.Members.Count != had - 1)
+            return $"the squad went from {had} to {squad.Members.Count} — it lost the wrong number";
+        if (!world.Soldiers.Contains(mark)) return "the carrier fell off the field entirely";
+        return null;
+    }
+
+    /// <summary>
+    /// Wearing a person. Two things have to be true and the second is the interesting one:
+    /// the mote takes them on contact — no ceremony, no seed required, the same rule a
+    /// hunter has always been taken by — and what it gets is their <em>kit</em>. A worn
+    /// soldier with no cables would be a slow hunter with a worse meter.
+    /// </summary>
+    private static string? VirusWearsASoldier()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        var mark = PlantSoldier(world, ahead: 3f);
+
+        for (int i = 0; i < 30 && !v.Hosted; i++) StepWithoutInput(world);
+
+        if (!v.Hosted) return "a soldier at arm's length was never taken";
+        if (v.HostKind != Entities.VirusHost.Soldier)
+            return $"taking a soldier produced a {v.HostKind} host";
+        if (v.WornRig is null) return "the body was worn but its launchers were not";
+        if (p.Rig is null) return "nothing downstream can see the worn rig";
+        if (world.Soldiers.Contains(mark)) return "the worn body is still on the roster";
+
+        // And the kit has to work: a hook thrown from a stolen launcher has to bite the city
+        // exactly as the chassis that owns one does.
+        var rig = v.WornRig!;
+        p.Pitch = 0.2f;
+        Vector3 from = world.SoldierMuzzle(right: true);
+        if (world.TryFindSwing(from, p.Forward3, Entities.SoldierRig.MaxRange,
+                out Vector3 at, out Structure? holding))
+        {
+            rig.FireHook(true, new Vector2(from.X, from.Z), from.Y,
+                Vector3.Normalize(at - from), at, holding);
+            for (int i = 0; i < 60 * 3 && !rig.Right.Anchored && v.Hosted; i++)
+                StepWithoutInput(world);
+            if (v.Hosted && !rig.Right.Anchored)
+                return "a hook thrown from the stolen kit never bit anything";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The heavy, reread. An overload used to be a bomb; against people it is an outbreak —
+    /// the body you were going to lose anyway, spent to turn everyone standing near it. This
+    /// is the mechanic's best moment and it should be worth the host every time.
+    /// </summary>
+    private static string? OverloadSpreadsThePlague()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        // A hunter to wear, and three soldiers standing in the blast.
+        world.Enemies.Add(new Entities.EnemyTank(p.Position, elite: false));
+        StepWithoutInput(world);
+        if (!v.Hosted) return "the setup never got a host to spend";
+
+        var near = new List<Entities.EnemySoldier>();
+        for (int i = 0; i < 3; i++)
+        {
+            var s = new Entities.EnemySoldier(
+                Torus.Wrap(p.Position + new Vector2(3f + i * 2f, 0f)), 2f, leader: i == 0, slot: i);
+            world.Soldiers.Add(s);
+            near.Add(s);
+        }
+
+        world.OverloadVirusForTest();
+
+        foreach (var s in near)
+            if (!s.Carrier)
+                return "a soldier standing in an overload was not turned by it";
+        // The hunter is gone whatever happens next. What happens next is often that the mote
+        // lands in one of the bodies it has just turned, which is not a failure — it is the
+        // combination the mechanic was built to allow — so the check is that the *hunter*
+        // was spent rather than that the player ended up with nothing.
+        if (v.HostKind == Entities.VirusHost.Hunter)
+            return "the overload did not spend the host";
+        return null;
+    }
+
+    /// <summary>
+    /// The end of one. A carrier is a body running on stolen code with nothing maintaining
+    /// it; with nobody left of its own side to spend that on, it has to come apart rather
+    /// than circle a player it has no quarrel with. Guards against the plague quietly
+    /// becoming a permanent escort.
+    /// </summary>
+    private static string? CarrierStarvesOut()
+    {
+        var world = SquadWorld();
+        var lone = PlantSoldier(world, ahead: 20f);
+        lone.Turn();
+
+        for (int i = 0; i < 60 * 8 && lone.Alive; i++) StepWithoutInput(world);
+
+        return lone.Alive
+            ? $"a carrier with no side left to fight was still going after eight seconds ({lone.Shield:0.0} shield)"
+            : null;
+    }
+
+    /// <summary>
+    /// The grab. Contact alone against something crossing the sky at thirty-four metres a
+    /// second is a coin toss dressed up as a skill, so the player gets to <em>ask</em>: press
+    /// the key anywhere near a body and the mote throws itself at it. What is checked here is
+    /// the gap between the two reaches — a soldier well past passive touch, close enough that
+    /// a player would say "that one", and the grab has to answer.
+    /// </summary>
+    private static string? VirusLungeCatchesASoldier()
+    {
+        var world = VirusWorld();
+        var v = world.Player.Virus!;
+
+        // Comfortably past anything contact would ever pick up, comfortably inside a lunge.
+        var mark = PlantSoldier(world, ahead: 13f);
+
+        StepWithoutInput(world);
+        if (v.Hosted) return "a body thirteen metres off was taken by passive contact alone";
+
+        world.LungeAtSoldierForTest();
+
+        if (!v.Hosted) return "the grab did not reach a body thirteen metres away";
+        if (v.HostKind != Entities.VirusHost.Soldier)
+            return $"the grab produced a {v.HostKind} host";
+        if (world.Soldiers.Contains(mark)) return "the grabbed body is still on the roster";
+        return null;
+    }
+
+    /// <summary>
+    /// The other half of being blind. A payload with no body cannot see matter because it
+    /// does not touch matter — so an exposed mote flies straight through the city, and the
+    /// instant it takes a body the world becomes solid again. Both directions are checked
+    /// against the same wall, because a rule that only worked one way would be the cruellest
+    /// possible version of this: unable to see the buildings and still stopped by them.
+    /// </summary>
+    private static string? ExposedMoteIsIncorporeal()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+        var v = p.Virus!;
+
+        Structure? tower = null;
+        foreach (var s in world.Structures)
+            if (s.Kind == StructureKind.Tower && !s.Falling) { tower = s; break; }
+        if (tower is null) return "a razed city — nothing to pass through";
+
+        // Stand the mote in the middle of the tower's footprint, low enough to be inside it.
+        p.Position = tower.Position;
+        p.Height = 4f;
+        StepWithoutInput(world);
+
+        float shoved = Torus.Distance(p.Position, tower.Position);
+        if (shoved > 0.5f)
+            return $"an exposed mote was pushed {shoved:0.0} out of a wall it cannot even see";
+
+        // Now with a body on. The same wall has to shove exactly as it always did.
+        world.Enemies.Add(new Entities.EnemyTank(p.Position, elite: false));
+        StepWithoutInput(world);
+        if (!v.Hosted) return "the setup failed to take a host";
+
+        p.Position = tower.Position;
+        StepWithoutInput(world);
+
+        if (Torus.Distance(p.Position, tower.Position) < 0.5f)
+            return "a worn body walked through a tower — the world is solid again or nothing is";
+        return null;
+    }
+
+    /// <summary>
+    /// The disguise. Wearing one of a squad's own bodies, there is nothing for the other
+    /// three to see — same kit, same silhouette, same sky — so they go back to their walls
+    /// and the player swings through the middle of them. And the moment the corruption
+    /// leaves your hands, they know.
+    ///
+    /// Both halves matter. A disguise that never broke would be an off switch for the enemy.
+    /// </summary>
+    private static string? WornSoldierPassesForOneOfThem()
+    {
+        var world = VirusWorld();
+        var v = world.Player.Virus!;
+
+        world.SpawnSoldierSquad();
+        var squad = world.Squads[0];
+
+        // A body to wear, taken by contact the way any of them are.
+        PlantSoldier(world, ahead: 2f);
+        for (int i = 0; i < 60 && !v.Hosted; i++) StepWithoutInput(world);
+        if (v.HostKind != Entities.VirusHost.Soldier) return "the setup never got a body on";
+
+        if (!world.PlayerPassesForOneOfThem) return "wearing one of them is not a disguise at all";
+
+        // Five seconds of standing in plain sight. They should never once call.
+        for (int i = 0; i < 60 * 5; i++)
+        {
+            StepWithoutInput(world);
+            if (!v.Hosted) return "the body rotted out before the check could finish";
+            if (squad.Alerted) return "the squad called on a player wearing one of their own";
+        }
+
+        // And now show them what is driving it.
+        world.FireVirusRoundForTest();
+        if (world.PlayerPassesForOneOfThem)
+            return "firing the corruption out of a stolen body did not give it away";
+
+        for (int i = 0; i < 60 * 3 && !squad.Alerted; i++) StepWithoutInput(world);
+        if (!squad.Alerted) return "cover was blown and the squad still never noticed";
+        return null;
+    }
+
+    /// <summary>
+    /// The escort. Take a body out of the middle of a squad and the survivors inherit you:
+    /// from their side one of the four is still right there in the same kit. They fly cover,
+    /// they keep formation, and they stop being three quarters of the thing that was killing
+    /// you. And it lasts exactly as long as the body does — take the host off and the people
+    /// beside you have just watched a mote climb out of their friend.
+    /// </summary>
+    private static string? SquadEscortsTheWornBody()
+    {
+        var world = EscortedWorld(out var squad, out _);
+        if (world is null) return "the setup never got a body out of a squad";
+
+        if (world.Escort != squad) return "taking one of a squad's own did not buy their cover";
+        if (!squad.Escorting) return "the squad does not know it is escorting anybody";
+        foreach (var m in squad.Members)
+            if (!m.Allied) return "a member of an escorting squad is not on the player's side";
+
+        // They have to stay with you rather than wander off. Measured over a few seconds of
+        // the player standing still: the ring should keep them close.
+        var p = world.Player;
+        for (int i = 0; i < 60 * 4; i++) StepWithoutInput(world);
+        if (p.Virus!.HostKind != Entities.VirusHost.Soldier)
+            return "the worn body rotted out before the check finished";
+
+        float nearest = float.MaxValue;
+        foreach (var m in squad.Members)
+            nearest = MathF.Min(nearest, Torus.Distance(m.Position, p.Position));
+        if (nearest > Entities.EnemySoldier.EngageRange * 2.5f)
+            return $"four seconds on, the nearest escort is {nearest:0} out — they are not following";
+
+        // And it dies with the body. Spend the host and they are strangers again.
+        world.OverloadVirusForTest();
+        StepWithoutInput(world);
+        if (world.Escort != null) return "the escort outlived the body that bought it";
+        return null;
+    }
+
+    /// <summary>
+    /// What an escort does with itself. Given an enemy they shoot it — with rounds that
+    /// genuinely land on the other side, which is the entire point of turning them — and
+    /// given nobody at all they hold formation and hold their fire, rather than pouring
+    /// rifle rounds into the comrade they are supposed to be covering.
+    /// </summary>
+    private static string? EscortPicksItsFights()
+    {
+        var world = EscortedWorld(out var squad, out _);
+        if (world is null) return "the setup never got a body out of a squad";
+        var p = world.Player;
+
+        // Nothing to fight. Four seconds of formation, and not one trigger pulled: with the
+        // player as the only thing in the sky, any round at all is a round at them.
+        //
+        // Counted as shots fired rather than as shield lost, deliberately. An escort's round
+        // travels as the player's and therefore *cannot* hit them — that falls out of the
+        // routing — so measuring the player's shield would be measuring nothing, and would
+        // quietly pass even if all three opened up.
+        int shotsWithNoEnemy = 0;
+        for (int i = 0; i < 60 * 4 && p.Virus!.Hosted; i++)
+        {
+            StepWithoutInput(world);
+            foreach (var m in squad.Members) if (m.JustFired) shotsWithNoEnemy++;
+        }
+        if (shotsWithNoEnemy > 0)
+            return $"an escort with nothing to shoot at fired {shotsWithNoEnemy} rounds anyway";
+
+        // Now give them something, parked where the ring already sweeps.
+        var prey = new Entities.EnemyTank(Torus.Wrap(p.Position + new Vector2(0f, 26f)),
+            elite: false, shieldBonus: 40);
+        world.Enemies.Add(prey);
+
+        float had = prey.Shield;
+        int shotsAtEnemy = 0;
+        for (int i = 0; i < 60 * 14 && prey.Alive && p.Virus!.Hosted; i++)
+        {
+            StepWithoutInput(world);
+            foreach (var m in squad.Members) if (m.JustFired) shotsAtEnemy++;
+        }
+
+        if (shotsAtEnemy == 0) return "an escort with a hunter in front of it never fired";
+        if (prey.Alive && prey.Shield >= had)
+            return "the escort fired at a hunter for fourteen seconds and never hit it";
+        return null;
+    }
+
+    /// <summary>
+    /// The one thing that ends it early. An escort is the only asset in this game the player
+    /// can lose through carelessness rather than through being beaten, and putting a round
+    /// into one of them has to be exactly that expensive — otherwise the whole arrangement is
+    /// a free three-man gun crew with no way to squander it.
+    /// </summary>
+    private static string? BetrayedEscortTurns()
+    {
+        var world = EscortedWorld(out var squad, out _);
+        if (world is null) return "the setup never got a body out of a squad";
+        if (squad.Members.Count == 0) return "an escort of nobody";
+
+        var victim = squad.Members[0];
+        world.HurtSoldierForTest(victim, 0.5f);
+
+        if (world.Escort != null) return "shooting one of the escort cost nothing";
+        if (world.PlayerPassesForOneOfThem) return "the disguise survived shooting one of them";
+
+        StepWithoutInput(world);
+        foreach (var m in squad.Members)
+            if (m.Allied) return "a betrayed squad is still flying cover";
+        return null;
+    }
+
+    /// <summary>
+    /// A virus, a squad, and one of that squad's own bodies already on. Returns null if the
+    /// possession never happened, so each caller reports that rather than dereferencing its
+    /// way into a confusing failure.
+    /// </summary>
+    private static World.World? EscortedWorld(out Entities.SoldierSquad squad,
+        out Entities.EnemySoldier taken)
+    {
+        var world = VirusWorld();
+        world.SpawnSoldierSquad();
+        squad = world.Squads[0];
+
+        // Stand the whole squad on the player so the nearest of them is taken by contact —
+        // it has to be one of *theirs* for the escort to be inherited from anybody.
+        taken = squad.Members[0];
+        for (int i = 0; i < squad.Members.Count; i++)
+            squad.Members[i].Position = Torus.Wrap(world.Player.Position
+                + new Vector2(2f + i * 4f, 0f));
+        foreach (var m in squad.Members) m.Height = world.Player.Height;
+
+        for (int i = 0; i < 60 && !world.Player.Virus!.Hosted; i++) StepWithoutInput(world);
+        return world.Player.Virus!.HostKind == Entities.VirusHost.Soldier ? world : null;
+    }
+
+    /// <summary>
+    /// A regression, and a pointed one. The hull's view shake used to ring down only inside
+    /// the tank's own step — which was fine for exactly as long as nothing else raised it.
+    /// The moment something did (a soldier's blade landing on a player who was not in a
+    /// tank), it pinned at whatever it was set to and shook the camera for the rest of the
+    /// run, because no path that chassis ever took came back to clear it.
+    ///
+    /// Screen feedback has to settle for whoever is driving. Checked on the chassis that
+    /// cannot reach the tank's integrator at all.
+    /// </summary>
+    private static string? ShakeAlwaysSettles()
+    {
+        var world = VirusWorld();
+        var p = world.Player;
+
+        p.Jolt(1f);
+        for (int i = 0; i < 60 * 2; i++) StepWithoutInput(world);
+
+        if (p.Shake > 0f)
+            return $"two seconds on, a virus is still being shaken at {p.Shake:0.00}";
+
+        // And through a set piece as well: a hold that freezes the ring-down hands the
+        // player back a camera that never stops.
+        p.Jolt(1f);
+        p.Captured = true;
+        for (int i = 0; i < 60 * 2; i++) StepWithoutInput(world);
+        p.Captured = false;
+
+        return p.Shake > 0f
+            ? $"a shake started before a cinematic never settled ({p.Shake:0.00})"
+            : null;
+    }
+
+    /// <summary>Drops one soldier a fixed distance ahead of the player, at head height and
+    /// with nothing else on the field, so the checks above are measuring one body.</summary>
+    private static Entities.EnemySoldier PlantSoldier(World.World world, float ahead)
+    {
+        var p = world.Player;
+        var at = Torus.Wrap(p.Position + p.Forward * ahead);
+        var s = new Entities.EnemySoldier(at, MathF.Max(0f, p.Height), leader: false, slot: 0);
+        world.Soldiers.Add(s);
+        return s;
     }
 
     /// <summary>A stage with a virus in it and nothing else moving, so the checks above are
