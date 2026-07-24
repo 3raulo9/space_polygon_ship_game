@@ -168,6 +168,20 @@ public sealed class PlayerTank
     public int Ammo = 40;
     public bool Alive => Shield > 0f || Lives > 0;
 
+    /// <summary>
+    /// Comebacks left, which is one fewer than lives: a craft on its last life has none.
+    /// This is the number the host sets before a match and the number the HUD shows, and
+    /// keeping the conversion in one place is what stops the two drifting apart.
+    /// </summary>
+    public int RevivesLeft => Math.Max(0, Lives - 1);
+
+    /// <summary>
+    /// Out of comebacks and out of shield: the run is over for this player, but not for
+    /// the match. They keep a camera and watch whoever is left — see the spectator handling
+    /// in the loop. Solo, this is simply death, which is what it has always been.
+    /// </summary>
+    public bool Spectating => !Alive;
+
     /// <summary>Which chassis the hangar sent out. Drives which trigger does what —
     /// see <see cref="World.World.Update"/> — and nothing about the physics, which are
     /// the same heavy momentum whatever you are piloting.</summary>
@@ -481,7 +495,7 @@ public sealed class PlayerTank
         if (Virus is { } mote) mote.Velocity = Vector3.Zero;
     }
 
-    public void Update(float dt)
+    public void Update(float dt, in InputFrame input = default)
     {
         // The cannon cools whatever else is happening to the craft — it is a property
         // of the weapon, not of who is driving. This has to sit *above* the capture
@@ -545,8 +559,8 @@ public sealed class PlayerTank
             return;
         }
 
-        UpdateDrive(dt);
-        UpdateJump(dt);
+        UpdateDrive(dt, input);
+        UpdateJump(dt, input);
         UpdateSiege(dt);   // plant hold, lurch decay, discharger cooldown, shake ring-down
 
         // The Hyper reserve creeps back up when it isn't being spent.
@@ -656,19 +670,20 @@ public sealed class PlayerTank
     /// refused while planted, already lurching, or too drained. Returns true when it kicks,
     /// so the world can shove the hull and sound the thrust.
     /// </summary>
-    public bool TryLurch()
+    public bool TryLurch(in InputFrame input = default)
     {
         if (Class != PlayerClass.Tank || Planted || IsAirborne) return false;
         if (_lurchTime > 0f || Hyper < LurchHyperCost) return false;
 
-        // Direction off the live drive keys, in world space; default straight ahead.
+        // Direction off the live drive keys, in world space; default straight ahead — which
+        // is also what an empty frame gives, so a lurch nobody is steering still kicks.
         Vector2 fwd = Forward;
         var right = new Vector2(-fwd.Y, fwd.X);
         Vector2 dir = Vector2.Zero;
-        if (InputMap.Forward) dir += fwd;
-        if (InputMap.Back) dir -= fwd;
-        if (InputMap.TurnRight) dir += right;
-        if (InputMap.TurnLeft) dir -= right;
+        if (input.Forward) dir += fwd;
+        if (input.Back) dir -= fwd;
+        if (input.TurnRight) dir += right;
+        if (input.TurnLeft) dir -= right;
         if (dir.LengthSquared() < 1e-4f) dir = fwd;
         dir = Vector2.Normalize(dir);
 
@@ -921,7 +936,7 @@ public sealed class PlayerTank
     /// hull sideways instead. Both carry momentum, so the craft leans into a move and
     /// coasts out of it rather than snapping, which is the whole of how the class drives.
     /// </summary>
-    private void UpdateDrive(float dt)
+    private void UpdateDrive(float dt, in InputFrame input)
     {
         // Rooted (the spider winding its lance) and planted (the tank dug in) both refuse
         // the throttle — the craft coasts to a stop under the drag below and takes no drive.
@@ -929,8 +944,8 @@ public sealed class PlayerTank
 
         // Forward / back.
         float fwd = 0f;
-        if (!locked && InputMap.Forward) fwd += 1f;
-        if (!locked && InputMap.Back) fwd -= 1f;
+        if (!locked && input.Forward) fwd += 1f;
+        if (!locked && input.Back) fwd -= 1f;
 
         if (fwd > 0f)
             _speed += Accel * DriveScale * dt;
@@ -947,8 +962,8 @@ public sealed class PlayerTank
         // Left steps toward the craft's screen-right-negated side; the sign matches the
         // (-fwd.Y, fwd.X) right axis the integrator applies it along, so D is right.
         float lat = 0f;
-        if (!locked && InputMap.TurnRight) lat += 1f;
-        if (!locked && InputMap.TurnLeft) lat -= 1f;
+        if (!locked && input.TurnRight) lat += 1f;
+        if (!locked && input.TurnLeft) lat -= 1f;
 
         if (lat != 0f)
             _strafe += lat * Accel * DriveScale * dt;
@@ -976,11 +991,11 @@ public sealed class PlayerTank
         return true;
     }
 
-    private void UpdateJump(float dt)
+    private void UpdateJump(float dt, in InputFrame input)
     {
         // Jumping is a Hyper move: a quarter of the bar, and simply refused if the
         // reserve can't pay — or if the chassis is a TANK, which never can. See TryJump.
-        if (InputMap.JumpPressed) TryJump();
+        if (input.JumpPressed) TryJump();
 
         if (IsAirborne || _verticalVel > 0f)
         {

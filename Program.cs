@@ -8,6 +8,18 @@ using VoidTanks.Core;
 if (args.Contains("--selftest"))
     return SelfTest.Run();
 
+// Is multiplayer going to work on this machine? Answers without opening a window, so it
+// can be run on a friend's PC before working out why the game won't connect.
+if (args.Contains("--steamcheck"))
+{
+    bool ok = VoidTanks.Net.SteamNet.Start();
+    Console.WriteLine(ok
+        ? $"STEAM OK — your join code is {VoidTanks.Net.SteamNet.LocalCode}"
+        : $"STEAM UNAVAILABLE — {VoidTanks.Net.SteamNet.Trouble}");
+    if (ok) VoidTanks.Net.SteamNet.Stop();
+    return ok ? 0 : 1;
+}
+
 Raylib.SetConfigFlags(ConfigFlags.VSyncHint);
 Raylib.InitWindow(Config.WindowWidth, Config.WindowHeight, "VOID TANKS");
 Raylib.SetExitKey(KeyboardKey.Null); // Escape is handled in the loop, not by Raylib

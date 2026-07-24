@@ -98,7 +98,7 @@ internal static class MenuRenderer
 
         DrawItem(font, "SINGLE PLAYER", Menu.Item.SinglePlayer, menu, y, null);
         DrawItem(font, "SETTINGS", Menu.Item.Settings, menu, y + step, null);
-        DrawItem(font, "MULTIPLAYER", Menu.Item.Multiplayer, menu, y + step * 2, "UNAVAILABLE");
+        DrawItem(font, "MULTIPLAYER", Menu.Item.Multiplayer, menu, y + step * 2, null);
     }
 
     private static void DrawItem(Font font, string label, Menu.Item item, Menu menu, int y, string? tag)

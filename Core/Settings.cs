@@ -134,6 +134,19 @@ public sealed class Settings
             ? Pressed(KeyboardKey.LeftShift) || Pressed(KeyboardKey.RightShift)
             : Pressed(KeyboardKey.Space);
 
+    // Held twins of the two above. The sim reads its input through InputFrame now, which
+    // carries held state and works out the edges itself against the last tick that
+    // actually ran — so what it needs from a rebindable button is whether the key is
+    // down, not whether raylib saw it go down during this render frame. The Pressed()
+    // versions stay: the menus are still driven straight off the keyboard, and they
+    // are polled exactly once per frame where the distinction cannot arise.
+    public bool HyperspaceDown() => Down(KeyboardKey.X);
+
+    public bool JumpDown() =>
+        Fire == FireKey.Space
+            ? Down(KeyboardKey.LeftShift) || Down(KeyboardKey.RightShift)
+            : Down(KeyboardKey.Space);
+
     private static bool Down(KeyboardKey k) => Raylib.IsKeyDown(k);
     private static bool Pressed(KeyboardKey k) => Raylib.IsKeyPressed(k);
 

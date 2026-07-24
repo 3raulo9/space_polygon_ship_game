@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Raylib_cs;
 using VoidTanks.Core;
 using VoidTanks.Entities;
@@ -515,6 +515,15 @@ public sealed class Renderer : IDisposable
     /// the spot over the grid, with the 2D stat overlay on top. The camera holds
     /// still and low, a few units back, so the turntable does all the moving.
     /// </summary>
+    /// <summary>The multiplayer front door — host/join, the code, the host's rules.</summary>
+    public void DrawLobby(UI.LobbyScreen screen, float elapsed)
+    {
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+        LobbyRenderer.Draw(screen, elapsed);
+        Raylib.EndTextureMode();
+    }
+
     public void DrawTest(UI.TestScreen screen, float elapsed)
     {
         // Fixed low three-quarter view onto the specimen at the origin. The

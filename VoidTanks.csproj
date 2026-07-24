@@ -12,10 +12,21 @@
 
   <ItemGroup>
     <PackageReference Include="Raylib-cs" Version="8.0.0" />
+    <PackageReference Include="Steamworks.NET" Version="2024.8.0" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Steam reads this from the working directory to know which app it is. 480 is
+         Spacewar, the shared test app: it lets any Steam account run the game without a
+         paid App ID. Replace with the real one before shipping. -->
+    <None Include="steam_appid.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Steam's native library. Not shipped by the Steamworks.NET NuGet package — drop
+         steam_api64.dll (from the Steamworks SDK, redistributable_bin\win64) beside this
+         file and it travels to the output. Multiplayer is disabled without it; single
+         player neither needs nor notices it. -->
+    <None Include="steam_api64.dll" Condition="Exists('steam_api64.dll')"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Raylib_cs;
 using VoidTanks.Entities;
 using VoidTanks.Input;
@@ -35,6 +35,21 @@ public sealed class Game : IDisposable
     private World.World? _world;
     private GameState _state = GameState.Menu;
 
+    // Reads the keyboard once per frame and rations it out to the fixed steps. Everything
+    // the sim knows about the player's hands arrives through this and nothing else, which
+    // is what lets the same world be driven by a recording, a test, or a second player.
+    private readonly InputSampler _input = new();
+
+    // --- Multiplayer -------------------------------------------------------------
+    // All null in a solo run, which is the point: single player and multiplayer are
+    // separate modes, and nothing below is constructed until the second one is chosen.
+    private readonly LobbyScreen _lobby = new();
+    private Net.SteamNet? _steam;
+    private Net.Session? _session;
+
+    /// <summary>True while a match is running, so the loop knows to pump the wire.</summary>
+    private bool InMatch => _session != null;
+
     // Pause pixel-blur amount: 0 clean, 1 fully coarsened/dimmed. Eases in when
     // pausing, out when resuming. Seconds for a full sweep set by PauseFade.
     private float _pauseBlur;
@@ -63,7 +78,7 @@ public sealed class Game : IDisposable
     private readonly string? _captureScreen =
         Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU");
     private bool _captureMenu =>
-        _captureScreen is "1" or "menu" or "settings" or "test" or "class";
+        _captureScreen is "1" or "menu" or "settings" or "test" or "class" or "lobby";
     private int _frame;
 
     /// <summary>Capture-only: the harness is holding the SPIDER's lance charge, so no
@@ -127,9 +142,18 @@ public sealed class Game : IDisposable
             // through it still finishes rather than stranding a half-played death.
             Audio.Update();
 
+            // Steam's own callbacks — connection state changes arrive through these. Cheap
+            // and harmless when Steam never came up.
+            Net.SteamNet.RunCallbacks();
+
             if (_capturePath != null && RunCaptureFrame()) break;
 
             SyncCursor();
+
+            // The one place a live device becomes simulation input. Read once here, then
+            // handed to the fixed steps below one frame at a time — see InputSampler for
+            // why the edges have to be counted rather than re-polled per step.
+            _input.Sample();
 
             // F11 flips borderless fullscreen from any screen. The Renderer already
             // rescales the low-res target off the live window size each Present, so
@@ -160,6 +184,13 @@ public sealed class Game : IDisposable
                 // LAUNCH tears down the hangar and starts a fade, which owns the next
                 // frame — so only draw the hangar while we're actually still in it.
                 if (_state == GameState.ClassSelect && !_fading) DrawClassSelect();
+                continue;
+            }
+
+            if (_state == GameState.Lobby)
+            {
+                UpdateLobby();
+                if (_state == GameState.Lobby && !_fading) DrawLobby();
                 continue;
             }
 
@@ -253,7 +284,20 @@ public sealed class Game : IDisposable
 
             while (_accumulator >= Config.FixedDt)
             {
-                Update((float)Config.FixedDt);
+                InputFrame frame = _input.Next();
+
+                // The wire turns before the world does: a client's frame goes up and the
+                // host's account comes down, so the step that follows runs on the freshest
+                // thing either machine knows.
+                if (_session is { } net && _state == GameState.Playing)
+                {
+                    // A crafting panel is this machine's business — clear the combat bits
+                    // before they are sent rather than making the host reason about it.
+                    if (_inventoryOpen) frame = frame.WithoutCombat();
+                    net.Pump(frame);
+                }
+
+                Update((float)Config.FixedDt, frame);
                 _accumulator -= Config.FixedDt;
             }
 
@@ -300,6 +344,12 @@ public sealed class Game : IDisposable
         }
 
         _mouseCaptured = wantCapture;
+        // Either edge of the capture is a seam in what the sim was allowed to see, so the
+        // held state is dropped across it. Without this, a key still down when the pause
+        // panel came up is not an edge when play resumes (the sim never saw it go down),
+        // and a key released behind the panel would leave its bit stuck on.
+        _input.Forget();
+
         if (wantCapture)
         {
             Raylib.DisableCursor();
@@ -327,6 +377,13 @@ public sealed class Game : IDisposable
                 // still runs, so the menu dissolves into the hangar the same way it
                 // used to dissolve into the grid.
                 BeginFade(() => _state = GameState.ClassSelect);
+                break;
+            case Menu.Action.StartMultiplayer:
+                // The other mode. Steam comes up here rather than at boot, so a player who
+                // only ever plays alone never waits on it and never sees it fail.
+                Net.SteamNet.Start();
+                _lobby.Trouble = null;
+                BeginFade(() => _state = GameState.Lobby);
                 break;
             case Menu.Action.OpenSettings:
                 _state = GameState.Settings;
@@ -509,7 +566,15 @@ public sealed class Game : IDisposable
             case GameState.ClassSelect: _renderer.DrawClassSelect(_classSelect, _menuTime); break;
             case GameState.Settings: _renderer.DrawSettings(_settingsScreen, _menuTime); break;
             case GameState.Test: _renderer.DrawTest(_testScreen, _menuTime); break;
-            default: _renderer.DrawWorld(_world!); break; // Playing / Paused
+            case GameState.Lobby: _renderer.DrawLobby(_lobby, _menuTime); break;
+            // Playing / Paused — but only if there is actually a world to draw. Every
+            // screen above is worldless, and a state that reaches the default branch
+            // without one would dereference null mid-transition, which is exactly what
+            // adding the lobby did before it was listed here.
+            default:
+                if (_world != null) _renderer.DrawWorld(_world);
+                else _renderer.DrawMenu(_menu, _menuTime);
+                break;
         }
         _renderer.ApplyPixelDissolve(_fade);
         _renderer.Present();
@@ -541,15 +606,86 @@ public sealed class Game : IDisposable
         Audio.PlayBlip();
     }
 
+    private void UpdateLobby()
+    {
+        _menuTime += Raylib.GetFrameTime();
+
+        // Keep the roster line honest while people arrive.
+        if (_session?.World is { } w) _lobby.Seated = w.Players.Count;
+
+        // A dial that failed, or a host that went away, puts the player back on the choice
+        // rather than leaving them watching dots forever.
+        if (_steam is { Dropped: { } why }) { _lobby.Fail(why); TearDownMatch(); }
+
+        switch (_lobby.Update())
+        {
+            case LobbyScreen.Action.Back:
+                TearDownMatch();
+                BeginFade(ReturnToMenu);
+                break;
+
+            case LobbyScreen.Action.HostMatch:
+                _steam = Net.SteamNet.Host();
+                if (_steam == null) { _lobby.Fail("COULD NOT OPEN A SOCKET"); break; }
+                // The host builds the world now so joiners have seats to be put in; it is
+                // not stepped until LAUNCH.
+                _session = new Net.Session(_steam, host: true);
+                _session.HostMatch(new World.World(_loadout, _lobby.Match.Clamped()));
+                break;
+
+            case LobbyScreen.Action.JoinMatch:
+                _steam = Net.SteamNet.Connect(_lobby.Typed);
+                if (_steam == null) { _lobby.Fail("THAT IS NOT A CODE"); break; }
+                _session = new Net.Session(_steam, host: false);
+                _session.JoinMatch(new World.World(_loadout) { DynamicSpawning = false });
+                _session.SendHello(_loadout.Class);
+                break;
+
+            case LobbyScreen.Action.Launch:
+                if (_session?.World is { } ready)
+                {
+                    _world = ready;
+                    _inventoryOpen = false;
+                    BeginFade(() => _state = GameState.Playing);
+                }
+                break;
+        }
+
+        // A client is dropped into the world the moment the host answers — there is no
+        // launch button on that end, the host owns when the match starts.
+        if (_session is { IsHost: false, LocalSeat: >= 0 } joined && joined.World is { } jw)
+        {
+            _world = jw;
+            _inventoryOpen = false;
+            BeginFade(() => _state = GameState.Playing);
+        }
+    }
+
+    private void DrawLobby()
+    {
+        _renderer.DrawLobby(_lobby, _menuTime);
+        _renderer.Present();
+    }
+
+    /// <summary>Closes the wire and forgets the match. Single player never touches this.</summary>
+    private void TearDownMatch()
+    {
+        _steam?.Dispose();
+        _steam = null;
+        _session = null;
+    }
+
     private void EnterSinglePlayer()
     {
-        _world = new World.World(_loadout);
+        // Explicitly the solo match: one seat, sealed, nobody can be dropped into it.
+        _world = new World.World(_loadout, MatchSettings.SinglePlayer);
         _state = GameState.Playing;
         _inventoryOpen = false;
     }
 
     private void ReturnToMenu()
     {
+        TearDownMatch();
         _world = null;
         _state = GameState.Menu;
         _accumulator = 0;
@@ -582,7 +718,8 @@ public sealed class Game : IDisposable
             // previous (blank) frame.
             for (int i = 0; i < 2; i++)
             {
-                if (_captureScreen == "settings") _renderer.DrawSettings(_settingsScreen, _menuTime);
+                if (_captureScreen == "lobby") _renderer.DrawLobby(_lobby, _menuTime);
+                else if (_captureScreen == "settings") _renderer.DrawSettings(_settingsScreen, _menuTime);
                 else if (_captureScreen == "class") _renderer.DrawClassSelect(_classSelect, _menuTime);
                 else if (_captureScreen == "test") _renderer.DrawTest(_testScreen, _menuTime);
                 else _renderer.DrawMenu(_menu, _menuTime);
@@ -829,7 +966,9 @@ public sealed class Game : IDisposable
         // isn't the grab returns false, and the ordinary loop then steps the world a
         // *second* time with input live, which would fire the charge anyway.
         _lanceHold = lance == "hold";
-        _world!.Update((float)Config.FixedDt, acceptCombatInput: !_lanceHold);
+        // An empty frame: the capture harness holds no keys, and the poses it wants are
+        // driven by the scripted hooks on World rather than by anything a hand would do.
+        _world!.Update((float)Config.FixedDt, InputFrame.Empty, acceptCombatInput: !_lanceHold);
 
         if (lance != null && _world!.Player.Spider is { } cap)
         {
@@ -954,14 +1093,14 @@ public sealed class Game : IDisposable
         return false;
     }
 
-    private void Update(float dt)
+    private void Update(float dt, in InputFrame input)
     {
         switch (_state)
         {
             case GameState.Playing:
                 // Combat triggers are muted while the crafting panel is up so a click
                 // on an item slot can't also fire the cannon; movement still runs.
-                _world!.Update(dt, acceptCombatInput: !_inventoryOpen && !_lanceHold);
+                _world!.Update(dt, input, acceptCombatInput: !_inventoryOpen && !_lanceHold);
                 break;
         }
     }
