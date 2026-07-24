@@ -24,6 +24,15 @@ public enum VirusHost
     /// <summary>The Maw-Core, worn. It never learned to stand, so neither do you: this is
     /// the one host that hovers, and it spits the mouth's own acid bolts.</summary>
     Maw,
+
+    /// <summary>
+    /// A person, worn — one of the enemy squads' soldiers, taken while the corruption had
+    /// hold of them. The only host in the game that is not a downgrade in mobility: every
+    /// other body trades your speed for its armour, and this one has no armour to trade. It
+    /// rots twice as fast as a hunter and soaks a fraction as much, and in exchange you get
+    /// the thing no other body on the roster has — their kit. Two hooks and the whole city.
+    /// </summary>
+    Soldier,
 }
 
 /// <summary>
@@ -74,7 +83,7 @@ public sealed class VirusRig
 
     /// <summary>How hard the mote accelerates along the look, in m/s². Brisk: this is a
     /// speck of code, not a machine leaning into its own weight.</summary>
-    private const float MoteAccel = 60f;
+    private const float MoteAccel = 74f;
 
     /// <summary>Drag on the mote while it is being flown, per second (exponential). Sets
     /// how slippery it feels — high enough to stop, low enough to slide.</summary>
@@ -84,11 +93,17 @@ public sealed class VirusRig
     /// rather than drifting off across the arena on its own.</summary>
     private const float MoteIdleDrag = 5.5f;
 
-    /// <summary>The mote's top speed as a multiple of the craft's own — so the SPEED track
-    /// still means what it means everywhere else, and a fast build genuinely runs down a
-    /// hunter while a slow one has to ambush one. Well over a hunter's own pace at every
-    /// build, because catching a body is the entire job of the exposed state.</summary>
-    private const float MoteTopScale = 1.55f;
+    /// <summary>
+    /// The mote's top speed as a multiple of the craft's own — so the SPEED track still
+    /// means what it means everywhere else, and a fast build genuinely runs down a hunter
+    /// while a slow one has to ambush one. Well over a hunter's own pace at every build,
+    /// because catching a body is the entire job of the exposed state.
+    ///
+    /// Raised from 1.55 once people became bodies worth taking. A hunter can be caught at
+    /// any speed because it drives; a soldier crosses the sky at thirty-four metres a second
+    /// on a cable, and a mote that could not beat that was a mote that could never take one.
+    /// </summary>
+    private const float MoteTopScale = 1.9f;
 
     /// <summary>How far the mote steps sideways compared with driving forward. Enough to
     /// juke, not a second full gear.</summary>
@@ -178,6 +193,14 @@ public sealed class VirusRig
     private const float EliteToughness = 1.5f;
     private const float CrabToughness = 3f;
     private const float MawToughness = 2.5f;
+
+    /// <summary>
+    /// And a person, which goes the other way. This is the number that makes the soldier
+    /// host a genuine decision rather than a strict upgrade: worn, you are quicker and can
+    /// go anywhere in the city, and you are made of cloth. Under half a hunter's clock and
+    /// under half its buffer — a body you take to <em>get somewhere</em>, not to survive in.
+    /// </summary>
+    private const float SoldierToughness = 0.4f;
 
     /// <summary>What fraction of the craft's own shield a standard host is worth as a
     /// damage buffer. The SHIELD track therefore buys host integrity rather than a wall
@@ -275,8 +298,17 @@ public sealed class VirusRig
         VirusHost.Hunter or VirusHost.Elite => HunterEyeHeight,
         VirusHost.Crab => CrabEyeHeight,
         VirusHost.Maw => MawEyeHeight,
+        VirusHost.Soldier => SoldierRig.EyeHeight,
         _ => MoteEyeHeight,
     };
+
+    /// <summary>
+    /// The cable rig of a worn soldier, or null for every other state. Held here rather than
+    /// on the player, because it belongs to the <em>body</em> and dies with it: an ejection
+    /// drops it on the floor with the husk, and the next one you take is a fresh set of
+    /// launchers with a fresh pair of hooks in them.
+    /// </summary>
+    public SoldierRig? WornRig { get; private set; }
 
     /// <summary>Broadband view shake, 0..1 — a possession landing, a hit soaked by the
     /// host, an overload going off in the player's own face.</summary>
@@ -327,11 +359,18 @@ public sealed class VirusRig
         Velocity = Vector3.Zero;
         ExposureTime = 0f;
 
+        // A worn person comes with their kit, and the kit is the whole reason to wear one.
+        // It is the player's own SOLDIER rig, unmodified — the same cables, the same
+        // constraint solver, the same slingshot — because a stolen body's launchers are not
+        // a different piece of equipment, they are that piece of equipment in worse hands.
+        WornRig = kind == VirusHost.Soldier ? new SoldierRig() : null;
+
         float toughness = kind switch
         {
             VirusHost.Elite => EliteToughness,
             VirusHost.Crab => CrabToughness,
             VirusHost.Maw => MawToughness,
+            VirusHost.Soldier => SoldierToughness,
             _ => 1f,
         };
         _decayRate = 1f / (DecayLifetime * toughness);
@@ -429,6 +468,10 @@ public sealed class VirusRig
     {
         HostKind = VirusHost.None;
         Decay = 0f;
+        // The kit goes with the body. Whatever cables were out are dropped where they were,
+        // which is the honest thing: a mote has no hands to hold a launcher with.
+        WornRig?.ReleaseBoth();
+        WornRig = null;
         JustEjected = true;
         EjectWasOverload = overload;
         ExposureTime = 0f;
@@ -459,6 +502,7 @@ public sealed class VirusRig
         {
             case VirusHost.None: StepMote(dt, p); break;
             case VirusHost.Maw: StepHover(dt, p); break;
+            case VirusHost.Soldier: StepWornSoldier(dt, p); break;
             default: StepGroundedHost(dt, p); break;
         }
 
@@ -489,6 +533,32 @@ public sealed class VirusRig
     private void StepHover(float dt, PlayerTank p)
     {
         Fly(dt, p, MawHostAccel, MawTopSpeed, floor: MawHoverFloor);
+        StepDecay(dt);
+    }
+
+    /// <summary>
+    /// A worn soldier's step: hand the whole of the transform to their own rig and let it do
+    /// exactly what it does for the chassis that owns one. The virus contributes nothing to
+    /// how this body moves — that is the point of wearing it — and only keeps its own book:
+    /// the movement input passes through, and the husk goes on rotting underneath.
+    ///
+    /// Their velocity is mirrored back onto <see cref="Velocity"/> afterwards so everything
+    /// that reads the virus's speed (the wind, the HUD, the screen rush) sees the swing
+    /// rather than a stale zero.
+    /// </summary>
+    private void StepWornSoldier(float dt, PlayerTank p)
+    {
+        if (WornRig is not { } rig)
+        {
+            // Defensive: a Soldier host with no rig cannot happen through Possess, and if it
+            // ever did the body would simply be inert. Rot it out rather than freeze.
+            StepDecay(dt);
+            return;
+        }
+
+        rig.MoveInput = MoveInput;
+        rig.Step(dt, p);
+        Velocity = rig.Velocity;
         StepDecay(dt);
     }
 

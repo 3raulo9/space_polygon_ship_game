@@ -60,6 +60,20 @@ public sealed class Renderer : IDisposable
         };
     }
 
+    /// <summary>
+    /// The dark an unhosted mote sees the world through. One flat rectangle of the void's
+    /// own colour, heavy enough that the city stops being scenery and starts being a shape
+    /// you half-remember, light enough that a player can still tell up from down and find a
+    /// wall they were about to fly past. Slightly blind, rather than blind: the difference
+    /// is the whole playability of the exposed state.
+    /// </summary>
+    private static void DrawMurk()
+        => Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(Palette.Void.R, Palette.Void.G, Palette.Void.B, MurkAlpha));
+
+    /// <summary>How far the world is sunk while the mote has no body. Two-thirds under.</summary>
+    private const byte MurkAlpha = 172;
+
     /// <summary>Renders the world from the player's eye into the low-res target.</summary>
     public void DrawWorld(World.World world)
     {
@@ -262,6 +276,23 @@ public sealed class Renderer : IDisposable
         // blit them the same way the inventory panel does.
         _itemIcons.Render((float)Raylib.GetTime());
 
+        // An exposed VIRUS mote has no body, and a thing with no body barely has eyes. It
+        // still gets the world — the city, the grid, the sky are all there — but sunk most
+        // of the way into the dark, because what it is doing is not looking. What it does
+        // have is a sense of <em>disturbance</em>, and that comes back bright: anything
+        // moving near it is drawn again over the murk as a hard white outline, so a squad
+        // crossing the sky is unmistakable while the tower they are swinging round is a
+        // suggestion. See EntityRenderer.DrawUnseen.
+        //
+        // The murk is a flat pass between the two 3D passes rather than a tint on every
+        // draw, which costs one rectangle and leaves the outlines free to sit over it at
+        // full strength — and because it writes no depth, the second pass still occludes
+        // correctly against the world underneath.
+        //
+        // A cinematic is exempt: a set piece that has hold of the player is a picture they
+        // have to be able to read.
+        bool unseeing = player.Virus is { Exposed: true } && !player.Captured;
+
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void); // never pure black
         SkyRenderer.Draw(_camera, (float)Raylib.GetTime());
@@ -270,6 +301,14 @@ public sealed class Renderer : IDisposable
         GridRenderer.Draw(player.Position);
         _entities.Draw(world, eye);
         Raylib.EndMode3D();
+
+        if (unseeing)
+        {
+            DrawMurk();
+            Raylib.BeginMode3D(_camera);
+            _entities.DrawUnseen(world, eye, (float)Raylib.GetTime());
+            Raylib.EndMode3D();
+        }
 
         // The core blazing in the player's face while it screams at them. This is a
         // first-person game, so there is no craft on screen to light up — the only
@@ -516,7 +555,7 @@ public sealed class Renderer : IDisposable
         else
         {
             float heading = elapsed * 0.6f; // slow turntable spin
-            _entities.DrawShowcase(screen.Current.Kind, specimen, heading, eye);
+            _entities.DrawShowcase(screen.Current.Kind, specimen, heading, eye, elapsed);
         }
         Raylib.EndMode3D();
 

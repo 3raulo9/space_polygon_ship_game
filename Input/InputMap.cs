@@ -58,6 +58,16 @@ public static class InputMap
     /// <summary>R: the AP slug — a heavy round that punches through a line and through cover.</summary>
     public static bool TankSlugPressed => Raylib.IsKeyPressed(KeyboardKey.R);
 
+    // --- The SPIDER --------------------------------------------------------------
+    // Two triggers and one key. The mouse buttons are read in the world (hold-and-release
+    // on both: the claw crushes then throws, the emitter winds then fires), so the only
+    // thing the map has to name is the legs.
+
+    /// <summary>Q: the pounce — a kick off a wall, on the same key the heavy chassis
+    /// dodges with. Both are "the thing this craft does with its legs", and no run ever
+    /// reads both.</summary>
+    public static bool SpiderPouncePressed => Raylib.IsKeyPressed(KeyboardKey.Q);
+
     public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
 
     /// <summary>
@@ -233,6 +243,11 @@ public static class InputMap
     // 'K' plants a Crab-Core dead ahead of the player, parked outside its own
     // detect radius so it stays dormant until you choose to walk into it.
     public static bool DebugSpawnCrabPressed => Raylib.IsKeyPressed(KeyboardKey.K);
+
+    // 'H' drops a four-man soldier squad onto a tower out in the fog — the only enemy
+    // that can't simply be planted in front of you, since the whole thing starts with
+    // them perched on something.
+    public static bool DebugSpawnSquadPressed => Raylib.IsKeyPressed(KeyboardKey.H);
 
     // 'J' hangs a Maw-Core well ahead of the player, parked outside its own detect
     // radius so it drifts nowhere until you walk under it. The mouth's twin of the

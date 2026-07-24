@@ -12,7 +12,7 @@ namespace VoidTanks.World;
 /// render/loop plumbing so the rules read in one place. Milestone 2 seeds a
 /// single enemy at range so it materializes out of the fog and hunts.
 /// </summary>
-public sealed class World
+public sealed class World : IAnchorField
 {
     public readonly PlayerTank Player;
 
@@ -22,6 +22,22 @@ public sealed class World
     public readonly Loadout Loadout;
 
     public readonly List<EnemyTank> Enemies = new();
+
+    /// <summary>
+    /// The soldier squads working the field. Each owns its four members and does nothing
+    /// but hand them a bearing and a turn; the flying is theirs. Squads that have been
+    /// wiped out are swept at the end of the step, exactly as dead hunters are.
+    /// </summary>
+    public readonly List<SoldierSquad> Squads = new();
+
+    /// <summary>
+    /// Every live soldier on the field, flat. The same objects the squads hold — this is
+    /// the list everything that does not care about squads (the renderer, the radar, every
+    /// damage sweep in the game) walks, so none of them has to iterate a nesting they have
+    /// no use for.
+    /// </summary>
+    public readonly List<EnemySoldier> Soldiers = new();
+
     public readonly DebrisSystem Debris = new();
 
     /// <summary>Floating salvage scattered on the grid — batteries and stray rounds.</summary>
@@ -180,6 +196,27 @@ public sealed class World
     private const float MawSpawnChance = 0.35f;
     private float _mawTimer;
 
+    // Soldier squads. Rarer and slower than everything else on this list, because a squad
+    // is four bodies rather than one and because they do not drift in and mill about —
+    // they arrive on a tower, watch, and then the fight is on until one side of it is
+    // dead. Two squads at once is already eight people in the air; three would be weather.
+    private const int MaxSquads = 2;
+    private const float SquadSpawnInterval = 16f;
+    private const float SquadSpawnChance = 0.5f;
+    private float _squadTimer;
+
+    /// <summary>What one of their rifle rounds costs. Well under a hunter's cannon shell —
+    /// a rifle is a rifle — but they fire far faster and there are four of them, so a squad
+    /// that has settled into its ring is doing more damage a second than any tank on the
+    /// field.</summary>
+    private const float SoldierShotDamage = 7f;
+
+    /// <summary>And what the blades cost on a pass that lands. Nearly twice a shell,
+    /// because a run is a whole committed arc with a wind-up you can watch coming, a
+    /// direction you can move out of and a soldier hanging helpless on a cable behind it.
+    /// If they connect anyway, they have earned it.</summary>
+    private const float SoldierBladeDamage = 20f;
+
     /// <summary>
     /// Builds a stage for the given hangar build. A null loadout is the standard TANK
     /// on a straight 5/5/5 — the craft this game had before the hangar existed — which
@@ -267,6 +304,44 @@ public sealed class World
             "swallow" => new MawCore(Vector2.Zero),
             _         => null,
         };
+
+        // A squad cannot be "placed near" the way a monster can — the whole opening is
+        // four people standing on a building, so the harness picks the nearest tower out
+        // in front of the craft and hangs them off that instead, then turns the view onto
+        // it. Which is exactly the picture the enemy is for: you look up at a spire and
+        // there are four of them on it.
+        if (Environment.GetEnvironmentVariable("VOIDTANKS_SQUAD_NEAR") is "1" or "track" or "pose")
+        {
+            DynamicSpawning = false;
+            Vector2 ahead = Torus.Wrap(Player.Position + Player.Forward * 70f);
+            SpawnSoldierSquad(ahead);
+            if (Soldiers.Count > 0) FaceTheSquad();
+        }
+    }
+
+    /// <summary>Capture harness only: points the craft at the squad it was just handed,
+    /// eyes up, so the picture is of the thing on the tower rather than of the tower. Kept
+    /// callable every frame so a capture can follow one of them through an arc, which is
+    /// the only way to photograph an enemy that spends its life moving.</summary>
+    public void FaceTheSquad()
+    {
+        if (Soldiers.Count == 0) return;
+
+        // The nearest of them, so a tracking capture follows whoever is actually in the
+        // fight rather than whichever one happens to be first in the list.
+        EnemySoldier mark = Soldiers[0];
+        float best = float.MaxValue;
+        foreach (var s in Soldiers)
+        {
+            float d = Torus.DistanceSquared(s.Position, Player.Position);
+            if (d >= best) continue;
+            best = d;
+            mark = s;
+        }
+
+        Vector2 to = Torus.Delta(Player.Position, mark.Position);
+        Player.Heading = MathF.Atan2(to.X, to.Y);
+        Player.Pitch = MathF.Atan2(mark.Height - Player.EyeHeight, MathF.Max(1f, to.Length()));
     }
 
     public IReadOnlyList<Projectile> Projectiles => _projectiles;
@@ -377,10 +452,18 @@ public sealed class World
     public void StepForTest(float dt)
     {
         Player.Update(dt);
+        // What the craft is standing on, before anything asks whether it is inside a
+        // building: a SPIDER that has just landed on a roof is up there for the whole of
+        // the rest of this tick, not from the next one.
+        ResolveRoofs();
         ResolveStructureCollisions();
+        // Thrown hulls fly on their own clock, before the hunters take their turn — a
+        // machine still in the air is not driving, and one that lands this tick should be
+        // back on the grid by the time anything measures the range to it.
+        UpdateFlungBodies(dt);
         // After the collision pass, so a swing that ended in a wall is one of the events
         // being drained rather than something that happens a tick later.
-        if (Player.Soldier is { } rig) UpdateSoldierEvents(rig, dt);
+        if (Player.Rig is { } rig) UpdateSoldierEvents(rig, dt);
         if (Player.Fish is { } body) UpdateFishEvents(body);
         if (Player.Virus is { } payload) UpdateVirusEvents(payload);
 
@@ -397,6 +480,12 @@ public sealed class World
                 && !SmokeBlocks(e.Position, Player.Position))
                 SpawnProjectile(eOrigin, eDir, fromPlayer: false, pitch: ePitch);
         }
+
+        // The soldier squads, stepped after the hunters and before anything that reads
+        // where a body ended up: they move furthest in a tick of anything on the field, and
+        // a blade pass scored against last tick's position would be a blade pass scored
+        // against thin air.
+        UpdateSquads(dt);
 
         // The tank's ram: with the enemies stepped to their spots this tick, a hull that is
         // genuinely driving into one crushes it. Runs before the projectile pass so a shoved
@@ -461,7 +550,14 @@ public sealed class World
         // down on a character. Run before the dead are swept so a hunter crushed this tick is
         // removed with the rest rather than lingering a frame.
         ResolveCrush(dt);
+        // Nothing goes to the sweep still in a hand. A catch can be finished by anything at
+        // all while it is up there — the squeeze, a stray round, a building coming down on
+        // it — and the claw must not be left holding a reference to a hull the world has
+        // stopped believing in.
+        if (Player.Claw is { Victim.Alive: false } claw) claw.Drop();
         Enemies.RemoveAll(e => !e.Alive);
+        Soldiers.RemoveAll(s => !s.Alive);
+        Squads.RemoveAll(sq => !sq.Alive);
     }
 
     // --- The skyline ------------------------------------------------------------
@@ -784,6 +880,13 @@ public sealed class World
     {
         if (Player.Captured) return;
 
+        // An exposed VIRUS mote passes straight through the city, and that is not a
+        // convenience — it is the other half of being blind. A payload with no body cannot
+        // see matter because it does not touch matter, and a player who has been told they
+        // cannot see the walls must not then be stopped by them. Take a body and the world
+        // becomes solid again in the same instant it becomes visible.
+        if (Player.Virus is { Exposed: true }) return;
+
         Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
 
         for (int i = 0; i < Structures.Count; i++)
@@ -794,7 +897,12 @@ public sealed class World
             // the field was a craft whose whole jump peaks at eight units, but a soldier
             // spends most of the run above the height of an arch's legs, and being
             // shoved sideways by a wall thirty metres beneath them would be absurd.
-            if (Player.Height > s.BlockHeight) continue;
+            //
+            // At the parapet exactly, the craft is standing on the roof rather than
+            // pressed against the wall (see ResolveRoofs, which put it there a moment ago)
+            // — so the test has to include its own height, or a SPIDER that has just
+            // landed on a tower is immediately shoved off the side of it.
+            if (Player.Height >= s.BlockHeight) continue;
 
             int n = s.Blockers(blockers);
             for (int b = 0; b < n; b++)
@@ -821,7 +929,7 @@ public sealed class World
                 // two just happened from the momentum it was carrying. A fish threading a
                 // reef is the same bargain at a lower threshold — it has no armour and the
                 // whole run is spent at speed between buildings.
-                Player.Soldier?.RegisterWallHit();
+                Player.Rig?.RegisterWallHit();
                 Player.Fish?.RegisterWallHit();
             }
         }
@@ -1133,6 +1241,18 @@ public sealed class World
             // Only ever one mouth, and never while one is already up there.
             if (Maw is null && Random.Shared.NextSingle() < MawSpawnChance)
                 Maw = new MawCore(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange));
+        }
+
+        _squadTimer += dt;
+        if (_squadTimer >= SquadSpawnInterval)
+        {
+            _squadTimer = 0f;
+            // Squads are never released to make room for a new one the way hunters are: a
+            // squad is a fight with a beginning and an end, and quietly deleting four
+            // people mid-arc to let four more fade in would be nonsense. Under the cap they
+            // arrive; at it, nothing happens until one is finished with.
+            if (Squads.Count < MaxSquads && Random.Shared.NextSingle() < SquadSpawnChance)
+                SpawnSoldierSquad();
         }
     }
 
@@ -1470,6 +1590,19 @@ public sealed class World
             Player.Jolt(0.35f);
             Audio.PlayDetonation();   // the crunch of the hull meeting a hull
         }
+
+        // A soldier who has been put on the grid is, for as long as that lasts, a person
+        // standing in front of a tank. The hull does not need to be told what to do about
+        // that, and the reach is tighter because there is much less of them to hit.
+        float personReach = PlayerTank.Radius + EnemySoldier.Radius;
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive || s.Height > EnemySoldier.BodyHeight) continue;
+            if (!WithinHit(Player.Position, s.Position, personReach)) continue;
+            DamageSoldier(s, RamDamage * (0.6f + over) * 2f);
+            Player.Jolt(0.2f);
+            Audio.PlayDetonation();
+        }
     }
 
     /// <summary>
@@ -1531,6 +1664,10 @@ public sealed class World
             if (!e.Alive) continue;
             if (WithinHit(p.Position, e.Position, reach)) DamageEnemy(e, GrenadeDamage);
         }
+
+        // A soldier caught by the burst, which for a shell coming down on the grid mostly
+        // means one who had already been put on it.
+        DamageSoldiersInBlast(p.Position, at.Y, p.SplashRadius, GrenadeDamage);
 
         // The two monsters are bitten by planar proximity, not at the burst's own height: the
         // shell comes down on the grid far below the core or crystal, so a height-gated check
@@ -1596,23 +1733,42 @@ public sealed class World
     /// </summary>
     private void UpdateSpiderTriggers(SpiderWeapon spider, float dt)
     {
-        // A cinematic has hold of the craft: nothing is charging and nothing is rooted,
-        // and any wound-up meter is dropped rather than fired into a claw.
+        SpiderClaw claw = Player.Claw!;
+
+        // A cinematic has hold of the craft: nothing is charging, nothing is rooted, the
+        // hands are empty. A wound-up meter is stowed rather than fired into a claw, and
+        // whatever was being carried is dropped — the boss is about to pick the player up,
+        // and it is not picking up two of them.
         if (Seizure is { Held: true })
         {
             spider.Cancel();
+            ReleaseHeldBody(claw);
             Audio.SetLanceCharge(false, 0f);
             Player.Rooted = false;
             return;
         }
 
-        if (InputMap.Grenade)
+        // A body crushed to nothing in the hand — or swept out of the world by anything
+        // else while it was in there — is let go before any of this reads the claw.
+        if (claw.Victim is { Alive: false }) ReleaseHeldBody(claw);
+
+        // The legs. Off the triggers entirely, so a climb can be made with the hands full
+        // or the meter half wound.
+        if (InputMap.SpiderPouncePressed) TrySpiderPounce();
+
+        // The right trigger: the lance. Refused outright while the claw is full, and that
+        // is the whole relationship between the two — this chassis has one pair of front
+        // limbs, and they are either holding a machine or braced around a charge.
+        if (InputMap.Grenade && !claw.Holding)
         {
             spider.Hold(dt);
-            Player.Rooted = true;
+            // Rooted for exactly as long as the meter is actually winding, so a trigger
+            // held through a break lockout doesn't pin the craft to the spot for a beat
+            // it is getting nothing for.
+            Player.Rooted = spider.Charging;
             // The whine climbs with the meter, so the player can hear how loaded the
             // shot is while they are busy watching the thing that is walking at them.
-            Audio.SetLanceCharge(true, spider.ChargeFraction);
+            Audio.SetLanceCharge(spider.Charging, spider.ChargeFraction);
             return;
         }
 
@@ -1625,7 +1781,255 @@ public sealed class World
             return;
         }
 
-        if (InputMap.Fire) FirePlayerShot(laser: true);
+        UpdateSpiderClaw(claw, dt);
+    }
+
+    // --- The claw ------------------------------------------------------------------
+
+    /// <summary>
+    /// Reads the left trigger, which does one of two things depending on what is standing
+    /// in front of the craft. With a hunter inside the claw's reach it closes on it; with
+    /// nothing there it is the emitter's ordinary fire, routed through the craft's cannon
+    /// path so it costs and cools identically to a tank's round.
+    ///
+    /// The contextual split is deliberate and it is the only way the two fit on one
+    /// button: the ranges do not overlap. Anything close enough to grab is close enough
+    /// that shooting it was never the interesting option, and anything far enough to be
+    /// worth shooting is far out of arm's reach. The player never has to choose which one
+    /// they meant — the field has already chosen.
+    ///
+    /// While something is in the hand the same trigger is the hold: down squeezes, and the
+    /// frame it comes up the body is thrown. Same grammar as the lance, one limb over.
+    /// </summary>
+    private void UpdateSpiderClaw(SpiderClaw claw, float dt)
+    {
+        if (claw.Holding)
+        {
+            if (!InputMap.Fire)
+            {
+                ThrowHeldBody(claw);
+                return;
+            }
+
+            // Carried out in front of the core, turned to face the way the player is —
+            // which is what makes it cover as well as cargo (see ShieldsFrom, below).
+            Vector2 grip = Torus.Wrap(Player.Position + Player.Forward * SpiderClaw.HoldReach);
+            float lift = Player.Height + SpiderClaw.HoldHeight;
+            float bite = claw.Hold(dt, grip, lift, Player.Heading);
+            if (bite > 0f && claw.Victim is { } held) DamageEnemy(held, bite);
+            return;
+        }
+
+        if (!InputMap.Fire) return;
+
+        if (NearestGrabbable() is { } prey && claw.TryGrab(prey))
+        {
+            // The same brutal mechanical snap the boss's clamp display makes, now with
+            // something else in it. The hull rocks as it takes the weight.
+            Audio.PlayClamp();
+            Player.Jolt(0.3f);
+            return;
+        }
+
+        FirePlayerShot(laser: true);
+    }
+
+    /// <summary>
+    /// The nearest hunter the claw could close on: alive, not already in a hand or in the
+    /// air, inside <see cref="SpiderClaw.Reach"/> of the craft, and roughly level with it
+    /// — a machine forty metres below a craft standing on a roof is not within arm's
+    /// reach however good the planar distance looks.
+    /// </summary>
+    private EnemyTank? NearestGrabbable()
+    {
+        EnemyTank? best = null;
+        float bestSq = SpiderClaw.Reach * SpiderClaw.Reach;
+
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive || e.Grabbed || e.Flung) continue;
+            if (MathF.Abs(Player.Height - e.Height) > EnemyTank.BodyHeight) continue;
+
+            float d = Torus.DistanceSquared(e.Position, Player.Position);
+            if (d > bestSq) continue;
+            bestSq = d;
+            best = e;
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// Hurls whatever is in the claw down the craft's full look line and stages the
+    /// world's half of it. The body flies on its own from here (see
+    /// <see cref="UpdateFlungBodies"/>); what happens here is only the launch.
+    /// </summary>
+    private void ThrowHeldBody(SpiderClaw claw)
+    {
+        if (claw.Throw(Player.Forward3) is null) return;
+        Audio.PlayThrowWhoosh();
+        Player.Jolt(0.2f);
+    }
+
+    /// <summary>Opens the hand without throwing — a crushed catch, a cinematic, the
+    /// crafting panel. The body drops where it stands.</summary>
+    private void ReleaseHeldBody(SpiderClaw claw) => claw.Drop();
+
+    /// <summary>
+    /// Steps every hull currently in the air after being thrown, and lands the ones that
+    /// have met the grid. A thrown machine is a heavy object travelling fast: what it
+    /// comes down on wears it, and so does the thing that was thrown — worse, in fact,
+    /// which is what keeps a throw a way of spending a hostage rather than a way of
+    /// farming one.
+    /// </summary>
+    private void UpdateFlungBodies(float dt)
+    {
+        for (int i = 0; i < Enemies.Count; i++)
+        {
+            var e = Enemies[i];
+            if (!e.Flung) continue;
+
+            e.Toss = e.Toss with { Y = e.Toss.Y - SpiderClaw.ThrowGravity * dt };
+            e.Position = Torus.Wrap(e.Position + new Vector2(e.Toss.X, e.Toss.Z) * dt);
+            e.Height += e.Toss.Y * dt;
+            // Turned along its own flight, so a thrown hull tumbles nose-first rather than
+            // sailing across the arena still politely facing the way it was parked.
+            e.Heading = MathF.Atan2(e.Toss.X, e.Toss.Z);
+
+            if (e.Height > 0f) continue;
+            LandFlungBody(e);
+        }
+    }
+
+    /// <summary>The moment a thrown hull meets the grid: the impact, what it costs
+    /// everything standing there, and the wreckage it throws off.</summary>
+    private void LandFlungBody(EnemyTank body)
+    {
+        body.Height = 0f;
+        body.Flung = false;
+        body.Toss = Vector3.Zero;
+        body.Position = Torus.Wrap(body.Position);
+
+        Vector2 at = body.Position;
+
+        // Everything else standing where it came down. Walked by index against a snapshot
+        // count so the list can't shift underneath the loop, and skipping the body itself
+        // — it is billed separately below, and harder.
+        foreach (var e in Enemies)
+        {
+            if (ReferenceEquals(e, body) || !e.Alive || e.Flung) continue;
+            if (!WithinHit(at, e.Position, SpiderClaw.ImpactRadius + EnemyTank.Radius)) continue;
+            DamageEnemy(e, SpiderClaw.ThrownBodyDamage);
+        }
+
+        DamageSoldiersInBlast(at, 0f, SpiderClaw.ImpactRadius, SpiderClaw.ThrownBodyDamage);
+
+        Debris.Collapse(new Vector3(at.X, 0.6f, at.Y), Vector2.UnitX, 2f,
+            body.IsElite ? Palette.EliteFill : Palette.EnemyFill, 1f);
+        Audio.PlayExplosionAt(Torus.Distance(at, Player.Position));
+
+        // And the landing itself, which the thrown machine wears whether it hit anything
+        // or not. Last, so a body that dies on impact bursts where it came down.
+        DamageEnemy(body, SpiderClaw.ImpactDamage);
+    }
+
+    // --- The legs ------------------------------------------------------------------
+
+    /// <summary>
+    /// The pounce: a kick off whatever wall is in reach. Finds the nearest solid face of
+    /// the city and hands the craft the outward normal to shove against — the world does
+    /// the looking because the world is the only thing that knows where the buildings
+    /// are.
+    ///
+    /// Chained up the side of a tower this is how the SPIDER gets on top of the city,
+    /// which is the whole reason it exists: a beam loosed from a roof passes clean over
+    /// the hunters on the grid and reaches things a shot from down there never will, and
+    /// the class with six legs should be the one that can get up there.
+    /// </summary>
+    private bool TrySpiderPounce()
+    {
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+
+        foreach (var s in Structures)
+        {
+            // Above the parapet there is nothing left to push against — you are standing
+            // on it, and what you want from there is the ordinary hop.
+            if (Player.Height >= s.BlockHeight) continue;
+
+            int n = s.Blockers(blockers);
+            for (int b = 0; b < n; b++)
+            {
+                var (wall, radius) = blockers[b];
+                float reach = radius + PlayerTank.Radius + PlayerTank.PounceReach;
+
+                Vector2 out_ = Torus.Delta(wall, Player.Position);
+                float distSq = out_.LengthSquared();
+                if (distSq >= reach * reach) continue;
+
+                Vector2 outward = distSq > 1e-6f
+                    ? out_ / MathF.Sqrt(distSq)
+                    : Player.Forward;
+
+                if (!Player.TryPounce(outward)) return false;
+                Audio.PlayThrowWhoosh();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// How close to a roof's own height the craft has to be falling before the legs catch
+    /// it. Comfortably more than a tick's worth of fall, so nothing can drop through a
+    /// building between two frames.
+    /// </summary>
+    private const float RoofSnap = 0.8f;
+
+    /// <summary>
+    /// Works out what the craft is standing on this tick — the grid, or the flat top of
+    /// something in the city. Run after the craft has moved and before the wall pass, so
+    /// a hull that has just come down on a roof is already up there by the time anything
+    /// asks whether it is inside a building.
+    ///
+    /// Only the machines have any business up there: the two bodies and the mote own their
+    /// own transforms entirely and land their own landings. In practice this is the
+    /// SPIDER's alone, since the other machine is a TANK and a TANK cannot leave the grid.
+    /// </summary>
+    private void ResolveRoofs()
+    {
+        if (!Player.IsMachine || Player.Captured)
+        {
+            Player.GroundHeight = 0f;
+            return;
+        }
+
+        float roof = 0f;
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+
+        foreach (var s in Structures)
+        {
+            if (s.Falling) continue;                       // no standing on something on its way down
+            if (Player.Height < s.BlockHeight - RoofSnap) continue;   // still down the side of it
+            if (s.BlockHeight <= roof) continue;
+
+            int n = s.Blockers(blockers);
+            for (int b = 0; b < n; b++)
+            {
+                var (at, radius) = blockers[b];
+                // Genuinely over the footprint, not merely brushing the parapet: measured
+                // against the block's own radius rather than that plus the craft's, so a
+                // hull hanging half off the edge falls, as it should.
+                if (Torus.Delta(at, Player.Position).LengthSquared() > radius * radius) continue;
+                roof = s.BlockHeight;
+                break;
+            }
+        }
+
+        Player.GroundHeight = roof;
+
+        // Caught on the way down: put the craft on the surface this tick rather than a
+        // frame later, so the wall pass below sees a hull that is standing on the roof
+        // instead of one buried a few centimetres inside the top of a tower.
+        if (roof > 0f && Player.Height < roof) Player.Height = roof;
     }
 
     /// <summary>
@@ -1685,7 +2089,7 @@ public sealed class World
     /// </summary>
     private void BurnSpiderLance(SpiderWeapon spider, float damage)
         => BurnBeamAlong(spider.BeamOrigin, spider.BeamDirection,
-            SpiderWeapon.BeamLength, SpiderWeapon.BeamRadius, damage);
+            spider.BeamLength, spider.BeamRadius, damage);
 
     /// <summary>
     /// Applies one fired beam of any owner's making to the world — the SPIDER's charged
@@ -1725,11 +2129,33 @@ public sealed class World
             if (Vector2.Distance(near, originXZ + dirXZ * along)
                 > radius + EnemyTank.Radius) continue;
 
+            // Measured against where the hull actually is, which is the grid for the whole
+            // of an ordinary hunter's life and is not while one is being carried in a claw
+            // or is in the air after being thrown out of one.
             float beamY = origin.Y + slope * along;
-            if (beamY < -radius
-                || beamY > EnemyTank.BodyHeight + radius) continue;
+            if (beamY < e.Height - radius
+                || beamY > e.Height + EnemyTank.BodyHeight + radius) continue;
 
             DamageEnemy(e, damage);
+        }
+
+        // The same test against the squads, and the difference between the two is the whole
+        // argument for a lance loosed upward: a beam raked along the grid burns a line of
+        // hunters and passes harmlessly under the soldiers, and one fired up the face of a
+        // tower does exactly the reverse.
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive) continue;
+            Vector2 near = Torus.NearestImage(s.Position, originXZ);
+            float along = Math.Clamp(Vector2.Dot(near - originXZ, dirXZ), 0f, length);
+            if (Vector2.Distance(near, originXZ + dirXZ * along)
+                > radius + EnemySoldier.Radius) continue;
+
+            float beamY = origin.Y + slope * along;
+            float body = s.Height + EnemySoldier.AimHeight;
+            if (MathF.Abs(beamY - body) > radius + EnemySoldier.BodyHeight * 0.5f) continue;
+
+            DamageSoldier(s, damage);
         }
 
         // Step down the shaft looking for the two crystals. A one-unit stride is well
@@ -1859,6 +2285,25 @@ public sealed class World
     /// </summary>
     private void UpdateSoldierTriggers(SoldierRig rig, float dt)
     {
+        if (!UpdateCableKit(rig)) return;
+
+        // Rockets before the rifle: on a frame both are down, the deliberate shot wins.
+        // They share the fire cooldown, and a player holding fire while clicking for a
+        // rocket should get the rocket rather than have it eaten by the stream.
+        if (InputMap.RocketPressed) FireSoldierRocket();
+        else if (InputMap.RifleDown) FireSoldierRifle();
+    }
+
+    /// <summary>
+    /// The cable kit's own controls: the crosshair's anchor cast, the two hooks and the gas
+    /// jump. Everything that belongs to the <em>rig</em> rather than to whoever is holding
+    /// it, which is why it is a function of its own — the SOLDIER chassis owns one of these
+    /// and a VIRUS wearing a stolen body owns one too, and neither should be flying on a
+    /// second copy of this logic that drifts away from the first.
+    /// </summary>
+    /// <returns>False when a cinematic has the player and nothing else should be read.</returns>
+    private bool UpdateCableKit(SoldierRig rig)
+    {
         // A cinematic has hold of the player: both cables go, and nothing else is read.
         // Being swung around by a monster while still anchored to a tower is not a
         // situation the constraint solver has any sensible answer for.
@@ -1866,7 +2311,7 @@ public sealed class World
         {
             rig.ReleaseBoth();
             AnchorInSight = null;
-            return;
+            return false;
         }
 
         Vector3 eye = Player.Eye;
@@ -1889,11 +2334,7 @@ public sealed class World
             Debris.FootPuff(new Vector3(Player.Position.X, 0f, Player.Position.Y));
         }
 
-        // Rockets before the rifle: on a frame both are down, the deliberate shot wins.
-        // They share the fire cooldown, and a player holding fire while clicking for a
-        // rocket should get the rocket rather than have it eaten by the stream.
-        if (InputMap.RocketPressed) FireSoldierRocket();
-        else if (InputMap.RifleDown) FireSoldierRifle();
+        return true;
     }
 
     /// <summary>
@@ -2198,13 +2639,884 @@ public sealed class World
     }
 
     private void SpawnDirected(Vector3 origin, Vector3 dir, float speed, bool rocket,
-        bool acid = false)
+        bool acid = false, bool fromPlayer = true, bool seeds = false, bool fromAlly = false)
     {
         foreach (var p in _projectiles)
         {
             if (p.Active) continue;
-            p.FireDirected(origin, dir, speed, rocket, acid);
+            p.FireDirected(origin, dir, speed, rocket, acid, fromPlayer, seeds, fromAlly);
             return;
+        }
+    }
+
+    // --- The SOLDIER squads (the enemy that flies) --------------------------------
+    //
+    // Everything else that hunts the player drives. These do not: they are people with the
+    // same twin launchers the SOLDIER chassis carries, and the city is their floor. The
+    // world's job here is small and strictly bounded — answer the one question they ask it
+    // (what can I hang from, in the direction I want to go), keep them out of the walls,
+    // and own every consequence: their rounds, their blades, and what killing one leaves
+    // behind. The flying itself is entirely theirs, in EnemySoldier.
+
+    /// <summary>
+    /// Steps every squad and then every soldier in them. The squads think first because
+    /// their orders are this tick's input to the members, not last tick's — a soldier told
+    /// to strike should leave on the tick they were told, not the one after.
+    /// </summary>
+    private void UpdateSquads(float dt)
+    {
+        if (_coverBlown > 0f) _coverBlown -= dt;
+
+        // The escort only stands while the body it was earned with is still being worn. Take
+        // the host off — rot it out, spend it, lose it to a hunter — and the three people
+        // flying beside you are, on the very next tick, three people who have just watched a
+        // mote of corruption climb out of their friend.
+        if (Player.Virus is not { HostKind: VirusHost.Soldier }) _escort = null;
+        if (_escort != null && !Squads.Contains(_escort)) _escort = null;
+
+        foreach (var squad in Squads)
+        {
+            bool escorting = ReferenceEquals(squad, _escort);
+            squad.SetEscort(escorting);
+            foreach (var m in squad.Members) m.Allied = escorting;
+
+            squad.Update(dt, Player.Position,
+                targetVisible: escorting || !PlayerPassesForOneOfThem);
+            // Going loud. One call for the whole squad, pitched by how far away the nearest
+            // of them is, so four figures dropping off a spire two hundred metres out is a
+            // sound on the horizon rather than a shout in your ear.
+            if (squad.JustCalled && squad.Members.Count > 0)
+                Audio.PlayHuntCall(Torus.Distance(squad.Members[0].Position, Player.Position));
+        }
+
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive) continue;
+
+            // The tower they were sitting on is coming down, or has had a hole shot through
+            // it: they go with it, which is to say they let go of it and start flying,
+            // which is the only sane thing a person clinging to a failing building can do.
+            // Their cables answer the same question for themselves, a tick at a time, in
+            // EnemySoldier.StepHook — this is only the perch, which is a stance rather than
+            // a constraint and so has nothing else watching it.
+            if (s.PerchedOn is { } wall && (wall.Falling || wall.Gone)) s.LosePerch();
+
+            // Who this one is working against. For an enemy squad it is always the player;
+            // for a carrier or an escort it is whichever of the other side is nearest, which
+            // is the whole of what changing sides does — the brain is identical, and only the
+            // target moved.
+            Vector2 mark = Player.Position;
+            float markY = Player.Height;
+            bool starved = false;
+            bool holdFire = false;
+
+            if (s.Carrier || s.Allied)
+            {
+                if (NearestPrey(s) is { } prey)
+                {
+                    mark = prey.At;
+                    markY = prey.Height;
+                }
+                else if (s.Carrier)
+                {
+                    // Nothing left of the side they turned on. The corruption has nowhere to
+                    // go and takes the body apart instead — a carrier is never left circling
+                    // a player it has no quarrel with.
+                    starved = true;
+                }
+                else
+                {
+                    // An escort with nothing to shoot at flies formation instead: the ring
+                    // they already work, kept around the player, with their fingers off the
+                    // triggers. Which is exactly what the ring was always for — it is the
+                    // same four arcs sweeping the same circle, and the only thing that has
+                    // changed is that the thing in the middle of it is on their side.
+                    holdFire = true;
+                }
+            }
+
+            s.Update(dt, mark, markY, this, starved, holdFire);
+            KeepSoldierOutOfTheCity(s);
+            DrainSoldierEvents(s, mark, markY);
+        }
+    }
+
+    /// <summary>
+    /// What anybody fighting on the player's side hunts: the nearest thing still fighting for
+    /// the other one — a hunter on the grid, or a soldier who is neither turned nor escorting.
+    /// Explicitly not the player and explicitly not each other, so a plague and an escort in
+    /// the same sky sort themselves out rather than opening fire on one another.
+    /// </summary>
+    private (Vector2 At, float Height)? NearestPrey(EnemySoldier hunter)
+    {
+        (Vector2, float)? best = null;
+        float bestSq = CarrierHuntRange * CarrierHuntRange;
+
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive) continue;
+            float d = Torus.DistanceSquared(e.Position, hunter.Position);
+            if (d >= bestSq) continue;
+            bestSq = d;
+            best = (e.Position, EnemyTank.AimHeight);
+        }
+
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive || s.Carrier || s.Allied || ReferenceEquals(s, hunter)) continue;
+            float d = Torus.DistanceSquared(s.Position, hunter.Position);
+            if (d >= bestSq) continue;
+            bestSq = d;
+            best = (s.Position, s.Height);
+        }
+
+        return best;
+    }
+
+    /// <summary>How far a carrier will look for something of its own side to turn on. Wide:
+    /// a body with a few seconds left should spend them crossing the arena at somebody, not
+    /// standing around because the nearest target was over the fog line.</summary>
+    private const float CarrierHuntRange = 220f;
+
+    /// <summary>
+    /// Spends one soldier's single-frame events: the cues off their cables, the dust off a
+    /// launch or a bad landing, the round they just loosed, and the blades. Split out from
+    /// the entity for the same reason the player's rig is — the physics stay a pure
+    /// function of their own state, and the world keeps sole ownership of hurting anybody.
+    /// </summary>
+    private void DrainSoldierEvents(EnemySoldier s, Vector2 mark, float markY)
+    {
+        float range = Torus.Distance(s.Position, Player.Position);
+
+        // The tick the corruption takes root. One cue, and a spray of the stuff off the body
+        // it has just claimed.
+        if (s.JustTurned)
+        {
+            Audio.PlayUnstableLance();
+            Debris.Burst(new Vector3(s.Position.X, s.Height + EnemySoldier.AimHeight, s.Position.Y),
+                Palette.NeonMagenta, elite: true);
+        }
+
+        SoundEnemyHook(s.Left, range);
+        SoundEnemyHook(s.Right, range);
+
+        if (s.JustLaunched)
+        {
+            Audio.PlayGasJump(0.35f);
+            if (s.Height < 1.5f)
+                Debris.FootPuff(new Vector3(s.Position.X, 0f, s.Position.Y));
+        }
+
+        if (s.JustLanded && s.LandingSpeed > SoldierRig.HardLanding)
+        {
+            Audio.PlayCrashLanding();
+            Debris.FootPuff(new Vector3(s.Position.X, 0f, s.Position.Y));
+        }
+
+        // The rifle. Routed through the same directed-round path the player's own rifle
+        // uses — it is the same weapon — and stopped dead by a TANK's screening smoke,
+        // which blinds them exactly as it blinds a hunter.
+        //
+        // A carrier's round goes out flagged as the player's, and that one bool is the whole
+        // of which side they are on: it makes the round bite hunters and their own former
+        // squad through the paths that already exist, and makes it pass harmlessly through
+        // the player. The kills even pay out salvage, because as far as the world is
+        // concerned the mote that turned them fired it.
+        bool friendly = s.Carrier || s.Allied;
+        if (s.JustFired && (friendly || (!Player.Captured && !PlayerPassesForOneOfThem
+                && !SmokeBlocks(s.Position, Player.Position))))
+        {
+            SpawnDirected(s.ShotOrigin, s.ShotDir, Projectile.RifleSpeed,
+                rocket: false, acid: false, fromPlayer: friendly, fromAlly: friendly);
+            Audio.PlayRifleShot();
+        }
+
+        if (friendly) StrikeFriendlyBlades(s, mark, markY);
+        else StrikeWithBlades(s, range);
+    }
+
+    /// <summary>
+    /// A friendly pass � a carrier's or an escort's � scored against whatever they are
+    /// fighting rather than against the player. Deliberately worth more than their rifle: a
+    /// soldier diving into the squad they arrived with is the picture this whole mechanic
+    /// exists to produce, and it should visibly take somebody apart when it lands.
+    /// </summary>
+    private void StrikeFriendlyBlades(EnemySoldier s, Vector2 mark, float markY)
+    {
+        if (!s.BladesOut || !s.BladeReady) return;
+        if (s.PlanarSpeed < EnemySoldier.BladeSpeed) return;
+        if (Torus.DistanceSquared(s.Position, mark)
+            > EnemySoldier.BladeReach * EnemySoldier.BladeReach) return;
+        if (markY < s.Height - BladeVertical
+            || markY > s.Height + EnemySoldier.BodyHeight + BladeVertical) return;
+
+        s.RegisterSlash();
+        Audio.PlayClawSlam();
+        Debris.Burst(new Vector3(mark.X, markY + 1f, mark.Y), Palette.NeonMagenta, elite: true);
+
+        // Whichever of the other side was standing there. Hunters first — they are the
+        // bigger target and the likelier one — then the squad they used to belong to.
+        foreach (var e in Enemies)
+        {
+            if (!e.Alive) continue;
+            if (!WithinHit(mark, e.Position, EnemyTank.Radius)) continue;
+            DamageEnemy(e, CarrierBladeDamage);
+            return;
+        }
+        foreach (var other in Soldiers)
+        {
+            if (!other.Alive || other.Carrier || other.Allied || ReferenceEquals(other, s)) continue;
+            if (!WithinHit(mark, other.Position, EnemySoldier.Radius)) continue;
+            DamageSoldier(other, CarrierBladeDamage);
+            return;
+        }
+    }
+
+    /// <summary>What a turned soldier's pass costs whatever it lands on. Enough to erase a
+    /// hunter outright — the plague is not a distraction, it is a weapon.</summary>
+    private const float CarrierBladeDamage = 4f;
+
+    /// <summary>Voices one enemy hook's events at whatever the range earns.</summary>
+    private void SoundEnemyHook(GrappleHook h, float range)
+    {
+        if (h.JustBit) Audio.PlayAnchorBite(range);
+        if (h.JustTore)
+        {
+            Audio.PlayAnchorTear();
+            Debris.Burst(new Vector3(h.Tip.X, h.TipY, h.Tip.Y), Palette.StructureShell, elite: false);
+        }
+    }
+
+    /// <summary>
+    /// The pass. A soldier on a committed run who arrives at the player's body at speed
+    /// opens them up — the one attack in this game that is delivered by a <em>trajectory</em>
+    /// rather than by a projectile, which is why it is checked here, after everything has
+    /// moved, and why every part of it is a movement problem: they have to be close, they
+    /// have to be level, and they have to still be carrying the arc that got them there. A
+    /// player who broke the geometry of the run in any of those three ways has dodged it.
+    /// </summary>
+    private void StrikeWithBlades(EnemySoldier s, float range)
+    {
+        if (!s.BladesOut || !s.BladeReady || Player.Captured) return;
+        if (PlayerPassesForOneOfThem) return;   // they are not running at one of their own
+        if (s.PlanarSpeed < EnemySoldier.BladeSpeed) return;
+        if (range > EnemySoldier.BladeReach + PlayerTank.Radius) return;
+
+        // Level with them, give or take. Measured against the whole body rather than
+        // against a point on it, because they are twice a person's size and a run at
+        // something standing on the grid arrives with the blades somewhere down the length
+        // of them — a soldier who screams past overhead has missed and reads as having
+        // missed, and one whose boots go through you has not.
+        float mine = Player.Height + EnemyTank.AimHeight;
+        if (mine < s.Height - BladeVertical
+            || mine > s.Height + EnemySoldier.BodyHeight + BladeVertical) return;
+
+        s.RegisterSlash();
+        DamagePlayer(SoldierBladeDamage);
+        Audio.PlayClawSlam();
+        JoltPlayerView(0.65f);
+        Debris.Burst(new Vector3(Player.Position.X, mine, Player.Position.Y),
+            Palette.SoldierBlade, elite: true);
+    }
+
+    /// <summary>
+    /// Throws the player's view about, whichever chassis they are in. Every one of them
+    /// carries its own shake and the camera takes the largest, so this hands the jolt to the
+    /// one that is actually driving rather than to all of them at once — which would be a
+    /// way of setting a number on three objects that nothing on the live path rings down.
+    /// </summary>
+    private void JoltPlayerView(float amount)
+    {
+        if (Player.Rig is { } rig) rig.Jolt(amount);
+        else if (Player.Fish is { } body) body.Jolt(amount);
+        else if (Player.Virus is { } mote) mote.Jolt(amount);
+        else Player.Jolt(amount);
+    }
+
+    /// <summary>How far off level a pass can be and still cut. Roughly a body's height
+    /// either way, so ducking under a run genuinely works.</summary>
+    private const float BladeVertical = 2.4f;
+
+    /// <summary>
+    /// Keeps a soldier out of the solid parts of the skyline, exactly as the craft is kept
+    /// out of them. Unlike the craft they spend the whole run at the height of the walls
+    /// they are swinging past, so this runs far more often for them than it ever does for
+    /// the player — and a fast arrival is a genuine crash that costs them everything they
+    /// had built and leaves them hanging there, staggered, for a second and a half.
+    /// </summary>
+    private void KeepSoldierOutOfTheCity(EnemySoldier s)
+    {
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+
+        foreach (var st in Structures)
+        {
+            if (s.Height > st.BlockHeight) continue;
+
+            int n = st.Blockers(blockers);
+            for (int b = 0; b < n; b++)
+            {
+                var (at, radius) = blockers[b];
+                float reach = radius + EnemySoldier.Radius;
+
+                Vector2 out_ = Torus.Delta(at, s.Position);
+                float distSq = out_.LengthSquared();
+                if (distSq >= reach * reach) continue;
+
+                Vector2 outward = distSq > 1e-6f
+                    ? out_ / MathF.Sqrt(distSq)
+                    : new Vector2(1f, 0f);
+
+                s.Position = Torus.Wrap(at + outward * reach);
+                // Handed the direction they were shoved, so the rig can keep whatever was
+                // running along the wall and lose only what was going into it.
+                s.RegisterWallHit(outward);
+            }
+        }
+    }
+
+    // --- What the city offers a flier ---------------------------------------------
+
+    /// <summary>
+    /// The one question a soldier asks the world: given where I am and where I want to go,
+    /// what can I hang from?
+    ///
+    /// Answered as a direct query rather than as the marched ray the player's crosshair
+    /// uses, because the two are asking genuinely different things. A player asks "what is
+    /// under my crosshair"; an AI asks "what is the <em>best</em> thing in a whole
+    /// half-space", which a ray cannot answer and which a few dozen circle tests can.
+    ///
+    /// What makes the answer read as expertise is the scoring, and it is worth stating
+    /// plainly, because it is the entire difference between a soldier and a thing on a
+    /// string. A good anchor is (a) ahead along the wish, because a cable behind you brakes,
+    /// (b) at a comfortable throw rather than at arm's length or at the limit of the reach,
+    /// (c) high enough above the flier to swing <em>under</em>, and (d) solid — the smallest
+    /// quarter of the skyline tears out under load, and something that has done this for a
+    /// living does not bet an arc on a spire.
+    /// </summary>
+    public bool TryFindSwing(Vector3 from, Vector3 wish, float maxRange,
+        out Vector3 point, out Structure? holding)
+    {
+        point = default;
+        holding = null;
+
+        var fromXZ = new Vector2(from.X, from.Z);
+        var wishXZ = new Vector2(wish.X, wish.Z);
+        float wl = wishXZ.Length();
+        // A wish that is straight up or straight down has no bearing to prefer, so every
+        // direction scores alike and the range and the height decide it.
+        if (wl > 1e-4f) wishXZ /= wl;
+        else wishXZ = Vector2.Zero;
+
+        float best = float.MinValue;
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+
+        foreach (var s in Structures)
+        {
+            int n = s.Blockers(blockers);   // zero for anything already coming down
+            for (int b = 0; b < n; b++)
+            {
+                var (at, r) = blockers[b];
+
+                // Held as the nearest image, so a tower just over the world's seam is
+                // considered where the flier can actually see it.
+                Vector2 near = Torus.NearestImage(at, fromXZ);
+                Vector2 delta = near - fromXZ;
+                float d = delta.Length();
+                if (d < MinSwingRange + r || d > maxRange) continue;
+
+                // How far up the side to bite. As high as the cable can reach on a straight
+                // line from here, capped by the building's own top and by how much rise is
+                // useful — an anchor directly overhead is a rope to hang from, not to swing
+                // on.
+                float headroom = MathF.Sqrt(MathF.Max(0f, maxRange * maxRange - d * d));
+                float y = MathF.Min(s.BlockHeight * 0.92f,
+                                    from.Y + MathF.Min(headroom, PreferredSwingRise));
+                if (y < from.Y + 1.5f) continue;
+
+                Vector2 planarDir = delta / d;
+                float align = wishXZ == Vector2.Zero ? 0.5f : Vector2.Dot(planarDir, wishXZ);
+
+                // Alignment is scored rather than required, and the difference matters. A
+                // cable behind you is a brake and is worth a long way less than one ahead —
+                // the weighting below guarantees any forward anchor beats every backward one
+                // — but it is still a cable, and a soldier falling through a gap in the
+                // skyline with nothing ahead of them takes the brake and lives. Rejecting
+                // outright is what produces the one thing this enemy must never do: drop out
+                // of the sky in a straight line with both hooks stowed because the only
+                // building for eighty metres happened to be the wrong side of them.
+
+                // A soft preference for a proper throw's distance, falling off either side.
+                float band = 1f - MathF.Abs(d - PreferredSwingRange) / PreferredSwingRange;
+                float trust = s.Scale < SoldierRig.WeakScale ? -1.3f : 0.4f;
+
+                // Direction outweighs range by enough that no amount of being ideally placed
+                // lets a wall off to the side beat one genuinely on the way. Trust is the one
+                // thing that *can* outweigh direction, and deliberately so: given a spire
+                // dead ahead and solid stone a few degrees off it, something that has done
+                // this for a living takes the stone, because the spire is a tear halfway
+                // through the arc and the few degrees are nothing.
+                float score = align * 3f + band + trust;
+                if (score <= best) continue;
+
+                best = score;
+                // Out onto the near face, so the cable ends on the building rather than in
+                // the middle of it and the swing radius is the one that can be seen.
+                Vector2 surface = near - planarDir * r;
+                point = new Vector3(surface.X, y, surface.Y);
+                holding = s;
+            }
+        }
+
+        return best > float.MinValue;
+    }
+
+    /// <summary>Nothing closer than this is worth a cable — a hook into the wall you are
+    /// already scraping along does nothing but stop you.</summary>
+    private const float MinSwingRange = 12f;
+
+    /// <summary>The throw a soldier would pick given a free choice: long enough to be a
+    /// real arc, short enough to arrive on.</summary>
+    private const float PreferredSwingRange = 46f;
+
+    /// <summary>And how far above themselves they like to bite. Enough to swing under.</summary>
+    private const float PreferredSwingRise = 24f;
+
+    // --- Raising them --------------------------------------------------------------
+
+    /// <summary>
+    /// Puts a squad on the field: four of them, hung off the side of a tower out in the fog
+    /// at a random bearing, watching. They are not spawned mid-air and they are not spawned
+    /// walking — the first thing the player should ever see of a squad is four figures on a
+    /// spire that were not there last time they looked that way.
+    ///
+    /// With no tower in reach (a razed city, or an unlucky bearing) they arrive on the grid
+    /// instead and walk until they find something to hook, which is a worse opening for them
+    /// and an easier one for the player. That is the honest failure mode and it is left in.
+    /// </summary>
+    public void SpawnSoldierSquad(Vector2? near = null)
+    {
+        Vector2 where = near ?? RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange);
+        Structure? tower = NearestTowerTo(where);
+
+        var members = new List<EnemySoldier>(SoldierSquad.Size);
+        int leader = Random.Shared.Next(SoldierSquad.Size);
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        float footprint = 4f;
+        if (tower != null && tower.Blockers(blockers) > 0) footprint = blockers[0].Radius;
+
+        for (int i = 0; i < SoldierSquad.Size; i++)
+        {
+            bool boss = i == leader;
+            if (tower == null)
+            {
+                // No city here. They walk in.
+                Vector2 spread = new Vector2(MathF.Sin(i * 1.9f), MathF.Cos(i * 1.9f)) * 3.5f;
+                members.Add(new EnemySoldier(where + spread, 0f, boss, i));
+                continue;
+            }
+
+            // Spaced round the tower and staggered up it, so a squad reads as four people
+            // who chose their own spots rather than as four copies at one height.
+            float angle = i * MathF.Tau / SoldierSquad.Size + Random.Shared.NextSingle() * 0.4f;
+            var outward = new Vector2(MathF.Sin(angle), MathF.Cos(angle));
+            float height = tower.BlockHeight * (0.45f + 0.12f * i);
+
+            var perch = Torus.Wrap(tower.Position + outward * (footprint + 0.7f));
+            var soldier = new EnemySoldier(perch, height, boss, i);
+            // Clung on by a short cable into the wall behind them, facing out over the city.
+            soldier.SeedPerch(Torus.Wrap(tower.Position + outward * footprint), height + 2.5f,
+                tower, MathF.Atan2(outward.X, outward.Y));
+            members.Add(soldier);
+        }
+
+        var squad = new SoldierSquad(members);
+        Squads.Add(squad);
+        Soldiers.AddRange(members);
+    }
+
+    /// <summary>
+    /// Capture harness only: holds one of them in front of the craft, folded flat, crossing
+    /// at speed with the blades out. Written every frame, so the sim's own step is
+    /// overwritten and the figure stays put — the one enemy in the game that cannot be
+    /// photographed by standing still and pointing at it, since standing still is the one
+    /// thing it never does.
+    /// </summary>
+    public void PoseSoldierForCapture()
+    {
+        if (Soldiers.Count == 0) return;
+        EnemySoldier mark = Soldiers[0];
+
+        Vector2 fwd = Player.Forward;
+        var side = new Vector2(-fwd.Y, fwd.X);
+
+        mark.Position = Torus.Wrap(Player.Position + fwd * 7f);
+        mark.Height = Player.EyeHeight + 0.4f;
+        mark.Velocity = new Vector3(side.X * 24f, 0f, side.Y * 24f);
+        mark.Heading = MathF.Atan2(-fwd.X, -fwd.Y);   // looking back at the craft
+        mark.CommitRunForTest();
+
+        Player.Pitch = 0.08f;
+    }
+
+    /// <summary>
+    /// The standing tower nearest a spot, within a squad's own patience of it, or null if
+    /// that part of the map is open grid.
+    ///
+    /// Bounded from the <em>player's</em> position as well as from the rolled spot, and that
+    /// second bound is the load-bearing one: a search that only measured from the bearing
+    /// could walk a squad half again as far out as it was meant to arrive, and put them down
+    /// on a spire past their own eyesight — where they would sit watching an empty horizon
+    /// for the rest of the run. A squad has to arrive somewhere it can see the fight from.
+    /// </summary>
+    private Structure? NearestTowerTo(Vector2 at)
+    {
+        Structure? best = null;
+        float bestSq = SquadTowerSearch * SquadTowerSearch;
+        foreach (var s in Structures)
+        {
+            if (s.Kind != StructureKind.Tower || s.Falling) continue;
+            if (Torus.DistanceSquared(s.Position, Player.Position) > SpawnMaxRange * SpawnMaxRange)
+                continue;
+            float d = Torus.DistanceSquared(s.Position, at);
+            if (d >= bestSq) continue;
+            bestSq = d;
+            best = s;
+        }
+        return best;
+    }
+
+    /// <summary>How far from the rolled bearing a squad will look for something to perch on
+    /// before giving up and arriving on foot.</summary>
+    private const float SquadTowerSearch = 70f;
+
+    // --- Hurting them --------------------------------------------------------------
+
+    /// <summary>
+    /// Deals damage to one soldier and, on the blow that ends them, drops the body: the
+    /// report, a burst of their own colours where they were hanging, and salvage on the grid
+    /// underneath — a kill you earned out of the air is worth doubling back for, and where it
+    /// falls is where they were when you hit them.
+    /// </summary>
+    private void DamageSoldier(EnemySoldier s, float amount)
+    {
+        // Hurting somebody who was flying cover for you ends that, however it happened � a
+        // round, a rocket's splash, a beam, a building dropped on them. There is no version
+        // of this where they carry on: the check lives here, at the one place all of it goes
+        // through, rather than at each of the half-dozen ways to be careless.
+        if (s.Allied) BreakEscort();
+
+        bool wasAlive = s.Alive;
+        s.TakeDamage(amount);
+        if (!wasAlive || s.Alive) return;
+
+        float range = Torus.Distance(s.Position, Player.Position);
+        Audio.PlayExplosionAt(range);
+        Debris.Burst(new Vector3(s.Position.X, s.Height + EnemySoldier.AimHeight, s.Position.Y),
+            s.IsLeader ? Palette.SoldierMark : Palette.SoldierCloth, s.IsLeader);
+
+        var kind = Random.Shared.NextSingle() < DropBatteryShare
+            ? PickupKind.Battery : PickupKind.Ammo;
+        Pickups.Add(new Pickup(s.Position, kind));
+    }
+
+    /// <summary>
+    /// A player round meeting a soldier. Height is the whole difference between this and the
+    /// hunters' own test: a hunter stands on the grid where every flat bolt in the game
+    /// already is, and these live thirty metres up it, so a round has to arrive at the right
+    /// place on the plane <em>and</em> at the right place up the column. Which is exactly the
+    /// bargain the class is meant to strike — they are not tough, they are hard to hit.
+    /// </summary>
+    private void StrikeSoldiers(Projectile p)
+    {
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive) continue;
+            // A round from one of the player's own bodies passes straight through the rest of
+            // them. Everything on that side is flying the same sky at the same speeds, and a
+            // plague that shot itself in the back would be a plague that never got anywhere.
+            if (p.FromAlly && (s.Carrier || s.Allied)) continue;
+            if (!WithinHit(p.Position, s.Position, EnemySoldier.Radius + 0.3f)) continue;
+            if (MathF.Abs(p.Height - (s.Height + EnemySoldier.AimHeight))
+                > EnemySoldier.HitVertical) continue;
+
+            // A round in one of their backs ends any pretence, whatever fired it — and if
+            // they were flying cover for you, it ends that too.
+            if (!s.Carrier && !s.Allied) BlowCover();
+            else if (s.Allied) BreakEscort();
+
+            if (p.IsPiercing)
+            {
+                // The AP slug bulls on through. It carries no memory of a person the way it
+                // does of a hunter, and does not need one: a slug deals three and a soldier
+                // has two, so the body it just crossed is dead and skipped on the next tick.
+                DamageSoldier(s, SlugDamage);
+                continue;
+            }
+
+            if (p.IsCrabBomb) StageCrabBlast(p.Position);
+            else if (p.IsRocket) DetonateRocket(p);
+            else if (p.IsGrenade) DetonateMortar(p);
+            else
+            {
+                // A VIRUS round does not merely hurt a person — it puts something in them.
+                // Seeded before the damage, so a round that finishes a soldier outright
+                // still reads as the corruption arriving; and seeded on every hit, so the
+                // second round into the same body refreshes the window rather than wasting
+                // it. Which is the decision the whole weapon is built around: one shot buys
+                // you a body you can wear or set loose, and a second one only buys a corpse.
+                if (p.Seeds) SeedSoldier(s);
+                DamageSoldier(s, PlayerShotDamage);
+            }
+
+            p.Active = false;
+            return;
+        }
+    }
+
+    // --- The plague ----------------------------------------------------------------
+    //
+    // What a VIRUS does to a squad, and the reason the class needed a twist rather than
+    // simply a fifth body on the menu. Every other host in this game is a thing you *wear*:
+    // you fly into it, it becomes armour, it rots, you leave. A person is different, because
+    // a person has friends — so the corruption does not stop at the body it lands in.
+    //
+    // One round seeds a soldier. For a few seconds they are yours to take: slowed, coming
+    // apart, and close enough to dead for the mote to climb inside. Let that window close
+    // and the seed roots on its own — they turn, and go to work on the squad they arrived
+    // with. So every shot the mote fires at a person is a question with a timer on it, and
+    // both answers are good ones: wear this body, or spend it on the other three.
+
+    /// <summary>
+    /// Climbs into a soldier the mote has caught.
+    ///
+    /// Contact is enough, exactly as it is with a hunter — the corruption does not need an
+    /// invitation, and gating this on having seeded them first turned the best body in the
+    /// game into one nobody could ever get their hands on. What the seed is for is the
+    /// <em>other</em> half of the mechanic: a tagged body is slowed and easy to run down,
+    /// and a tag left uncollected turns them. Taking one is simply flying into it.
+    ///
+    /// <paramml name="reach"/> is how far the mote's grasp extends this attempt: a body's
+    /// width on passive contact, and a great deal further when the player has actually asked
+    /// for it (see <see cref="LungeAtSoldier"/>). Fully three-dimensional either way, unlike
+    /// the hunters' grounded test — both parties are flying, and asking someone to touch a
+    /// specific point on a moving body at fifty metres a second of closing speed is asking
+    /// for something nobody can do twice.
+    /// </summary>
+    private bool TryWearSoldier(VirusRig mote, float reach)
+    {
+        float reachSq = reach * reach;
+
+        EnemySoldier? prey = null;
+        float best = reachSq;
+
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive) continue;
+            float dy = (s.Height + EnemySoldier.AimHeight) - (Player.Height + 0.5f);
+            if (MathF.Abs(dy) > reach) continue;
+            float d = Torus.DistanceSquared(s.Position, Player.Position) + dy * dy;
+            if (d < best) { best = d; prey = s; }
+        }
+
+        if (prey is null) return false;
+
+        // Whichever squad has just lost a member without noticing. They inherit the player:
+        // from their side one of the four is still right there in the same kit, so they fly
+        // cover for it, work the ring around it and put their rounds into whatever it is
+        // pointed at. The best thing the class can buy, and it is bought by taking a body out
+        // of the middle of the people who came with it.
+        _escort = SquadOf(prey);
+
+        // Worn, not wrecked: the body comes off the roster the way every other host does,
+        // without a death, a blast or a payout. It is not a kill — it is a change of driver.
+        Player.Position = prey.Position;
+        Player.Height = prey.Height;
+        prey.TakeDamage(float.MaxValue);
+        Soldiers.Remove(prey);
+        _escort?.Members.Remove(prey);
+
+        mote.Possess(Player, VirusHost.Soldier);
+        Audio.PlayMawSwallow();
+        Audio.PlayAnchorBite(0f);   // their launchers, changing hands
+        return true;
+    }
+
+    /// <summary>How much slack the mote gets on passive contact with a person. Wide, on
+    /// purpose: two bodies flying at each other is a far harder touch than a mote settling
+    /// onto a hunter parked on the grid.</summary>
+    private const float SoldierInfectMargin = 3.5f;
+
+    /// <summary>The passive reach: fly into one and it is yours.</summary>
+    private float SoldierTouchReach
+        => PlayerTank.Radius + EnemySoldier.Radius + SoldierInfectMargin;
+
+    /// <summary>
+    /// The reach of a deliberate grab. Most of a swing's length, because the player has
+    /// asked for it and because the thing they are asking for is moving: a window this wide
+    /// is what turns "impossible" into "get near one and commit".
+    /// </summary>
+    private const float SoldierLungeReach = 18f;
+
+    /// <summary>
+    /// The grab. Pressed near a person, the mote throws itself at the nearest one it can
+    /// reach and takes them — and if there is nobody in range it still lunges, spending the
+    /// gesture rather than silently doing nothing, so the control always answers.
+    ///
+    /// This exists because contact alone, against a target that crosses the sky at
+    /// thirty-four metres a second, is a coin toss dressed as a skill. The lunge is the
+    /// player saying <em>that one</em>, and it is the difference between a mechanic and a
+    /// tease.
+    /// </summary>
+    private void LungeAtSoldier(VirusRig mote)
+    {
+        if (mote.Hosted || Player.Captured) return;
+
+        if (TryWearSoldier(mote, SoldierLungeReach)) return;
+
+        // Nothing in reach: throw the mote down its own look anyway. A reach that came back
+        // empty should still feel like a lunge, and the shove is often enough to close on
+        // whatever was just outside it.
+        mote.Velocity += Player.Forward3 * LungeKick;
+        Audio.PlayCableZip();
+    }
+
+    /// <summary>How hard an empty grab throws the mote forward.</summary>
+    private const float LungeKick = 26f;
+
+    /// <summary>Presses the grab without a keyboard — the self-test's and the harness's way
+    /// in. Honours the same reach and the same refusals a key press does.</summary>
+    public void LungeAtSoldierForTest()
+    {
+        if (Player.Virus is { } mote) LungeAtSoldier(mote);
+    }
+
+    /// <summary>Bills damage to one soldier through the world's own path — the self-test's way
+    /// to land a shot on a specific body without arranging the geometry for a real round.</summary>
+    public void HurtSoldierForTest(EnemySoldier s, float amount) => DamageSoldier(s, amount);
+
+    /// <summary>
+    /// True while the squads have no idea the player is anything but one of their own: a
+    /// VIRUS wearing a stolen body, and not having done anything with it yet.
+    ///
+    /// This is the quietest thing the class does and probably the best. You take a soldier
+    /// out of a squad and the other three go back to their walls, because from outside there
+    /// is nothing to see — same body, same kit, same silhouette in the same sky. You can
+    /// swing through the middle of them. And the moment you use any of it, they know: the
+    /// cover is spent the instant the corruption leaves your hands, and it takes a while to
+    /// get back, because a squad that has just watched one of its own open fire on it does
+    /// not go back to assuming.
+    /// </summary>
+    public bool PlayerPassesForOneOfThem
+        => Player.Virus is { HostKind: VirusHost.Soldier } && _coverBlown <= 0f;
+
+    private float _coverBlown;
+
+    /// <summary>
+    /// The squad currently flying cover for the player, or null. Set by taking one of their
+    /// own (see <see cref="TryWearSoldier"/>), dropped the moment the body is off — or the
+    /// moment the player puts a round into one of them, which nobody forgives.
+    /// </summary>
+    public SoldierSquad? Escort => _escort;
+
+    private SoldierSquad? _escort;
+
+    /// <summary>Which squad a soldier belongs to, or null for one flying on their own.</summary>
+    private SoldierSquad? SquadOf(EnemySoldier who)
+    {
+        foreach (var squad in Squads)
+            if (squad.Members.Contains(who)) return squad;
+        return null;
+    }
+
+    /// <summary>
+    /// Ends an escort because the player shot one of them. Worth its own method for the
+    /// comment: an escort is the only thing in this game the player can lose by being
+    /// careless rather than by being beaten, and a squad that has just watched the comrade
+    /// they were covering open fire on them is not going to be talked round.
+    /// </summary>
+    private void BreakEscort()
+    {
+        if (_escort == null) return;
+        _escort = null;
+        BlowCover();
+        Audio.PlayCrabScream();
+    }
+
+    /// <summary>How long the squads stay wise to a body that has shown its hand. Long
+    /// enough that a player who fires from inside the ring has bought a real fight; short
+    /// enough that going quiet and drifting off is a plan.</summary>
+    private const float CoverBlownTime = 9f;
+
+    /// <summary>Blows the disguise. Called by everything that could only be a virus doing
+    /// it — a corruption round, a spent host, a blade in one of their backs.</summary>
+    private void BlowCover()
+    {
+        if (!PlayerPassesForOneOfThem) { _coverBlown = MathF.Max(_coverBlown, CoverBlownTime); return; }
+        _coverBlown = CoverBlownTime;
+        // One cue, on the tick it happens: the call going up, the same one a squad makes
+        // when it first sees anybody. From their side that is exactly what this is.
+        Audio.PlayHuntCall(0f);
+    }
+
+    /// <summary>Seeds one soldier, and voices it. A no-op on one already turned.</summary>
+    private void SeedSoldier(EnemySoldier s)
+    {
+        if (s.Carrier) return;
+        bool fresh = s.Tagged <= 0f;
+        s.Tag();
+        if (!fresh) return;
+
+        Audio.PlayCoreHit(0.7f);
+        Debris.Burst(new Vector3(s.Position.X, s.Height + EnemySoldier.AimHeight, s.Position.Y),
+            Palette.NeonMagenta, elite: false);
+    }
+
+    /// <summary>
+    /// The overload, seen from the squad's side. A host spent as a detonation does not merely
+    /// kill the people standing in it — it <em>sprays</em> them, and every soldier caught
+    /// turns on the spot. This is the class's heavy used as what it actually is: not a bomb,
+    /// but the moment the infection stops being one body's problem.
+    ///
+    /// Turned rather than damaged on purpose. A blast that killed three soldiers is a good
+    /// blast; a blast that hands you three of them, mid-air, already diving at the fourth, is
+    /// the thing this chassis exists for.
+    /// </summary>
+    private void SpreadPlague(Vector2 at, float height, float radius)
+    {
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive || s.Carrier) continue;
+            if (!WithinHit(at, s.Position, radius + EnemySoldier.Radius)) continue;
+            if (MathF.Abs(s.Height + EnemySoldier.AimHeight - height)
+                > radius + EnemySoldier.BodyHeight) continue;
+            s.Turn();
+            Audio.PlayUnstableLance();
+            Debris.Burst(new Vector3(s.Position.X, s.Height + EnemySoldier.AimHeight, s.Position.Y),
+                Palette.NeonMagenta, elite: true);
+        }
+    }
+
+    /// <summary>How far an overload's spray reaches for people. Wider than the blast's own
+    /// damage field: the corruption carries further than the explosion does, which is what
+    /// makes spending a body in the middle of a squad worth doing.</summary>
+    private const float PlagueRadius = 16f;
+
+    /// <summary>
+    /// Bills every soldier inside a blast. Unlike the hunters' sweep this one honours
+    /// height: a mortar bursting on the grid does not reach somebody at the top of an arc,
+    /// and a rocket that goes off against a wall halfway up one very much does.
+    /// </summary>
+    private void DamageSoldiersInBlast(Vector2 at, float height, float radius, float amount)
+    {
+        if (Soldiers.Count == 0) return;
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive) continue;
+            if (!WithinHit(at, s.Position, radius + EnemySoldier.Radius)) continue;
+            if (MathF.Abs(s.Height + EnemySoldier.AimHeight - height)
+                > radius + EnemySoldier.BodyHeight) continue;
+            DamageSoldier(s, amount);
         }
     }
 
@@ -2358,6 +3670,22 @@ public sealed class World
         var at = new Vector3(Player.Position.X, Player.Height, Player.Position.Y);
         float reach = FishRig.StrikeReach;
 
+        // The squads first, because they are the one target on the field that lives in the
+        // same volume the fish does. Everything else this can spear is either on the floor
+        // or is a fixed point in the air; a soldier is neither, and a strike that catches
+        // one mid-arc is the best thing this chassis can do.
+        foreach (var s in Soldiers)
+        {
+            if (!s.Alive) continue;
+            if (!WithinHit(Player.Position, s.Position, reach + EnemySoldier.Radius)) continue;
+            if (MathF.Abs(Player.Height - (s.Height + EnemySoldier.AimHeight))
+                > reach + EnemySoldier.BodyHeight * 0.5f) continue;
+            if (!body.ConsumeStrike()) return;
+            DamageSoldier(s, FishRig.StrikeDamage);
+            LandStrike(at, Palette.SoldierCloth);
+            return;
+        }
+
         // Hunters sit on the grid, so a strike only reaches one if the dive has genuinely
         // come down to them — a fish cruising at thirty metres cannot spear something on
         // the floor by pointing at it, and the whole cost of the attack is committing to
@@ -2508,6 +3836,22 @@ public sealed class World
             return;   // it ejected — nothing else fires from a body that no longer exists
         }
 
+        // A worn person comes with their launchers, and the launchers come with their own
+        // controls: the same two hook keys and the same gas jump the SOLDIER chassis flies
+        // on. The trigger stays the mote's corruption round rather than the soldier's rifle
+        // — what the virus does to people is the whole class, and it should not have to put
+        // that down to use their legs.
+        if (mote.WornRig is { } worn && !UpdateCableKit(worn)) return;
+
+        if (mote.WornRig == null)
+        {
+            AnchorInSight = null;
+            // Exposed, the same key is the grab. E throws the mote at whatever body is
+            // nearest and climbs into it — the deliberate version of the contact that
+            // happens on its own, and the answer to a target too quick to simply bump into.
+            if (mote.Exposed && InputMap.RightHookPressed) LungeAtSoldier(mote);
+        }
+
         if (!InputMap.VirusFireDown) return;
 
         if (mote.HostKind == VirusHost.Crab) FireVirusLance(mote);
@@ -2536,9 +3880,13 @@ public sealed class World
             return;
         }
 
+        // Firing is the tell. Whatever a stolen body looks like from outside, what comes out
+        // of it does not look like a rifle, and the squad it belonged to is watching.
+        if (PlayerPassesForOneOfThem) BlowCover();
+
         bool acid = mote.HostKind == VirusHost.Maw;
         SpawnDirected(origin, dir, acid ? AcidSpitSpeed : Projectile.RifleSpeed,
-            rocket: false, acid: acid);
+            rocket: false, acid: acid, seeds: true);
         Audio.PlayLaser();          // a dry corruption zap, the SPIDER's emitter clip
         mote.Jolt(0.05f);
     }
@@ -2623,8 +3971,19 @@ public sealed class World
         // Guarded here rather than only at the trigger, so the test hatch can never stage
         // a free detonation off a mote with no body to spend.
         if (!mote.Hosted) return;
+
+        // Where it goes off — read before the rig ejects, since the eject kicks the mote
+        // upward and the burst belongs where the body was standing.
+        Vector2 at = Player.Position;
+        float height = Player.Height + 1f;
+
+        // Nothing survives an overload's cover. Blown before the eject, while the disguise
+        // still technically holds, so the timer starts from the moment they saw it.
+        BlowCover();
+
         mote.Overload();
         StageVirusBurst(overload: true);
+        SpreadPlague(at, height, PlagueRadius);
     }
 
     /// <summary>
@@ -2708,10 +4067,22 @@ public sealed class World
     /// through the bright core. The same geometry that scores a bullet on the crab's gem or
     /// the maw's crystal admits a mote flown into it — the weak point is, for this one
     /// class, a door.
+    ///
+    /// A person has no door, and that is the whole of why the squads needed their own rule.
+    /// A hunter can be taken by flying into it because a hunter is a slow thing on a floor;
+    /// a soldier crosses the sky at thirty metres a second and is never in the same place
+    /// twice, so contact alone would be a lottery nobody could play. They have to be
+    /// <em>seeded</em> first — one round of corruption, which slows them and opens them —
+    /// and then taken inside that window. Which turns the mote's gun from a weapon into an
+    /// instrument, and is by some distance the most interesting thing this class does.
     /// </summary>
     private void TryInfect(VirusRig mote)
     {
         if (Player.Captured) return;
+
+        // A soldier, taken in the air. Checked before the machines: a squad in the middle
+        // of a fight is a far more urgent offer than a monster standing about.
+        if (TryWearSoldier(mote, SoldierTouchReach)) return;
 
         // The Crab-Core, entered through the gem. Alive only — a dying rig mid-glitch is
         // not a body anymore. The probe rides half a unit up the mote, roughly its middle.
@@ -2834,6 +4205,10 @@ public sealed class World
             if (WithinHit(p.Position, e.Position, reach)) DamageEnemy(e, GrenadeDamage);
         }
 
+        // A rocket is the one answer a player has to a squad that has settled into its ring:
+        // it goes off where it is pointed rather than where the grid is, so it reaches them.
+        DamageSoldiersInBlast(p.Position, at.Y, Projectile.RocketSplash, GrenadeDamage);
+
         // The blast reaches the two crystals too, if either happens to be in it.
         if (Boss is { } boss && boss.HitsCore(p.Position, p.Height))
         {
@@ -2872,7 +4247,7 @@ public sealed class World
         // A rocket fired at a wall you are swinging toward should be felt through the
         // camera, not merely heard.
         float range = Torus.Distance(p.Position, Player.Position);
-        if (Player.Soldier is { } rig && range < RocketShakeRange)
+        if (Player.Rig is { } rig && range < RocketShakeRange)
         {
             rig.Jolt(0.35f + 0.65f * (1f - range / RocketShakeRange));
             // And it stings if the player is genuinely inside their own blast, which a
@@ -3074,6 +4449,10 @@ public sealed class World
                     p.Active = false;
                     break;
                 }
+
+                // And the squads, which are somewhere else entirely: up in the city rather
+                // than on the grid, so they get their own pass with a height gate on it.
+                if (p.Active) StrikeSoldiers(p);
             }
             else
             {
@@ -3105,7 +4484,45 @@ public sealed class World
                     // Directional armour: on the TANK the blow is turned by the sloped front,
                     // taken square on the flanks and taken worse from behind (returns 1 for
                     // every other chassis, which has no plating). Facing is the tank's defence.
-                    DamagePlayer(EnemyShotDamage * Player.ArmorMultiplierFromShot(p.Velocity));
+                    //
+                    // A tracer arriving from this side is a soldier's rifle — the only enemy
+                    // weapon in the game that isn't a cannon — and bills the lighter figure.
+                    // Nothing else the field can fire is directed, so the flag stands in for
+                    // the shooter without needing to be carried on the round.
+                    float bite = p.IsTracer ? SoldierShotDamage : EnemyShotDamage;
+
+                    // The SPIDER holding a machine out in front of its core: the round
+                    // meets the hostage instead. This is the counterplay to having the
+                    // weak point on the front of the craft, and it is why the claw is a
+                    // defensive tool before it is an offensive one — the field ends up
+                    // shooting its own, and the player is standing behind it.
+                    if (Player.Claw is { } claw
+                        && claw.ShieldsFrom(p.Velocity, Player.Forward)
+                        && claw.Victim is { } shieldBody)
+                    {
+                        DamageEnemy(shieldBody, claw.Soak());
+                        Player.Jolt(0.15f);
+                        Audio.PlayHit();
+                        p.Active = false;
+                        continue;
+                    }
+
+                    DamagePlayer(bite * Player.ArmorMultiplierFromShot(p.Velocity));
+
+                    // And a round that found the core while the lance was winding takes
+                    // the wind with it. The charge is gone, the emitter is dead for a
+                    // beat, and the two seconds of standing still that bought it were
+                    // spent for nothing — which is exactly the risk the brace is the
+                    // reward for. See SpiderWeapon.Break.
+                    if (Player.StruckInTheCore(p.Velocity)
+                        && Player.Spider is { } emitter && emitter.Break())
+                    {
+                        Audio.SetLanceCharge(false, 0f);
+                        Player.Rooted = false;
+                        Player.Jolt(0.5f);
+                        Audio.PlayWarning();
+                    }
+
                     p.Active = false;
                 }
             }
@@ -3178,7 +4595,10 @@ public sealed class World
             Audio.PlayExplosion();
             // Break the hunter into flying polygon shards + sparks at roughly its
             // body's centre height (the mesh sits on the grid, scaled up in view).
-            var origin = new Vector3(enemy.Position.X, 1.6f, enemy.Position.Y);
+            // Roughly the middle of the hull, taken off the mesh's own size rather than
+            // typed in, so a hunter that is resized throws its wreckage from its new middle.
+            var origin = new Vector3(enemy.Position.X, EnemyTank.BodyHeight * 0.5f,
+                enemy.Position.Y);
             Color body = enemy.IsElite ? Palette.EliteFill : Palette.EnemyFill;
             Debris.Burst(origin, body, enemy.IsElite);
 
@@ -3259,6 +4679,7 @@ public sealed class World
             }
 
             // Enemies: a chunk that lands on a hunter crushes it and is spent.
+            bool spent = false;
             foreach (var e in Enemies)
             {
                 if (!e.Alive) continue;
@@ -3266,6 +4687,22 @@ public sealed class World
                 if (Torus.DistanceSquared(atXZ, e.Position) > reach * reach) continue;
                 DamageEnemy(e, damage);
                 c.Mass = 0f;   // spent — no longer bills anyone, keeps tumbling as wreckage
+                spent = true;
+                break;
+            }
+            if (spent) continue;
+
+            // And the squads, who are far more likely to meet falling masonry than anyone
+            // else on the field: they live in the part of the world that comes down. Only a
+            // soldier near the grid is caught, for the same reason the player is — a chunk
+            // still high in the air has not landed on anybody yet.
+            foreach (var s in Soldiers)
+            {
+                if (!s.Alive || s.Height > 3f) continue;
+                float reach = EnemySoldier.Radius + chunkR;
+                if (Torus.DistanceSquared(atXZ, s.Position) > reach * reach) continue;
+                DamageSoldier(s, damage);
+                c.Mass = 0f;
                 break;
             }
         }
@@ -3394,6 +4831,11 @@ public sealed class World
                     <= (field + BlastBossMargin) * (field + BlastBossMargin))
                     FellStructure(s);
             }
+
+            // The blast is a sphere of energy, not a disc on the floor, so it reaches a
+            // soldier hanging in the air over it exactly as far as it reaches a hunter
+            // standing beside it.
+            DamageSoldiersInBlast(blast.Position, CrabCoreBlast.CoreHeight, field, CrabBlastDamage);
 
             float reach = field + EnemyTank.Radius;
             float reachSq = reach * reach;

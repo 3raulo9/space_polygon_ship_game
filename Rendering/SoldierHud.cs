@@ -34,12 +34,19 @@ internal static class SoldierHud
     private static readonly Color Dim = new(120, 140, 148, 150);
     private static readonly Color Live = new(150, 240, 235, 230);
 
+    /// <summary>
+    /// Everything the cable kit puts on the glass, for whoever is currently holding it. All
+    /// of it applies to a VIRUS wearing a stolen body except the rocket pips: those are the
+    /// SOLDIER chassis's own ordnance, carried by the person the class was built around, and
+    /// a thief who took the launchers did not also take the tubes. Drawing them for a mote
+    /// that cannot fire one would be a gauge for a button that does nothing.
+    /// </summary>
     public static void DrawOverlay(World.World world, SoldierRig rig, PlayerTank p)
     {
         DrawDamage(p, (float)Raylib.GetTime());
         DrawCrosshair(world, rig);
         DrawHookIndicators(rig);
-        DrawRockets(p);
+        if (p.Soldier != null) DrawRockets(p);
         DrawRigState(p, rig);
     }
 

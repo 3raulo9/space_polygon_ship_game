@@ -62,7 +62,10 @@ internal static class HudRenderer
         // row and the same radar, because it is the same run and the same craft's worth
         // of information — and then adds the handful of things that only exist on a
         // chassis hanging off two cables, its own crosshair among them. See SoldierHud.
-        if (p.Soldier is { } rig) SoldierHud.DrawOverlay(world, rig, p);
+        // The cable kit's own instruments, for whoever is holding it: the hook indicators
+        // are how a player reads which lines they still have, and a VIRUS wearing a stolen
+        // body needs that as much as the chassis that was issued one.
+        if (p.Rig is { } rig) SoldierHud.DrawOverlay(world, rig, p);
 
         // Same arrangement for the FISH, whose additions are all about the one axis this
         // dashboard has never had an instrument for: the radar says where things are on
@@ -308,6 +311,38 @@ internal static class HudRenderer
 
             Color blip = e.IsElite ? Palette.EliteFill : Palette.EnemyFill;
             Raylib.DrawRectangle((int)px, (int)py, 2, 2, blip);
+        }
+
+        // The soldier squads. Drawn a shade smaller than a hunter and in their own cold
+        // steel, because a contact that is thirty metres up in the air is a different kind
+        // of problem from one on the grid and reading them as the same blip would be a lie.
+        // The one currently on a run is drawn white and a pixel bigger: with four of them
+        // circling, the only thing the radar really has to answer is which one is coming.
+        foreach (var sol in world.Soldiers)
+        {
+            if (!sol.Alive) continue;
+            Vector2 rel = Torus.Delta(p.Position, sol.Position);
+            float rx = rel.X * c - rel.Y * s;
+            float ry = rel.X * s + rel.Y * c;
+
+            float px = Math.Clamp(cx - rx * scale, x0 + 1, x0 + RadarSize - 2);
+            float py = Math.Clamp(cy - ry * scale, y0 + 1, y0 + RadarSize - 2);
+
+            // Anything fighting on the player's side is not a contact any more, it is an
+            // asset, and the radar says so: a turned body in the plague's own magenta, and a
+            // squad flying cover in the charged teal every friendly thing on this display has
+            // always used. With eight people in the air over one fight, which of them are
+            // yours is the single most useful pixel on the panel.
+            if (sol.Allied)
+                Raylib.DrawRectangle((int)px, (int)py, 2, 2, Palette.BatteryCore);
+            else if (sol.Carrier)
+                Raylib.DrawRectangle((int)px, (int)py, 2, 2, Palette.NeonMagenta);
+            else if (sol.BladesOut)
+                Raylib.DrawRectangle((int)px - 1, (int)py - 1, 3, 3, Palette.SoldierBlade);
+            else
+                Raylib.DrawRectangle((int)px, (int)py, 2, 2,
+                    sol.Tagged > 0f ? Palette.NeonMagenta
+                    : sol.IsLeader ? Palette.SoldierMark : Palette.SoldierSteel);
         }
 
         // Floating salvage shows as friendly blips so the player can steer toward a

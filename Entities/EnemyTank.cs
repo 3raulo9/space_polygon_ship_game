@@ -19,6 +19,35 @@ public sealed class EnemyTank
     public bool IsElite;
     public bool Alive => Shield > 0f;
 
+    /// <summary>
+    /// How far off the grid this hull currently is. Zero for its whole ordinary life — a
+    /// hunter drives, it does not leave the floor — and non-zero for exactly one reason:
+    /// something has picked it up. The SPIDER's claw carries one at head height and then
+    /// throws it, and both the renderer and the height-aware hit tests read this so a
+    /// machine in the air is drawn and struck where it actually is.
+    /// </summary>
+    public float Height;
+
+    /// <summary>
+    /// True while the SPIDER's claw has hold of this hull. Its brain is suspended for the
+    /// duration — no drive, no fire — and the claw writes its transform instead, the same
+    /// arrangement the Crab-Core's seizure has with the player. It is still very much
+    /// alive and still very much shootable; it simply is not driving.
+    /// </summary>
+    public bool Grabbed;
+
+    /// <summary>
+    /// True while this hull is in the air after being thrown, travelling on
+    /// <see cref="Toss"/> until it meets the grid. Also suspends the brain: a machine
+    /// tumbling through the air is not taking a firing solution on anybody.
+    /// </summary>
+    public bool Flung;
+
+    /// <summary>Ballistic velocity of a thrown hull, world units a second. Stepped by the
+    /// world, which is also what decides what the landing costs and who else was standing
+    /// there.</summary>
+    public Vector3 Toss;
+
     private readonly float _moveSpeed;
     private readonly float _turnSpeed;
     private readonly float _preferredRange;   // hangs at this distance, not point-blank
@@ -28,7 +57,13 @@ public sealed class EnemyTank
     // Visual + collision size are one and the same: the renderer scales the mesh
     // by <see cref="Scale"/>, and the hitbox scales with it, so what you see is
     // what you can hit. Change this one number to resize the whole enemy.
-    public const float Scale = 1.6f;
+    //
+    // Doubled from the 1.6 it stood at for most of this game's life. At that size a hunter
+    // read as a model of a tank sitting on a very large floor; at this one it is a machine
+    // you have to drive around, it fills the frame when it closes, and — the thing that
+    // actually decided it — it finally reads as belonging to the same world as a
+    // forty-metre tower rather than to a diorama in front of one.
+    public const float Scale = 3.2f;
     private const float BaseRadius = 1.3f;   // hitbox on the unscaled mesh
     public const float Radius = BaseRadius * Scale;
 
@@ -88,6 +123,12 @@ public sealed class EnemyTank
         fireDir = default;
         firePitch = 0f;
 
+        // Held in a claw, or tumbling through the air after being thrown out of one: the
+        // brain is off. Something else owns where this hull is this tick, and a machine
+        // being used as a shield should not be calmly lining up a shot from inside the
+        // hand that is crushing it.
+        if (Grabbed || Flung) return false;
+
         // Chase across the seam the short way: work against the player's nearest image
         // on the torus, not their raw coordinates, so a hunter by the world's edge homes
         // in on a player just over it instead of driving the long way round the arena.
@@ -125,14 +166,22 @@ public sealed class EnemyTank
         {
             _fireCooldown = _fireInterval;
             fireDir = dirToPlayer;
-            fireOrigin = Position + dirToPlayer * (Radius + 0.6f);
+            float reach = Radius + 0.6f;
+            fireOrigin = Position + dirToPlayer * reach;
 
             // Elevate onto the craft's body centre. Straight-line aim at where the player
             // is right now: no lead, so a craft that keeps climbing or falling through the
             // shot's flight still slips it — the jump goes on being a dodge, it just isn't
             // a free one any more. The muzzle rides at barrel height like every flat shot.
+            //
+            // Solved from the muzzle rather than from the hull's centre, and the difference
+            // is not academic: the round leaves a whole body-length nearer the target than
+            // the middle of the hunter is, so an elevation worked out from the centre is
+            // short by that fraction of the climb — an error that grows as it closes, and
+            // grows with the size of the hunter. Get this wrong and a big enough tank
+            // cannot hit a leaping craft at knife range at all.
             float rise = playerHeight + AimHeight - Projectile.BoltHeight;
-            firePitch = MathF.Atan2(rise, dist);
+            firePitch = MathF.Atan2(rise, MathF.Max(1f, dist - reach));
             return true;
         }
         return false;

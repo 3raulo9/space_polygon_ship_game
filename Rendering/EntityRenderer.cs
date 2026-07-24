@@ -64,6 +64,10 @@ public sealed class EntityRenderer
     /// where its anchor is and how hard it is pulling.</summary>
     private readonly SoldierRenderer _soldier = new();
 
+    /// <summary>And the enemy squads: the only thing on this roster that is a person, drawn
+    /// whole out in the world rather than as a pair of forearms in the player's own view.</summary>
+    private readonly EnemySoldierRenderer _squads = new();
+
     // The FISH: articulated for the same reason the soldier is and then some — a rigid
     // fish is not a statue, it is a dead fish. Seen in full on the turntable, and in
     // pieces out in the run, where the player is inside its head.
@@ -136,9 +140,18 @@ public sealed class EntityRenderer
             if (!e.Alive) continue;
             var mesh = e.IsElite ? _eliteCone : _standardTank;
             // Scale the mesh by the same factor the hitbox uses, so the visible
-            // body and the collision radius are one and the same.
-            mesh.Draw(Torus.NearestImage(e.Position, eyeXZ), e.Heading, 0f, cameraPos, EnemyTank.Scale);
+            // body and the collision radius are one and the same. Drawn at its own height
+            // rather than at nought, which is the same number for the whole of an ordinary
+            // hunter's life and is not while one is hanging in a SPIDER's claw or tumbling
+            // through the air after being thrown out of it.
+            mesh.Draw(Torus.NearestImage(e.Position, eyeXZ), e.Heading, e.Height, cameraPos,
+                EnemyTank.Scale);
         }
+
+        // The enemy squads, drawn after the hunters and before everything loose in the air:
+        // they belong to the city, they are occluded by it, and their cables have to be laid
+        // over the towers they are anchored to rather than under them.
+        _squads.Draw(world, cameraPos, (float)Raylib.GetTime());
 
         // Floating pickups: bob at waist height and turn slowly on the spot, so the
         // charge band and bullet tip catch the light as they drift in the fog. A CRAB
@@ -194,11 +207,17 @@ public sealed class EntityRenderer
                     ? spider.BeamDirection
                     : world.Player.Forward3;
 
+                // The shaft that is drawn is the shaft that burned: reach and width both
+                // come off the charge it went off at, through the weapon's own solvers, so
+                // a beam that looks like it swept a street is one that swept a street. The
+                // gathering flare shows the same thing before the fact — a meter filling
+                // is a beam visibly getting longer and fatter.
+                float power = spider.BeamActive ? spider.BeamPower : spider.ChargeFraction;
                 _crab.DrawLance(origin, dir,
                     spider.Charging ? spider.ChargeFraction : 0f,
                     spider.BeamProgress,
-                    SpiderWeapon.BeamLength,
-                    SpiderWeapon.BeamRadius * (0.45f + 0.55f * spider.BeamPower),
+                    SpiderWeapon.LengthAt(power),
+                    SpiderWeapon.RadiusAt(power),
                     SpiderWeapon.FlareScale);
             }
         }
@@ -421,12 +440,157 @@ public sealed class EntityRenderer
     }
 
     /// <summary>
+    /// The world as an exposed VIRUS mote perceives it — which is to say, almost not at all.
+    ///
+    /// A payload with no body has no eyes either. It cannot see the city, the grid, the sky
+    /// or anything else that is simply <em>there</em>; what it has instead is a sense of
+    /// disturbance, and what disturbs it is movement. So this pass draws nothing static and
+    /// nothing distant: only the things crossing the world near it, as hollow black shapes
+    /// with a bright wire around them, going dim as they slow and vanishing outright when
+    /// they stop.
+    ///
+    /// That last rule is the whole of what makes the exposed state frightening rather than
+    /// merely dark. A hunter parked on the grid is invisible. A squad perched on a tower is
+    /// invisible. The moment any of them moves, they are the only thing in the world.
+    /// </summary>
+    public void DrawUnseen(World.World world, Vector3 cameraPos, float elapsed)
+    {
+        var eyeXZ = new Vector2(cameraPos.X, cameraPos.Z);
+
+        foreach (var e in world.Enemies)
+        {
+            if (!e.Alive) continue;
+            // A hunter's own drive is not exposed, so its motion is read off where it was:
+            // the tracker below keeps one previous position per body and hands back a speed.
+            Color edge = EdgeFor(_motion.Speed(e, e.Position));
+            if (edge.A == 0) continue;
+            var mesh = e.IsElite ? _eliteCone : _standardTank;
+            mesh.DrawWire(Torus.NearestImage(e.Position, eyeXZ), e.Heading, 0f, cameraPos,
+                EnemyTank.Scale, edge);
+        }
+
+        foreach (var s in world.Soldiers)
+        {
+            if (!s.Alive) continue;
+            Color edge = EdgeFor(s.Velocity.Length());
+            if (edge.A == 0) continue;
+
+            var flight = new SoldierModel.FlightPose(
+                Speed: s.PlanarSpeed, Bank: s.Bank,
+                Grounded: s.Move == SoldierMove.Running,
+                Perched: s.Move == SoldierMove.Perched,
+                Blades: s.BladesOut, Stagger: s.Stagger,
+                Time: elapsed + s.Slot * 1.37f);
+
+            _soldierModel.DrawGhost(Torus.NearestImage(s.Position, eyeXZ), s.Height, s.Heading,
+                cameraPos, edge, flight, EnemySoldier.Scale);
+        }
+
+        // The two big machines are rigs rather than meshes, and wireframing a whole posed
+        // Crab-Core would be a thousand lines of the frame spent on something the mote is
+        // in no position to fight anyway. They read as what they are to a sense like this:
+        // a very large disturbance, at the size and place of the real thing.
+        if (world.Boss is { Alive: true } boss)
+        {
+            Vector2 at = Torus.NearestImage(boss.Position, eyeXZ);
+            Color edge = EdgeFor(_motion.Speed(boss, boss.Position));
+            if (edge.A != 0)
+                Raylib.DrawSphereWires(new Vector3(at.X, CrabRig.CoreWorldY * 0.6f, at.Y),
+                    7f, 6, 7, edge);
+        }
+
+        if (world.Maw is { Alive: true } maw)
+        {
+            Vector2 at = Torus.NearestImage(maw.Position, eyeXZ);
+            Color edge = EdgeFor(_motion.Speed(maw, maw.Position));
+            if (edge.A != 0)
+                Raylib.DrawSphereWires(new Vector3(at.X, maw.BodyY, at.Y), 4.5f, 6, 7, edge);
+        }
+
+        // Rounds in the air. The fastest-moving things in the world and therefore the
+        // brightest — including the mote's own, which it perceives leaving exactly as it
+        // perceives one arriving.
+        foreach (var p in world.Projectiles)
+        {
+            if (!p.Active) continue;
+            Vector2 at = Torus.NearestImage(p.Position, eyeXZ);
+            var head = new Vector3(at.X, p.Height, at.Y);
+            if (Vector3.Distance(head, cameraPos) > PolyMesh.UnseenRange) continue;
+
+            Vector3 tail = head - p.Heading3 * 2.2f;
+            Raylib.DrawLine3D(tail, head, Color.White);
+        }
+    }
+
+    /// <summary>
+    /// How brightly a thing at this speed registers. Nothing at all below the floor — a
+    /// body that has stopped has stopped existing — then climbing to a hard white by the
+    /// time it is crossing at a run.
+    /// </summary>
+    private static Color EdgeFor(float speed)
+    {
+        if (speed < UnseenFloor) return new Color(0, 0, 0, 0);
+        float f = Math.Clamp((speed - UnseenFloor) / (UnseenFull - UnseenFloor), 0f, 1f);
+        int v = (int)(90 + 165 * f);
+        return new Color(v, v, v, 255);
+    }
+
+    /// <summary>Below this, a thing is standing still as far as the mote is concerned.</summary>
+    private const float UnseenFloor = 1.2f;
+
+    /// <summary>And at this it is as bright as perception gets.</summary>
+    private const float UnseenFull = 16f;
+
+    /// <summary>
+    /// Speeds for the things that do not carry one. Hunters and the two monsters move by
+    /// writing their position, so the only way to know whether one is moving is to remember
+    /// where it was — which is exactly what a sense built on disturbance would have to do.
+    /// </summary>
+    private readonly MotionTracker _motion = new();
+
+    private sealed class MotionTracker
+    {
+        private readonly Dictionary<object, (Vector2 At, float Speed)> _seen = new();
+
+        public float Speed(object who, Vector2 now)
+        {
+            float speed = 0f;
+            if (_seen.TryGetValue(who, out var was))
+            {
+                // Smoothed, because this is sampled on the render clock rather than the
+                // sim's: a frame that happened to land between two fixed steps would
+                // otherwise read as a body standing perfectly still.
+                float moved = Torus.Distance(was.At, now) / MathF.Max(1e-4f, Raylib.GetFrameTime());
+                speed = was.Speed * 0.6f + MathF.Min(moved, 60f) * 0.4f;
+            }
+            _seen[who] = (now, speed);
+            return speed;
+        }
+    }
+
+    /// <summary>
     /// Draws a single roster entry as a rotating turntable specimen for the test
     /// screen. Tanks sit on the grid; the ships float, matching the rootless drift
     /// the enemies already have. Returns nothing — purely a display pass.
     /// </summary>
-    public void DrawShowcase(EnemyKind kind, Vector2 pos, float heading, Vector3 cameraPos)
+    public void DrawShowcase(EnemyKind kind, Vector2 pos, float heading, Vector3 cameraPos,
+        float elapsed)
     {
+        // The squads are a body rather than a mesh, and the only pose worth putting in a
+        // bestiary is the one they kill from: folded flat, blades out, mid-run. Hung at
+        // head height on the turntable because that is where they live — a soldier
+        // standing on the grid is a soldier having a bad day.
+        if (kind == EnemyKind.Soldier)
+        {
+            var pose = new SoldierModel.FlightPose(
+                Speed: 26f, Bank: 0.30f, Grounded: false, Perched: false,
+                Blades: true, Stagger: 0f, Time: elapsed);
+            _soldierModel.DrawFlier(pos, 1.9f, heading, cameraPos,
+                Palette.SoldierCloth, Palette.SoldierMark, Palette.SoldierSteel,
+                Palette.SoldierSteel, Palette.SoldierBlade, pose);
+            return;
+        }
+
         (PolyMesh mesh, float height) = kind switch
         {
             EnemyKind.StandardTank    => (_standardTank, 0f),
