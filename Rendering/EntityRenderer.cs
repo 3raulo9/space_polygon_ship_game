@@ -135,6 +135,23 @@ public sealed class EntityRenderer
             _maw.DrawLasers(maw, cameraPos, mawShift);
         }
 
+        // The other players. This is a first-person game, so a craft on screen never existed
+        // outside the hangar's turntable — which is exactly the draw reused here, one per
+        // seat that is not the eye behind the camera. Drawn at each craft's own height, so a
+        // team-mate's jump lifts their whole chassis; skipped for a spent player, whose craft
+        // is gone from the field even though their camera lingers to spectate.
+        for (int seat = 0; seat < world.Players.Count; seat++)
+        {
+            if (seat == world.LocalIndex) continue;
+            PlayerTank mate = world.Players[seat];
+            if (!mate.Alive) continue;
+            // A craft whose player has dropped is still standing there — held for their
+            // return — so it is drawn, but frozen (no idle animation clock) so it reads as
+            // dormant rather than alive.
+            float clock = mate.Away ? 0f : (float)Raylib.GetTime();
+            DrawCraft(mate, Torus.NearestImage(mate.Position, eyeXZ), cameraPos, clock);
+        }
+
         foreach (var e in world.Enemies)
         {
             if (!e.Alive) continue;
@@ -609,6 +626,151 @@ public sealed class EntityRenderer
     /// so in words instead, so nothing is drawn here and the middle of the hangar is
     /// left as empty grid, which is the honest picture of a build the machine can't make.
     /// </summary>
+    /// <summary>
+    /// Draws another player's craft out in the world, as their chosen chassis, at the height
+    /// they are actually at — so a team-mate's jump lifts their whole body and a fish hangs
+    /// where it is swimming.
+    ///
+    /// It reuses the hangar's turntable draw wholesale. That draw places every chassis on the
+    /// grid; the height is added by translating the whole modelview up before it runs, which
+    /// works for all five without a height parameter on any of them, because every part of
+    /// every craft is ultimately a DrawTriangle3D through the current matrix. The pose is the
+    /// idle one the hangar shows — a remote player's exact limbs and recoil are not on the
+    /// wire yet, so what a team-mate reads is the right chassis, moving, jumping and firing,
+    /// rather than the precise crouch of the player driving it.
+    /// </summary>
+    public void DrawCraft(PlayerTank craft, Vector2 pos, Vector3 cameraPos, float elapsed)
+    {
+        // A virus that has seized a body is drawn AS that body, corrupted — not as the naked
+        // mote. This is the whole of the class being visible to the rest of the server: the
+        // hunter, soldier or boss the player is wearing, with the infection crawling over it.
+        // An exposed mote (or any other class) falls through to the normal chassis draw below.
+        if (craft.Class == PlayerClass.Virus && craft.Virus is { Hosted: true } worn)
+        {
+            DrawWornHost(craft, worn, pos, cameraPos, elapsed);
+            return;
+        }
+
+        // The hangar turntable draws every chassis at a scale tuned for a close camera, which
+        // in the world sits it far too small beside the enemies — a player tank a third the
+        // size of the hunters it fights. So the whole craft is scaled about its own base to
+        // match the bigness of the thing it stands next to: a player tank the size of an
+        // enemy tank, a player soldier the size of an enemy soldier, and the spider grown up
+        // from its cramped hangar size to something that reads as a war machine.
+        float s = WorldScale(craft.Class);
+
+        Rlgl.PushMatrix();
+        // Scale uniformly about the craft's ground point, then lift the result by its height,
+        // so a jump raises the whole enlarged body and the feet still meet the grid at rest.
+        Rlgl.Translatef(pos.X, craft.Height, pos.Y);
+        Rlgl.Scalef(s, s, s);
+        Rlgl.Translatef(-pos.X, 0f, -pos.Y);
+        DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
+        Rlgl.PopMatrix();
+    }
+
+    /// <summary>
+    /// Draws a virus that is wearing a body, for every machine but the one flying it — the seized
+    /// hunter/elite/soldier or the worn Crab/Maw, rendered with the same models the enemy or boss
+    /// is drawn from so it reads as exactly the thing it is, then tinted toward the build's own
+    /// infection colour (deepening as the husk rots) and finished with the writhing veins the
+    /// player sees crawling over their own view — the class's "antennas". The body's transform is
+    /// the player's snapshotted position/heading/height; nothing here is simulated, only drawn.
+    /// </summary>
+    private void DrawWornHost(PlayerTank craft, VirusRig worn, Vector2 pos, Vector3 cameraPos,
+        float elapsed)
+    {
+        Loadout build = craft.Build;
+        Color mote = build.PartColor(PlayerClass.Virus, 0);
+        Color veins = build.PartColor(PlayerClass.Virus, 1);
+        Color husk = build.PartColor(PlayerClass.Virus, 2);
+        Color payload = build.PartColor(PlayerClass.Virus, 3);
+        float corruption = worn.Corruption;   // 0 fresh .. 1 nearly spent
+        float heading = craft.Heading;
+
+        // Where the veins cluster on this body — roughly its middle, so the "antennas" sit on the
+        // host rather than at its feet.
+        float coreY;
+
+        switch (worn.HostKind)
+        {
+            case VirusHost.Hunter:
+            case VirusHost.Elite:
+            {
+                bool elite = worn.HostKind == VirusHost.Elite;
+                PolyMesh mesh = elite ? _eliteCone : _standardTank;
+                Color baseFill = elite ? Palette.EliteFill : Palette.EnemyFill;
+                Color body = GridRenderer.LerpColor(baseFill, veins, 0.35f + 0.45f * corruption);
+                mesh.Draw(pos, heading, craft.Height, cameraPos, EnemyTank.Scale, body);
+                coreY = craft.Height + 2f;
+                break;
+            }
+
+            case VirusHost.Soldier:
+                // The person, drawn from the same articulated figure the hangar shows. It carries
+                // its own palette; the infection reads from the veins laid over it below.
+                _soldierModel.Draw(build, pos, heading, cameraPos, elapsed);
+                coreY = craft.Height + 2.2f;
+                break;
+
+            case VirusHost.Crab:
+            {
+                // The worn Crab-Core: the boss's own rig on a slow idle (gem turning, legs
+                // breathing, carapace shut), its core flooded toward the infection as it rots.
+                // Grounded, like the boss and like a grounded host, so no height is passed.
+                var pose = new CrabPose(
+                    CoreSpin: elapsed * 1.3f,
+                    ClawOpen: 0f,
+                    LegPhase: elapsed * 1.8f,
+                    CoreColor: GridRenderer.LerpColor(payload, veins, corruption),
+                    SlideOffset: Vector2.Zero);
+                _crab.Draw(pose, pos, heading, cameraPos);
+                coreY = CrabRig.CoreWorldY;
+                break;
+            }
+
+            case VirusHost.Maw:
+            {
+                // The worn Maw-Core hovers. It has no legs to ground it, so it is drawn a few
+                // units above the player's hover origin rather than at the boss's own high float.
+                MawPose pose = MawCore.ShowcasePose(elapsed);
+                float bodyY = craft.Height + 3f;
+                _maw.Draw(pose, pos, bodyY, cameraPos);
+                coreY = bodyY;
+                break;
+            }
+
+            default:
+                // Defensive: the caller only enters here while Hosted, so HostKind is never None.
+                // If it somehow is, fall back to the mote rather than drawing nothing.
+                _virusModel.Draw(build, pos, heading, cameraPos, elapsed);
+                return;
+        }
+
+        _virusModel.DrawPosed(pos, heading, coreY, cameraPos, elapsed,
+            mote, veins, husk, payload, corruption);
+    }
+
+    /// <summary>
+    /// How much to grow each chassis when drawn out in the world, chosen so a player craft
+    /// reads at the same size as its enemy counterpart: the tank matches
+    /// <see cref="EnemyTank.Scale"/>, the soldier matches <see cref="EnemySoldier.Scale"/>,
+    /// and the two with no enemy twin (fish, virus) are sized to sit convincingly among the
+    /// rest rather than shrinking into specks. The spider is grown well past its hangar size —
+    /// larger, as a war machine should be, though still short of the Crab-Core it is a cut
+    /// down cousin of.
+    /// </summary>
+    private static float WorldScale(PlayerClass chassis) => chassis switch
+    {
+        PlayerClass.Tank => 3.2f,     // = EnemyTank.Scale; the player parts share the base size
+        PlayerClass.Soldier => 2.0f,  // = EnemySoldier.Scale
+        PlayerClass.Spider => 2.1f,   // grown up from the hangar, but the wide leg span reads
+                                      // big fast, so this stays well under the Crab-Core
+        PlayerClass.Fish => 2.4f,
+        PlayerClass.Virus => 2.4f,
+        _ => 1f,
+    };
+
     public void DrawLoadoutShowcase(Loadout loadout, Vector2 pos, float heading,
         Vector3 cameraPos, float elapsed)
     {

@@ -146,6 +146,77 @@ public sealed class CrabCore
         Heading = heading;
     }
 
+    // --- Client puppet --------------------------------------------------------
+    // On a client the boss is not simulated — it is shown. A puppet carries the host's
+    // position, heading, phase and core integrity from the snapshot and drives only its own
+    // cosmetics (the core's spin, the death glitch) off a local clock, so no AI, no movement
+    // and no Random ever runs on a machine that does not own the fight.
+
+    /// <summary>True on a client's copy of the boss, which is posed from the phase and a clock
+    /// rather than from a live protocol.</summary>
+    public bool IsPuppet { get; private set; }
+    private float _puppetClock;
+
+    // The host reports the boss twenty times a second; these hold its latest reported place so
+    // Animate can ease the drawn carapace onto it rather than teleporting it there each packet.
+    private Vector2 _netPos;
+    private float _netHeading;
+    private bool _hasNet;
+    private const float NetEaseRate = 18f;
+
+    // The seizure the host is playing out, so onlookers see the boss reach out and club a held
+    // player rather than stand idle beside a craft floating in its grip. Zero unless it has hold
+    // of someone, so a puppet boss draws exactly as it always did the rest of the time.
+    private float _netGrabArm, _netStrikeArm, _netSeizureGlow;
+
+    /// <summary>Makes a render-only boss for a client to place a host's Crab-Core.</summary>
+    public static CrabCore Puppet(Vector2 pos, float heading)
+        => new(pos, heading) { IsPuppet = true };
+
+    /// <summary>Client-side: adopt the host's account of the boss this snapshot. Its position is
+    /// stored as a target Animate eases toward (snapped on first sight); phase and core health
+    /// are display state and taken outright.</summary>
+    public void NetSet(Vector2 pos, float heading, State phase, float coreFrac,
+        float grabArm, float strikeArm, float seizureGlow)
+    {
+        if (!_hasNet) { Position = pos; Heading = heading; _hasNet = true; }
+        _netPos = pos;
+        _netHeading = heading;
+        Phase = phase;
+        _coreHealth = Math.Clamp(coreFrac, 0f, 1f) * CoreMaxHealth;
+        _netGrabArm = grabArm;
+        _netStrikeArm = strikeArm;
+        _netSeizureGlow = seizureGlow;
+    }
+
+    /// <summary>Client-side cosmetic advance: eases the carapace toward its last reported place,
+    /// spins the core and plays out the death glitch, with no protocol and no sound.</summary>
+    public void Animate(float dt)
+    {
+        _puppetClock += dt;
+        if (_hasNet)
+        {
+            float k = 1f - MathF.Exp(-NetEaseRate * dt);
+            Position = Torus.Wrap(Position + Torus.Delta(Position, _netPos) * k);
+            Heading += MathF.IEEERemainder(_netHeading - Heading, MathF.Tau) * k;
+        }
+        if (Phase == State.Dying)
+        {
+            _deathTime += dt;
+            if (_deathTime >= DeathDuration) Phase = State.Dead;
+        }
+    }
+
+    /// <summary>
+    /// One-shot sounds the boss raised this tick — its alarm, its hunt call, and the beam's
+    /// charge/warning/fire. The AI has no world reference, so rather than reach for the audio
+    /// device directly (which only the host could hear) it names them here, and the world Emits
+    /// each at the boss's position so they cross the wire to every client. Drained by the world
+    /// after each <see cref="Update"/>; cleared at the top of the next one.
+    /// </summary>
+    public IReadOnlyList<(Cue Id, float Param)> Cues => _cues;
+    private readonly List<(Cue Id, float Param)> _cues = new();
+
     /// <summary>
     /// Advances the protocol one tick against the player's position. Returns true on
     /// the exact tick a claw-plate snaps shut, so the caller can fire the CLANG.
@@ -154,6 +225,7 @@ public sealed class CrabCore
     {
         _stateTime += dt;
         _footfalls.Clear();
+        _cues.Clear();
         bool snapped = false;
 
         // Stalk across the seam the short way: everything below reasons about the
@@ -299,7 +371,7 @@ public sealed class CrabCore
 
         // The instant it commits to a new side (a pause/zero → moving edge), blare
         // the alarm — it lurches right, then left, then right, sounding each time.
-        if (dir != 0f && _lastSlideDir == 0f) Audio.PlayAlarm();
+        if (dir != 0f && _lastSlideDir == 0f) _cues.Add((Cue.Alarm, 0f));
         _lastSlideDir = dir;
 
         Position += RightVector() * (SlideSpeed * dir) * dt;
@@ -491,7 +563,7 @@ public sealed class CrabCore
         _warnStep = 0;
         SnapToFace(playerPos);
         Enter(State.Aiming);
-        Audio.PlayBeamCharge();
+        _cues.Add((Cue.BeamCharge, 0f));
     }
 
     /// <summary>
@@ -533,7 +605,7 @@ public sealed class CrabCore
 
         // The three climbing warnings, each fired once as its moment passes.
         if (_warnStep < WarnAt.Length && _stateTime >= WarnAt[_warnStep] * ChargeTime)
-            Audio.PlayBeamWarning(_warnStep++);
+            _cues.Add((Cue.BeamWarning, _warnStep++));
 
         if (_stateTime >= ChargeTime)
         {
@@ -542,7 +614,7 @@ public sealed class CrabCore
             _lockHeading = Heading;
             _lockPitch = MathF.Atan2(CrabRig.CoreWorldY + 3.0f, MathF.Max(dist, 1f));
             Enter(State.Firing);
-            Audio.PlayBeamFire();
+            _cues.Add((Cue.BeamFire, 0f));
         }
     }
 
@@ -610,11 +682,29 @@ public sealed class CrabCore
         return new Vector2(MathF.Cos(Heading), -MathF.Sin(Heading));
     }
 
-    /// <summary>The live visual snapshot the renderer poses the parts from.</summary>
-    public CrabPose Pose => new(
-        _coreSpin, _clawOpen, _legPhase,
-        CoreColorFor(Hostility, MathF.Max(MathF.Max(_flash, SeizureGlow), LanceGlare)),
-        Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll);
+    /// <summary>The visual snapshot the renderer poses the parts from. A puppet has no live
+    /// accumulators, so it borrows the bestiary's phase-and-clock pose instead.</summary>
+    public CrabPose Pose => IsPuppet
+        ? PuppetPose()
+        : new(_coreSpin, _clawOpen, _legPhase,
+            CoreColorFor(Hostility, MathF.Max(MathF.Max(_flash, SeizureGlow), LanceGlare)),
+            Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll);
+
+    /// <summary>A puppet borrows the bestiary's phase-and-clock pose — but when the host has a
+    /// player in its claw it lays the synced grab and strike arms and the seizure blaze over the
+    /// top, so an onlooker sees the boss reach out and club rather than stand idle beside a craft
+    /// floating in mid-air. Zero arms the rest of the time means the plain showcase pose.</summary>
+    private CrabPose PuppetPose()
+    {
+        CrabPose show = ShowcasePose(Phase, _puppetClock);
+        if (_netGrabArm <= 0.001f && _netStrikeArm <= 0.001f) return show;
+        return show with
+        {
+            GrabArm = _netGrabArm,
+            StrikeArm = _netStrikeArm,
+            CoreColor = CoreColorFor(1f, _netSeizureGlow),
+        };
+    }
 
     private float Hostility => Phase is State.Clamping or State.Pursuit
                                      or State.Aiming or State.Firing ? 1f : 0f;

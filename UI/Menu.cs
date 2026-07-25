@@ -1,4 +1,4 @@
-using VoidTanks.Core;
+﻿using VoidTanks.Core;
 using VoidTanks.Input;
 
 namespace VoidTanks.UI;
@@ -18,6 +18,7 @@ public sealed class Menu
     {
         None,
         StartSinglePlayer,
+        StartMultiplayer,
         OpenSettings,
         OpenTestScreen, // the secret hatch — wired, but goes nowhere yet
         Quit,
@@ -27,11 +28,11 @@ public sealed class Menu
     {
         SinglePlayer,
         Settings,
-        Multiplayer, // present but unavailable — a door that won't open
+        Multiplayer, // host or join a match; a separate mode, not a flavour of the solo run
     }
 
-    /// <summary>Multiplayer is shown greyed-out; it can be looked at, not chosen.</summary>
-    public static bool IsSelectable(Item item) => item != Item.Multiplayer;
+    /// <summary>Every entry is live now that multiplayer has somewhere to go.</summary>
+    public static bool IsSelectable(Item item) => true;
 
     public Item Selected { get; private set; } = Item.SinglePlayer;
 
@@ -55,6 +56,7 @@ public sealed class Menu
             {
                 case Item.SinglePlayer: return Action.StartSinglePlayer;
                 case Item.Settings: return Action.OpenSettings;
+                case Item.Multiplayer: return Action.StartMultiplayer;
             }
         }
 

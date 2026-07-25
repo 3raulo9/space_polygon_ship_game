@@ -189,6 +189,42 @@ public sealed class EnemyTank
 
     public void TakeDamage(float amount) => Shield -= amount;
 
+    // --- Client interpolation ------------------------------------------------------
+    // A client is only ever shown hunters, never runs them, and used to be handed a wholly
+    // new list every field packet — which threw away any chance of smoothing, so a hunter
+    // stepped twenty times a second. Now the client keeps its hunters between packets, matched
+    // by the host's id, and eases each toward the position the host last reported. None of this
+    // is ever touched on the host, where the fields sit at their defaults.
+
+    /// <summary>The host's stable id for this hunter, so a client can match the same one across
+    /// packets and interpolate it rather than rebuilding the list. Assigned lazily host-side in
+    /// <c>Snapshot.WriteField</c>; on a client it is the key it was matched on.</summary>
+    public int NetId;
+
+    /// <summary>Scratch flag for the client's adopt sweep: set on every hunter the latest field
+    /// packet named, so the ones it did not name can be dropped.</summary>
+    public bool NetSeen;
+
+    private Vector2 _netPos;
+    private float _netHeading;
+    private bool _hasNet;
+
+    /// <summary>Client-side: records where the host last put this hunter. Snaps on first sight,
+    /// eases every time after.</summary>
+    public void NetTarget(Vector2 pos, float heading)
+    {
+        if (!_hasNet) { Position = pos; Heading = heading; _hasNet = true; }
+        _netPos = pos; _netHeading = heading;
+    }
+
+    /// <summary>Client-side: eases this hunter one frame toward its last reported transform.</summary>
+    public void EaseToNet(float k)
+    {
+        if (!_hasNet) return;
+        Position = Torus.Wrap(Position + Torus.Delta(Position, _netPos) * k);
+        Heading += MathF.IEEERemainder(_netHeading - Heading, MathF.Tau) * k;
+    }
+
     // --- angle helpers ---
 
     private static float TurnToward(float current, float target, float maxStep)

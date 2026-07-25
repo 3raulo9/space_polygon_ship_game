@@ -1,4 +1,4 @@
-namespace VoidTanks.Core;
+﻿namespace VoidTanks.Core;
 
 /// <summary>
 /// Top-level state machine (Doc 05). Milestone 1 only needs Playing, but the
@@ -8,6 +8,7 @@ public enum GameState
 {
     Menu,
     ClassSelect, // the hangar: pick a chassis, spend the points, paint it, then launch
+    Lobby,       // the multiplayer front door: host and read out a code, or type one
     Settings,
     Test,        // hidden bestiary reached by the secret 'L' hatch
     LevelIntro,

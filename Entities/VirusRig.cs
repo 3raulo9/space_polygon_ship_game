@@ -382,6 +382,24 @@ public sealed class VirusRig
     }
 
     /// <summary>
+    /// Drives the visible state of a <em>remote</em> virus from a snapshot: which body it is
+    /// wearing and how far the husk has rotted. A client never simulates another player's virus —
+    /// it only draws it — so this sets the two fields the renderer branches on and nothing else,
+    /// the same client-drives-cosmetics arrangement the bosses use. It also spins up (or drops)
+    /// the <see cref="WornRig"/> when the host is a soldier, purely so the worn body has cables to
+    /// draw; that rig is never stepped on a client, its transform comes from the player snapshot.
+    /// </summary>
+    public void NetSet(VirusHost kind, float decay)
+    {
+        HostKind = kind;
+        Decay = Math.Clamp(decay, 0f, 1f);
+
+        bool wantRig = kind == VirusHost.Soldier;
+        if (wantRig && WornRig is null) WornRig = new SoldierRig();
+        else if (!wantRig && WornRig is not null) WornRig = null;
+    }
+
+    /// <summary>
     /// Dumps the worn host's whole remaining integrity at once as a detonation and spits the
     /// player out as the mote. The class's committed heavy, and paid for the way this game's
     /// heavies always are — in a resource that is gone afterwards. Here the resource is the
