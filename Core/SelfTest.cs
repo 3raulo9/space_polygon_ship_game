@@ -144,6 +144,7 @@ public static class SelfTest
         failures += Check("a client sees the host's craft move, over a bad wire", ClientTracksTheHost);
         failures += Check("a join code decodes back to the host who read it out", JoinCodesRoundTrip);
         failures += Check("the handshake completes on the lobby screen alone", LobbyHandshakeSeatsAJoiner);
+        failures += Check("a pick in the room installs that chassis on both the client and the host", PickInstallsChosenChassis);
         failures += Check("a snapshot carries each seat's chassis, and the client rebuilds it", ChassisCrossesTheWire);
         failures += Check("two players open close enough to see each other", SeatsOpenWithinSight);
         failures += Check("a client grows its roster to see a later, higher-seated joiner", ClientGrowsForLaterSeats);
@@ -1877,6 +1878,54 @@ public static class SelfTest
         // And nonsense stays rejected rather than dialling somebody at random.
         if (Net.SteamNet.Decode("AAAA") != null) return "a four-character code was accepted";
         if (Net.SteamNet.Decode("AEIOU01") != null) return "a code full of excluded letters was accepted";
+        return null;
+    }
+
+    private static string? PickInstallsChosenChassis()
+    {
+        // The bug: chassis is chosen in the 3D room, after connecting, so a client is seated as
+        // a placeholder tank and its own craft has to be rebuilt when it picks. If it is not,
+        // the client drives a tank while the host simulates the chassis it actually chose, and
+        // the two move so differently the craft is never where anyone believes it is. This
+        // proves a pick lands on BOTH ends: the client's own seat and the host's copy of it.
+        var net = new LoopbackNet(2, LinkQuality.Typical, seed: 314);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);   // placeholder — the real pick comes from the pod
+
+        var hostRoom = new World.LobbyRoom { IsHost = true };
+        hostRoom.Seat(0, "HOST");
+        var clientRoom = new World.LobbyRoom();
+
+        // Seat the joiner, exactly as the loop drives it on the lobby screen.
+        for (int i = 0; i < 80; i++)
+        {
+            net.Advance();
+            host.LobbyTick(hostRoom);
+            if (client.LocalSeat >= 0 && clientRoom.Stage != World.LobbyRoom.Phase.InRoom)
+                clientRoom.Seat(client.LocalSeat, "JOINER");
+            client.LobbyTick(clientRoom);
+        }
+        if (client.LocalSeat != 1) return $"the joiner seated at {client.LocalSeat}, not 1";
+
+        // The joiner walks to the pod and picks a SOLDIER.
+        clientRoom.PickForTest(PlayerClass.Soldier);
+        for (int i = 0; i < 80; i++)
+        {
+            net.Advance();
+            host.LobbyTick(hostRoom);
+            client.LobbyTick(clientRoom);
+        }
+
+        if (clientWorld.Players[1].Soldier is null)
+            return $"the client picked a soldier and is still driving a {clientWorld.Players[1].Class}";
+        if (hostWorld.Players[1].Soldier is null)
+            return $"the host has the joiner as a {hostWorld.Players[1].Class}, not the soldier they picked";
         return null;
     }
 

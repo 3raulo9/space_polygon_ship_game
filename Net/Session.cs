@@ -181,7 +181,19 @@ public sealed class Session
         }
         else if (LocalSeat >= 0)
         {
-            if (room.PickDirty) SendPick(room.MyChassis ?? PlayerClass.Tank);
+            if (room.PickDirty)
+            {
+                PlayerClass chosen = room.MyChassis ?? PlayerClass.Tank;
+                SendPick(chosen);
+                // Install the pick on this client's OWN craft immediately. The host is
+                // authoritative on this seat for everyone else and its snapshot names the
+                // chassis, but a client never overwrites its own seat from a snapshot — so
+                // without this the player keeps driving the placeholder tank they were seated
+                // as while the host simulates the chassis they actually picked, and the two
+                // move so differently that the craft is never where anyone thinks it is.
+                if (World is { } w && LocalSeat < w.Players.Count && w.Players[LocalSeat].Class != chosen)
+                    w.ReplacePlayer(LocalSeat, chosen);
+            }
             if (room.NameDirty) SendName(room.MyName);
             room.ClearDirty();
             SendRoomMove(room.Position, room.Heading, room.Pitch, room.Height);

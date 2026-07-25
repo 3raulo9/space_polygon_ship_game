@@ -168,6 +168,10 @@ public sealed class LobbyRoom
 
     public void ClearDirty() { PickDirty = NameDirty = RulesDirty = false; }
 
+    /// <summary>Test hook: choose a chassis without going through the pod's key handling — the
+    /// same effect as confirming a pick at the pod.</summary>
+    public void PickForTest(PlayerClass chassis) { MyChassis = chassis; PickDirty = true; }
+
     /// <summary>The host applies a live rules edit made at its own console.</summary>
     public void AdoptRules(MatchSettings m) => Match = m.Clamped();
 
