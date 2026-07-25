@@ -744,6 +744,16 @@ public sealed class Game : IDisposable
         if (_session is { IsHost: false, MatchStarted: true, LocalSeat: >= 0 } joined
             && joined.World is { } jw)
         {
+            // Install the craft this player chose at the pod as their own seat. The host has
+            // been authoritative on it since the Pick and the snapshot names it for everyone
+            // else, but a client never overwrites its own seat from a snapshot — so without
+            // this the player would drive the placeholder TANK they were seated as, not the
+            // chassis they picked.
+            if (_room?.MyChassis is { } chosen)
+            {
+                _loadout.Class = chosen;
+                jw.ReplacePlayer(joined.LocalSeat, _loadout);
+            }
             joined.Room = null;
             _world = jw;
             _room = null;

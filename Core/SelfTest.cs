@@ -146,6 +146,7 @@ public static class SelfTest
         failures += Check("the handshake completes on the lobby screen alone", LobbyHandshakeSeatsAJoiner);
         failures += Check("a snapshot carries each seat's chassis, and the client rebuilds it", ChassisCrossesTheWire);
         failures += Check("two players open close enough to see each other", SeatsOpenWithinSight);
+        failures += Check("a client grows its roster to see a later, higher-seated joiner", ClientGrowsForLaterSeats);
         failures += Check("a lost field packet keeps the enemies it had", FieldPacketIsKeepLast);
         failures += Check("a dropped player is held, then restored on rejoin", DropAndRejoinRestoresTheSeat);
         failures += Check("a full match refuses a new joiner but not a rejoiner", FullMatchStillLetsYouBack);
@@ -1706,6 +1707,37 @@ public static class SelfTest
         // Seat 0 is this client's own craft and must never be rebuilt out from under it.
         if (!ReferenceEquals(client.Player, client.Players[0]))
             return "the local craft was replaced by a snapshot";
+        return null;
+    }
+
+    private static string? ClientGrowsForLaterSeats()
+    {
+        // A client seated at 1 only builds up to its own seat when it joins. When a third
+        // player takes seat 2, every snapshot names them — and before the roster grew to fit,
+        // the client created them never and they stayed invisible. Applying a snapshot that
+        // names a higher seat than the client holds must grow the roster to cover it, then
+        // rebuild it as the right chassis, alive enough to draw.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.AddPlayer(new Loadout { Class = PlayerClass.Spider });  // seat 1
+        host.AddPlayer(new Loadout { Class = PlayerClass.Virus });   // seat 2
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();        // seat 1, this client's own — all it knew at Welcome
+        client.LocalIndex = 1;
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WritePlayers(host, tick: 7u, buf);
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
+
+        if (client.Players.Count < 3)
+            return $"client saw {client.Players.Count} seats, not the host's 3 — a later joiner is invisible";
+        if (client.Players[2].Class != PlayerClass.Virus)
+            return $"the later joiner arrived as {client.Players[2].Class}, not the virus they picked";
+        if (!client.Players[2].Alive)
+            return "the later joiner arrived not alive, so it would draw as nothing";
         return null;
     }
 

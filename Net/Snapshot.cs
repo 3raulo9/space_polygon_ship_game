@@ -150,7 +150,15 @@ public static class Snapshot
                 int lives = src[at++];
                 int ammo = src[at++];
 
-                if (seat < 0 || seat >= world.Players.Count) continue;
+                if (seat < 0) continue;
+                // Grow the roster to cover any seat the host names. A client only builds seats
+                // up to its own at Welcome, so without this a player who joined later — anyone
+                // with a higher seat number — is named by every snapshot and created by none,
+                // and stays invisible. The placeholders become the right chassis on the class
+                // line below.
+                while (seat >= world.Players.Count)
+                    if (world.AddPlayer() is null) break;
+                if (seat >= world.Players.Count) continue;
                 if (seat == world.LocalIndex) continue;   // ours to drive, not to be told
 
                 // A client's roster starts as placeholder tanks; the first snapshot that names
