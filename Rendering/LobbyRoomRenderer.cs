@@ -302,7 +302,7 @@ internal sealed class LobbyRoomRenderer
 
     private static void DrawConsolePanel(LobbyRoom room, float elapsed)
     {
-        Panel(70, 60, W - 140, 150);
+        Panel(70, 60, W - 140, 164);
         PixelFont.DrawCentered("HOST CONSOLE", W / 2, 66, 1, Palette.HudChrome);
 
         int y = 82;
@@ -310,14 +310,15 @@ internal sealed class LobbyRoomRenderer
         Row(room, UI.LobbyScreen.Row.Seats, "SEATS", room.Match.MaxPlayers.ToString(), y + 14);
         Row(room, UI.LobbyScreen.Row.FriendlyFire, "FRIENDLY FIRE", room.Match.FriendlyFire ? "ON" : "OFF", y + 28);
         Row(room, UI.LobbyScreen.Row.Revives, "REVIVES", room.Match.Revives.ToString(), y + 42);
+        Row(room, UI.LobbyScreen.Row.Enemies, "ENEMIES", room.Match.SpawnEnemies ? "ON" : "OFF", y + 56);
 
         bool go = room.ConsoleRow == UI.LobbyScreen.Row.Launch;
         bool ready = room.AllReady;
         float beat = ready ? 0.7f + 0.3f * MathF.Abs(MathF.Sin(elapsed * 3f)) : 0.4f;
-        PixelFont.DrawCentered(ready ? "LAUNCH" : "WAITING FOR ALL READY", W / 2, y + 62,
+        PixelFont.DrawCentered(ready ? "LAUNCH" : "WAITING FOR ALL READY", W / 2, y + 76,
             go && ready ? 2 : 1, go ? Scale(Palette.Flag, beat) : Scale(Palette.HudChrome, 0.6f));
 
-        PixelFont.DrawCentered("UP/DN ROW   A/D CHANGE   ENTER   ESC BACK", W / 2, y + 84, 1,
+        PixelFont.DrawCentered("UP/DN ROW   A/D CHANGE   ENTER   ESC BACK", W / 2, y + 98, 1,
             Scale(Palette.HudChrome, 0.6f));
     }
 

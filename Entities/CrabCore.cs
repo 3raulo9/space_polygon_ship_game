@@ -146,6 +146,42 @@ public sealed class CrabCore
         Heading = heading;
     }
 
+    // --- Client puppet --------------------------------------------------------
+    // On a client the boss is not simulated — it is shown. A puppet carries the host's
+    // position, heading, phase and core integrity from the snapshot and drives only its own
+    // cosmetics (the core's spin, the death glitch) off a local clock, so no AI, no movement
+    // and no Random ever runs on a machine that does not own the fight.
+
+    /// <summary>True on a client's copy of the boss, which is posed from the phase and a clock
+    /// rather than from a live protocol.</summary>
+    public bool IsPuppet { get; private set; }
+    private float _puppetClock;
+
+    /// <summary>Makes a render-only boss for a client to place a host's Crab-Core.</summary>
+    public static CrabCore Puppet(Vector2 pos, float heading)
+        => new(pos, heading) { IsPuppet = true };
+
+    /// <summary>Client-side: adopt the host's account of the boss this snapshot.</summary>
+    public void NetSet(Vector2 pos, float heading, State phase, float coreFrac)
+    {
+        Position = pos;
+        Heading = heading;
+        Phase = phase;
+        _coreHealth = Math.Clamp(coreFrac, 0f, 1f) * CoreMaxHealth;
+    }
+
+    /// <summary>Client-side cosmetic advance: spins the core and plays out the death glitch,
+    /// with no protocol, no movement and no sound.</summary>
+    public void Animate(float dt)
+    {
+        _puppetClock += dt;
+        if (Phase == State.Dying)
+        {
+            _deathTime += dt;
+            if (_deathTime >= DeathDuration) Phase = State.Dead;
+        }
+    }
+
     /// <summary>
     /// Advances the protocol one tick against the player's position. Returns true on
     /// the exact tick a claw-plate snaps shut, so the caller can fire the CLANG.
@@ -610,11 +646,13 @@ public sealed class CrabCore
         return new Vector2(MathF.Cos(Heading), -MathF.Sin(Heading));
     }
 
-    /// <summary>The live visual snapshot the renderer poses the parts from.</summary>
-    public CrabPose Pose => new(
-        _coreSpin, _clawOpen, _legPhase,
-        CoreColorFor(Hostility, MathF.Max(MathF.Max(_flash, SeizureGlow), LanceGlare)),
-        Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll);
+    /// <summary>The visual snapshot the renderer poses the parts from. A puppet has no live
+    /// accumulators, so it borrows the bestiary's phase-and-clock pose instead.</summary>
+    public CrabPose Pose => IsPuppet
+        ? ShowcasePose(Phase, _puppetClock)
+        : new(_coreSpin, _clawOpen, _legPhase,
+            CoreColorFor(Hostility, MathF.Max(MathF.Max(_flash, SeizureGlow), LanceGlare)),
+            Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll);
 
     private float Hostility => Phase is State.Clamping or State.Pursuit
                                      or State.Aiming or State.Firing ? 1f : 0f;

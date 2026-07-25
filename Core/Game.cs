@@ -154,6 +154,7 @@ public sealed class Game : IDisposable
                 // the picture shows the whole craft rather than its feet.
                 if (mate is not null)
                 {
+                    _world.SeatNames[_world.Seat(mate)] = "MATE";   // so the tag shows in capture
                     Vector2 to = mate.Position - _world.Player.Position;
                     _world.Player.Heading = MathF.Atan2(to.X, to.Y);
                     if (mate.Class is PlayerClass.Fish or PlayerClass.Virus) mate.Height = 6f;
@@ -728,6 +729,8 @@ public sealed class Game : IDisposable
                     // Anyone seated before the host settled on a revive count gets it now, so
                     // the number on every HUD matches the one the host launched with.
                     foreach (var p in ready.Players) p.Lives = ready.Match.Revives + 1;
+                    // Carry the roster's names onto the world so team-mates wear a tag in-match.
+                    foreach (var kv in _session.SeatNames) ready.SeatNames[kv.Key] = kv.Value;
                     _session.StartMatch();
                     _session.Room = null;
                     _world = ready;
@@ -753,6 +756,12 @@ public sealed class Game : IDisposable
             {
                 _loadout.Class = chosen;
                 jw.ReplacePlayer(joined.LocalSeat, _loadout);
+            }
+            // Carry the room's roster of names into the match so team-mates wear a tag.
+            if (_room is { } r)
+            {
+                foreach (var a in r.Avatars.Values) jw.SeatNames[a.Seat] = a.Name;
+                jw.SeatNames[joined.LocalSeat] = r.MyName;
             }
             joined.Room = null;
             _world = jw;
@@ -807,7 +816,8 @@ public sealed class Game : IDisposable
         _steam = Net.SteamNet.Connect(_room.TypedCode);
         if (_steam == null) { _room.Fail("THAT IS NOT A CODE"); return; }
         _session = new Net.Session(_steam, host: false) { LocalName = MpName() };
-        _session.JoinMatch(new World.World(_loadout) { DynamicSpawning = false });
+        // A client owns nothing but its own craft: the host paints the rest through snapshots.
+        _session.JoinMatch(new World.World(_loadout) { DynamicSpawning = false, Authoritative = false });
         // A placeholder chassis — the real one is chosen at the pod and sent as a Pick. The
         // Hello still carries our name, which is how the host has it before any rename.
         _session.SendHello(_loadout.Class);

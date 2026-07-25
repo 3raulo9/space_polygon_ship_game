@@ -132,6 +132,35 @@ public sealed class MawCore
         _bob = (float)_rng.NextDouble() * MathF.Tau;
     }
 
+    // --- Client puppet --------------------------------------------------------
+    // As with the Crab-Core, a client is shown the mouth, not simulating it: the puppet takes
+    // the host's position, phase, crystal integrity and hovering height, and drives only its
+    // spinning teeth and death glitch off a local clock.
+
+    public bool IsPuppet { get; private set; }
+    private float _puppetClock;
+    private float _netBodyY = MawRig.BodyWorldY;
+
+    public static MawCore Puppet(Vector2 pos) => new(pos) { IsPuppet = true };
+
+    public void NetSet(Vector2 pos, State phase, float crystalFrac, float bodyY)
+    {
+        Position = pos;
+        Phase = phase;
+        _health = Math.Clamp(crystalFrac, 0f, 1f) * CrystalMaxHealth;
+        _netBodyY = bodyY;
+    }
+
+    public void Animate(float dt)
+    {
+        _puppetClock += dt;
+        if (Phase == State.Dying)
+        {
+            _deathTime += dt;
+            if (_deathTime >= DeathDuration) Phase = State.Dead;
+        }
+    }
+
     // --- The little lasers ----------------------------------------------------
     // Its own pool rather than the world's projectile ring. These are a different
     // kind of shot — they start high, travel in 3D toward where the player's eye is,
@@ -201,7 +230,7 @@ public sealed class MawCore
 
     /// <summary>The body's world height this frame, hover minus whatever it has
     /// dropped. Everything hanging off the rig is placed from this.</summary>
-    public float BodyY => MawRig.BodyWorldY - Drop + Bob;
+    public float BodyY => IsPuppet ? _netBodyY : MawRig.BodyWorldY - Drop + Bob;
 
     /// <summary>The hover's slow vertical heave. Small, unhurried and never still —
     /// a thing holding itself up rather than a model parked at a height.</summary>
@@ -231,10 +260,12 @@ public sealed class MawCore
     /// turns this into the start of the digestion.</summary>
     public bool JustCaught { get; private set; }
 
-    /// <summary>The visual snapshot the renderer poses from.</summary>
-    public MawPose Pose => new(
-        _crystalSpin, _toothSpin, _toothSpinInner, _jawOpen,
-        CrystalColorFor(Hostility, MathF.Max(_flash, _digestGlow)));
+    /// <summary>The visual snapshot the renderer poses from. A puppet has no live accumulators,
+    /// so it borrows the bestiary's clock-driven pose.</summary>
+    public MawPose Pose => IsPuppet
+        ? ShowcasePose(_puppetClock)
+        : new(_crystalSpin, _toothSpin, _toothSpinInner, _jawOpen,
+            CrystalColorFor(Hostility, MathF.Max(_flash, _digestGlow)));
 
     private float Hostility => Phase is State.Lunge or State.Digest ? 1f : (_aware ? 0.5f : 0f);
 

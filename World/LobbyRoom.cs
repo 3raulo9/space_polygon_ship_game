@@ -313,6 +313,9 @@ public sealed class LobbyRoom
                 case UI.LobbyScreen.Row.Revives:
                     m.Revives = Math.Clamp(m.Revives + nudge, 0, MatchSettings.MaxRevives);
                     break;
+                case UI.LobbyScreen.Row.Enemies:
+                    m.SpawnEnemies = !m.SpawnEnemies;
+                    break;
             }
             Match = m.Clamped();
             RulesDirty = true;     // the loop mirrors the new rules to every client
@@ -455,5 +458,6 @@ public sealed class LobbyRoom
         FriendlyFire = m.FriendlyFire,
         Revives = m.Revives,
         Map = m.Map,
+        SpawnEnemies = m.SpawnEnemies,
     };
 }

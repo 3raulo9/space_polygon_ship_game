@@ -343,7 +343,50 @@ public sealed class Renderer : IDisposable
         // The join/quit feed sits under the instruments, bottom-right. Only in a match.
         if (notices != null) HudRenderer.DrawNotices(notices);
 
+        // Floating name + shield bar over each team-mate, so a twenty-player field reads.
+        DrawPlayerTags(world);
+
         Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// Draws each team-mate's nickname and a small shield bar floating over their craft, so a
+    /// crowded field can be read at a glance. Projected into the low-res target with
+    /// <see cref="Raylib.GetWorldToScreenEx"/> (the render-texture size, not the window), culled
+    /// behind the camera and past a sensible range, and drawn at each craft's nearest wrap image
+    /// so a team-mate just over the seam is tagged where they are actually drawn.
+    /// </summary>
+    private void DrawPlayerTags(World.World world)
+    {
+        var camXZ = new Vector2(_camera.Position.X, _camera.Position.Z);
+        Vector3 fwd = Vector3.Normalize(_camera.Target - _camera.Position);
+
+        for (int seat = 0; seat < world.Players.Count; seat++)
+        {
+            if (seat == world.LocalIndex) continue;
+            PlayerTank mate = world.Players[seat];
+            if (!mate.Alive) continue;
+            string name = world.NameOf(seat);
+            if (name.Length == 0) continue;
+
+            Vector2 near = Torus.NearestImage(mate.Position, camXZ);
+            var head = new Vector3(near.X, mate.EyeHeight + mate.Height + 2f, near.Y);
+            if (Vector3.Dot(fwd, head - _camera.Position) <= 0.2f) continue;   // behind the eye
+            if (Vector3.Distance(_camera.Position, head) > 140f) continue;      // too far to read
+
+            Vector2 s = Raylib.GetWorldToScreenEx(head, _camera,
+                Config.InternalWidth, Config.InternalHeight);
+            if (s.X < -20 || s.X > Config.InternalWidth + 20) continue;
+
+            PixelFont.DrawCentered(name, (int)s.X, (int)s.Y - 9, 1, Palette.HudChrome);
+
+            const int bw = 24, bh = 3;
+            int bx = (int)s.X - bw / 2, by = (int)s.Y;
+            Raylib.DrawRectangle(bx - 1, by - 1, bw + 2, bh + 2, new Color(5, 7, 10, 200));
+            float f = Math.Clamp(mate.ShieldFraction, 0f, 1f);
+            Raylib.DrawRectangle(bx, by, (int)(bw * f), bh,
+                f > 0.35f ? Palette.GridNear : Palette.Warning);
+        }
     }
 
     /// <summary>

@@ -490,6 +490,32 @@ public sealed class EnemySoldier
     /// building the way an anchor does.</summary>
     private Structure? _perch;
 
+    // --- Client puppet --------------------------------------------------------
+    // A client is shown the squad, not simulating it. A puppet carries the host's transform,
+    // movement state and bank for the flight pose; its cables and AI never run.
+
+    /// <summary>True on a client's render-only copy of a soldier.</summary>
+    public bool IsPuppet { get; private set; }
+
+    /// <summary>Makes a render-only soldier for a client to place a host's squad member.</summary>
+    public static EnemySoldier Puppet(Vector2 at, float height, bool leader, int slot)
+        => new(at, height, leader, slot) { IsPuppet = true };
+
+    /// <summary>Client-side: adopt the host's account of this soldier this snapshot. Sets only
+    /// what the renderer reads; no AI, no cables, no Random.</summary>
+    public void NetSet(Vector2 pos, float height, float heading, SoldierMove move,
+        float bank, float speed, bool allied, bool alive)
+    {
+        Position = pos;
+        Height = height;
+        Heading = heading;
+        Move = move;
+        Bank = bank;
+        Allied = allied;
+        Velocity = new Vector3(MathF.Sin(heading) * speed, 0f, MathF.Cos(heading) * speed);
+        Shield = alive ? MathF.Max(Shield, BaseShield) : 0f;
+    }
+
     public EnemySoldier(Vector2 at, float height, bool leader, int slot)
     {
         Position = Torus.Wrap(at);

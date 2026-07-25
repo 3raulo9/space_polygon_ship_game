@@ -145,6 +145,10 @@ public static class SelfTest
         failures += Check("a join code decodes back to the host who read it out", JoinCodesRoundTrip);
         failures += Check("the handshake completes on the lobby screen alone", LobbyHandshakeSeatsAJoiner);
         failures += Check("a pick in the room installs that chassis on both the client and the host", PickInstallsChosenChassis);
+        failures += Check("a sound raised on the host is heard on the client, positioned", SoundCrossesTheWire);
+        failures += Check("a client no longer simulates the field it is only shown", ClientDoesNotSimulateTheField);
+        failures += Check("the host's bosses cross the wire as client puppets", BossesCrossTheWire);
+        failures += Check("salvage on the host is drawn on the client", PickupsCrossTheField);
         failures += Check("a snapshot carries each seat's chassis, and the client rebuilds it", ChassisCrossesTheWire);
         failures += Check("two players open close enough to see each other", SeatsOpenWithinSight);
         failures += Check("a client grows its roster to see a later, higher-seated joiner", ClientGrowsForLaterSeats);
@@ -153,6 +157,9 @@ public static class SelfTest
         failures += Check("a full match refuses a new joiner but not a rejoiner", FullMatchStillLetsYouBack);
         failures += Check("FLAT keeps the city but seeds nothing hostile", FlatMapIsASandbox);
         failures += Check("PLANET is the full world, unchanged", PlanetMapStillSpawns);
+        failures += Check("the enemies-off toggle survives the wire", EnemyToggleCrossesTheWire);
+        failures += Check("enemies off empties PLANET but keeps the city", EnemiesOffEmptiesThePlanet);
+        failures += Check("a worn host, and its rot, cross the wire", VirusHostCrossesTheWire);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1535,6 +1542,89 @@ public static class SelfTest
         return null;
     }
 
+    /// <summary>The lobby's new ENEMIES switch is a fifth rules byte; it has to cross the wire
+    /// beside the rest and default to on, or a host who turned the fight off would launch a
+    /// match every client still thinks is full of hunters.</summary>
+    private static string? EnemyToggleCrossesTheWire()
+    {
+        var m = new MatchSettings
+        {
+            MaxPlayers = 12, FriendlyFire = true, Revives = 7,
+            Map = GameMap.Flat, SpawnEnemies = false,
+        };
+        Span<byte> buf = stackalloc byte[MatchSettings.Size];
+        m.Write(buf);
+        MatchSettings r = MatchSettings.Read(buf);
+
+        if (r.SpawnEnemies) return "the enemies-off toggle did not survive the wire";
+        if (r.MaxPlayers != 12 || !r.FriendlyFire || r.Revives != 7 || r.Map != GameMap.Flat)
+            return "the rest of the rules did not survive alongside the new toggle";
+
+        // The default is a match with enemies — an omitted/older setting must never read as off.
+        Span<byte> def = stackalloc byte[MatchSettings.Size];
+        new MatchSettings().Write(def);
+        if (!MatchSettings.Read(def).SpawnEnemies) return "the default match lost its enemies";
+        return null;
+    }
+
+    /// <summary>Enemies off is independent of the map: PLANET keeps its city and salvage, but
+    /// seeds and spawns nothing hostile — no hunters, no bosses, no squads, ever.</summary>
+    private static string? EnemiesOffEmptiesThePlanet()
+    {
+        var world = new World.World(null,
+            new MatchSettings { MaxPlayers = 4, Map = GameMap.Planet, SpawnEnemies = false });
+
+        if (world.Structures.Count == 0) return "enemies-off threw the city away";
+        if (world.Pickups.Count == 0) return "enemies-off seeded no salvage — it is not a hostile";
+        if (world.Enemies.Count != 0) return $"enemies-off opened with {world.Enemies.Count} hunters";
+        if (world.Boss != null || world.Maw != null) return "enemies-off raised a boss";
+
+        // Half a minute of stepping must conjure nothing hostile out of the director.
+        for (int i = 0; i < 60 * 30; i++) world.StepForTest((float)Config.FixedDt);
+        if (world.Enemies.Count != 0) return $"enemies-off spawned {world.Enemies.Count} hunters over 30s";
+        if (world.Boss != null || world.Maw != null) return "enemies-off spawned a boss over 30s";
+        if (world.Soldiers.Count != 0) return $"enemies-off spawned {world.Soldiers.Count} soldiers over 30s";
+        return null;
+    }
+
+    /// <summary>The body a mote has seized, and how far it has rotted, ride the PLAYERS packet
+    /// so every other machine draws the worn host rather than the naked mote — the whole of the
+    /// virus being visible in play. A seat that is not the client's own is driven from the
+    /// snapshot; here seat 2 (an elite-wearing virus) must arrive wearing the elite, at the same
+    /// integrity the host had.</summary>
+    private static string? VirusHostCrossesTheWire()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.AddPlayer(new Loadout { Class = PlayerClass.Tank });    // seat 1
+        host.AddPlayer(new Loadout { Class = PlayerClass.Virus });   // seat 2
+
+        PlayerTank v = host.Players[2];
+        if (v.Virus is not { } worn) return "the virus seat has no rig to wear a host with";
+        worn.Possess(v, Entities.VirusHost.Elite);
+        // Let the husk rot a little so a non-trivial integrity has to cross, not just a flat 1.
+        for (int i = 0; i < 40; i++) host.StepForTest((float)Config.FixedDt);
+        if (!worn.Hosted) return "the elite fell off the host before the snapshot was taken";
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();        // seat 1
+        client.LocalIndex = 1;     // the virus at seat 2 is not ours, so it is driven from the wire
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WritePlayers(host, tick: 11u, buf);
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
+
+        if (client.Players.Count < 3 || client.Players[2].Virus is not { } cv)
+            return "the worn virus seat did not arrive with a rig on the client";
+        if (cv.HostKind != Entities.VirusHost.Elite)
+            return $"the worn body crossed as {cv.HostKind}, not the elite it was";
+        if (MathF.Abs(cv.Integrity - worn.Integrity) > 0.01f)
+            return $"the host's rot crossed at {cv.Integrity:0.000}, not the {worn.Integrity:0.000} it was";
+        return null;
+    }
+
     /// <summary>Seats a client into a started host match over a loopback and hands both
     /// sessions back. Pumps the lobby until the handshake settles.</summary>
     private static (LoopbackNet net, Session host, Session client, World.World hw, World.World cw)
@@ -1878,6 +1968,130 @@ public static class SelfTest
         // And nonsense stays rejected rather than dialling somebody at random.
         if (Net.SteamNet.Decode("AAAA") != null) return "a four-character code was accepted";
         if (Net.SteamNet.Decode("AEIOU01") != null) return "a code full of excluded letters was accepted";
+        return null;
+    }
+
+    private static string? SoundCrossesTheWire()
+    {
+        // The heart of audio parity: a cue the host raises has to reach a client and be played
+        // there, positioned to the client's own craft. Headless there is no audio device, so
+        // this asserts the cue crossed the wire and was taken up (RemoteCuesPlayed), and that a
+        // client's OWN cue is not echoed back at it.
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 55);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+        if (client.LocalSeat != 1) return $"the joiner never seated (at {client.LocalSeat})";
+
+        // The host raises a world sound near the origin, where both seats opened.
+        hostWorld.Emit(Cue.Explosion, hostWorld.Players[1].Position);
+        // ...and the client fires its own shot, whose echo must not come back to it.
+        hostWorld.Emit(Cue.Detonation, hostWorld.Players[1].Position, owner: 1);
+
+        for (int i = 0; i < 12; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+        }
+
+        if (clientWorld.RemoteCuesPlayed < 1)
+            return "the host raised a sound and the client never heard it";
+        // Exactly the explosion should have crossed — the client's own detonation is skipped.
+        if (clientWorld.RemoteCuesPlayed != 1)
+            return $"the client played {clientWorld.RemoteCuesPlayed} cues; its own shot should not echo back";
+        return null;
+    }
+
+    private static string? PickupsCrossTheField()
+    {
+        // Salvage rides the field packet so a client sees the cells and shards on the grid.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.Pickups.Clear();
+        host.Pickups.Add(new Pickup(Torus.Wrap(new Vector2(5f, 5f)), PickupKind.Battery));
+        host.Pickups.Add(new Pickup(Torus.Wrap(new Vector2(-3f, 8f)), PickupKind.Ammo));
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        client.Pickups.Clear();
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WriteField(host, forSeat: 0, tick: 1u, buf);
+        Snapshot.ApplyField(client, buf.AsSpan(0, n));
+
+        if (client.Pickups.Count != 2) return $"the client drew {client.Pickups.Count} of 2 pickups";
+        if (client.Pickups[0].Kind != PickupKind.Battery) return "a pickup arrived as the wrong kind";
+        return null;
+    }
+
+    private static string? BossesCrossTheWire()
+    {
+        // A client must SEE another player's boss fight, not only hear it. The host's Crab-Core
+        // and Maw-Core go out as their own tiny packet and arrive as render-only puppets at the
+        // right place and phase; when the host stops reporting one, the puppet is dropped.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.SpawnCrabAhead();
+        host.AttachMawForTest(new MawCore(Torus.Wrap(new Vector2(12f, 9f))));
+        host.Soldiers.Add(new EnemySoldier(Torus.Wrap(new Vector2(6f, 4f)), 3f, leader: true, slot: 0));
+        host.Soldiers.Add(new EnemySoldier(Torus.Wrap(new Vector2(8f, 5f)), 2f, leader: false, slot: 1));
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+
+        var buf = new byte[64];
+        int n = Snapshot.WriteBosses(host, forSeat: 0, tick: 3u, buf);
+        Snapshot.ApplyBosses(client, buf.AsSpan(0, n));
+
+        if (client.Boss is not { IsPuppet: true }) return "the client never received the Crab-Core";
+        if (client.Maw is not { IsPuppet: true }) return "the client never received the Maw-Core";
+        if (Torus.Distance(client.Boss.Position, host.Boss!.Position) > 0.6f)
+            return "the crab puppet landed at the wrong place";
+        if (client.Boss.Phase != host.Boss.Phase)
+            return $"the crab puppet is in {client.Boss.Phase}, not the host's {host.Boss.Phase}";
+        if (client.Soldiers.Count != 2)
+            return $"the client drew {client.Soldiers.Count} of the host's 2 squad members";
+        if (!client.Soldiers[0].IsLeader)
+            return "the squad leader arrived unmarked on the client";
+
+        // A world with no bosses drops the puppets.
+        var empty = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        empty.Enemies.Clear();
+        int n2 = Snapshot.WriteBosses(empty, forSeat: 0, tick: 4u, buf);
+        Snapshot.ApplyBosses(client, buf.AsSpan(0, n2));
+        if (client.Boss != null || client.Maw != null || client.Soldiers.Count != 0)
+            return "the host dropped its bosses/squad and the client kept the puppets";
+        return null;
+    }
+
+    private static string? ClientDoesNotSimulateTheField()
+    {
+        // A client is shown the field, it does not run it. Stepped on its own with a hunter and
+        // a boss placed, an authoritative world would advance them; a client world must leave
+        // everything it does not drive exactly where the last snapshot put it, and raise no cues
+        // of its own for it.
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.Enemies.Clear();
+        var enemy = new EnemyTank(Torus.Wrap(new Vector2(20f, 0f)), elite: false);
+        client.Enemies.Add(enemy);
+        Vector2 before = enemy.Position;
+
+        for (int i = 0; i < 30; i++) client.StepForTest((float)Config.FixedDt);
+
+        if (Torus.Distance(enemy.Position, before) > 0.01f)
+            return "a client stepped a hunter it should only have been shown";
         return null;
     }
 

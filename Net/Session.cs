@@ -41,6 +41,15 @@ public enum Msg : byte
     /// <summary>Client → host, every lobby tick, unreliable: this player's own avatar transform.
     /// The room is client-authoritative over each figure's position, so the host just relays it.</summary>
     RoomMove = 12,
+
+    /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: the one-shot sounds the sim
+    /// raised near that client, each with a world position so it can be heard from the right
+    /// place. Unreliable — a missed gunshot is gone by the time it could be resent.</summary>
+    Sound = 13,
+
+    /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: the Crab-Core and Maw-Core
+    /// near that client, so their fight is drawn and not just heard. Keep-last like the field.</summary>
+    Bosses = 14,
 }
 
 /// <summary>
@@ -68,6 +77,8 @@ public sealed class Session
     private readonly INetTransport _net;
     private readonly byte[] _out = new byte[Snapshot.MaxSize + 8];
     private readonly byte[] _field = new byte[Snapshot.MaxSize + 8];
+    private readonly byte[] _sound = new byte[1200];
+    private readonly byte[] _bosses = new byte[512];
     private uint _tick;
     private int _sinceSnapshot;
 
@@ -328,8 +339,14 @@ public sealed class Session
     {
         World = world;
         World.LocalIndex = 0;
+        World.CollectSoundCues = true;   // the host gathers cues to broadcast; solo runs do not
         LocalSeat = 0;
+        _nameOfSeat[0] = LocalName;       // the host's own name, for the roster and the tags
     }
+
+    /// <summary>Every seat's name the host knows, for the loop to copy onto the world at launch
+    /// so team-mates carry a floating tag into the match.</summary>
+    public IReadOnlyDictionary<int, string> SeatNames => _nameOfSeat;
 
     /// <summary>
     /// Client-side: adopts the world the host has described. The seat is not known until the
@@ -461,7 +478,59 @@ public sealed class Session
             _field[0] = (byte)Msg.Field;
             int nf = Snapshot.WriteField(World!, seat, _tick, _field.AsSpan(1));
             _net.Send(peer, _field.AsSpan(0, nf + 1), reliable: false);
+
+            // The bosses near this client, so their fight is seen and not only heard. Its own
+            // small packet for the same reason the field is split out — a busy field must never
+            // cost the boss its update.
+            _bosses[0] = (byte)Msg.Bosses;
+            int nb = Snapshot.WriteBosses(World!, seat, _tick, _bosses.AsSpan(1));
+            _net.Send(peer, _bosses.AsSpan(0, nb + 1), reliable: false);
+
+            // The sounds raised near this client since the last snapshot, so it hears the
+            // fights around it. Its own cues rode local for the instant feel and are skipped on
+            // the far end; everything else it plays positioned to its own craft.
+            if (World!.SoundCues.Count > 0)
+            {
+                _sound[0] = (byte)Msg.Sound;
+                int ns = WriteSounds(seat, _sound.AsSpan(1));
+                _net.Send(peer, _sound.AsSpan(0, ns + 1), reliable: false);
+            }
         }
+
+        // The cues are spent once described to everyone — clear them whether or not anyone was
+        // listening, so a host alone in a room never lets the list grow.
+        World!.SoundCues.Clear();
+    }
+
+    /// <summary>How many cues one sound packet carries at most — plenty for a busy fight, and
+    /// small enough that the packet stays inside one datagram (48·7 = 336 bytes + a header).</summary>
+    private const int MaxSounds = 48;
+
+    /// <summary>Writes the tick's cues within interest range of <paramref name="forSeat"/>, each
+    /// as id, position, packed parameter and owning seat. Returns the bytes written.</summary>
+    private int WriteSounds(int forSeat, Span<byte> dst)
+    {
+        System.Numerics.Vector2 eye =
+            World!.Players[Math.Clamp(forSeat, 0, World.Players.Count - 1)].Position;
+        int at = 0;
+        int countAt = at++;
+        int n = 0;
+        foreach (var c in World.SoundCues)
+        {
+            if (n >= MaxSounds) break;
+            if (Torus.DistanceSquared(c.Pos, eye) > Snapshot.InterestRadius * Snapshot.InterestRadius)
+                continue;
+            dst[at++] = (byte)c.Id;
+            WriteShort(dst, ref at, c.Pos.X * RoomPos);   // same 1/64 world-position scale
+            WriteShort(dst, ref at, c.Pos.Y * RoomPos);
+            dst[at++] = CueBank.IsFraction(c.Id)
+                ? (byte)Math.Clamp(c.Param * 255f, 0f, 255f)
+                : (byte)Math.Clamp(c.Param, 0f, 255f);
+            dst[at++] = unchecked((byte)(sbyte)Math.Clamp(c.Owner, -128, 127));
+            n++;
+        }
+        dst[countAt] = (byte)n;
+        return at;
     }
 
     private void Handle(int from, byte[] payload)
@@ -588,6 +657,29 @@ public sealed class Session
                 // No ordering guard: a field packet is scenery, and the freshest one to land
                 // wins by simply being applied last. Missing one keeps the last field.
                 Snapshot.ApplyField(World, payload.AsSpan(1));
+                break;
+            }
+
+            case Msg.Bosses when !IsHost:
+                Snapshot.ApplyBosses(World, payload.AsSpan(1));
+                break;
+
+            case Msg.Sound when !IsHost:
+            {
+                if (payload.Length < 2) break;
+                int at = 1;
+                int count = payload[at++];
+                for (int i = 0; i < count; i++)
+                {
+                    if (at + 7 > payload.Length) break;
+                    var id = (Cue)payload[at++];
+                    float x = BitConverter.ToInt16(payload.AsSpan(at, 2)) / 64f; at += 2;
+                    float y = BitConverter.ToInt16(payload.AsSpan(at, 2)) / 64f; at += 2;
+                    byte pb = payload[at++];
+                    int owner = unchecked((sbyte)payload[at++]);
+                    float param = CueBank.IsFraction(id) ? pb / 255f : pb;
+                    World.PlayRemoteCue(id, Torus.Wrap(new System.Numerics.Vector2(x, y)), param, owner);
+                }
                 break;
             }
 

@@ -31,7 +31,7 @@ public sealed class LobbyScreen
     public enum Action { None, Back, HostMatch, JoinMatch, Launch }
 
     /// <summary>The rows a host can walk while waiting for people.</summary>
-    public enum Row { Map, Seats, FriendlyFire, Revives, Launch }
+    public enum Row { Map, Seats, FriendlyFire, Revives, Enemies, Launch }
 
     public Phase Where { get; private set; } = Phase.Choosing;
     public Row Selected { get; private set; } = Row.Seats;
@@ -125,6 +125,9 @@ public sealed class LobbyScreen
                     break;
                 case Row.Revives:
                     Match.Revives = Math.Clamp(Match.Revives + nudge, 0, MatchSettings.MaxRevives);
+                    break;
+                case Row.Enemies:
+                    Match.SpawnEnemies = !Match.SpawnEnemies;
                     break;
             }
         }

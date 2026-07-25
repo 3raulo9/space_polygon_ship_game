@@ -641,6 +641,16 @@ public sealed class EntityRenderer
     /// </summary>
     public void DrawCraft(PlayerTank craft, Vector2 pos, Vector3 cameraPos, float elapsed)
     {
+        // A virus that has seized a body is drawn AS that body, corrupted — not as the naked
+        // mote. This is the whole of the class being visible to the rest of the server: the
+        // hunter, soldier or boss the player is wearing, with the infection crawling over it.
+        // An exposed mote (or any other class) falls through to the normal chassis draw below.
+        if (craft.Class == PlayerClass.Virus && craft.Virus is { Hosted: true } worn)
+        {
+            DrawWornHost(craft, worn, pos, cameraPos, elapsed);
+            return;
+        }
+
         // The hangar turntable draws every chassis at a scale tuned for a close camera, which
         // in the world sits it far too small beside the enemies — a player tank a third the
         // size of the hunters it fights. So the whole craft is scaled about its own base to
@@ -657,6 +667,88 @@ public sealed class EntityRenderer
         Rlgl.Translatef(-pos.X, 0f, -pos.Y);
         DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
         Rlgl.PopMatrix();
+    }
+
+    /// <summary>
+    /// Draws a virus that is wearing a body, for every machine but the one flying it — the seized
+    /// hunter/elite/soldier or the worn Crab/Maw, rendered with the same models the enemy or boss
+    /// is drawn from so it reads as exactly the thing it is, then tinted toward the build's own
+    /// infection colour (deepening as the husk rots) and finished with the writhing veins the
+    /// player sees crawling over their own view — the class's "antennas". The body's transform is
+    /// the player's snapshotted position/heading/height; nothing here is simulated, only drawn.
+    /// </summary>
+    private void DrawWornHost(PlayerTank craft, VirusRig worn, Vector2 pos, Vector3 cameraPos,
+        float elapsed)
+    {
+        Loadout build = craft.Build;
+        Color mote = build.PartColor(PlayerClass.Virus, 0);
+        Color veins = build.PartColor(PlayerClass.Virus, 1);
+        Color husk = build.PartColor(PlayerClass.Virus, 2);
+        Color payload = build.PartColor(PlayerClass.Virus, 3);
+        float corruption = worn.Corruption;   // 0 fresh .. 1 nearly spent
+        float heading = craft.Heading;
+
+        // Where the veins cluster on this body — roughly its middle, so the "antennas" sit on the
+        // host rather than at its feet.
+        float coreY;
+
+        switch (worn.HostKind)
+        {
+            case VirusHost.Hunter:
+            case VirusHost.Elite:
+            {
+                bool elite = worn.HostKind == VirusHost.Elite;
+                PolyMesh mesh = elite ? _eliteCone : _standardTank;
+                Color baseFill = elite ? Palette.EliteFill : Palette.EnemyFill;
+                Color body = GridRenderer.LerpColor(baseFill, veins, 0.35f + 0.45f * corruption);
+                mesh.Draw(pos, heading, craft.Height, cameraPos, EnemyTank.Scale, body);
+                coreY = craft.Height + 2f;
+                break;
+            }
+
+            case VirusHost.Soldier:
+                // The person, drawn from the same articulated figure the hangar shows. It carries
+                // its own palette; the infection reads from the veins laid over it below.
+                _soldierModel.Draw(build, pos, heading, cameraPos, elapsed);
+                coreY = craft.Height + 2.2f;
+                break;
+
+            case VirusHost.Crab:
+            {
+                // The worn Crab-Core: the boss's own rig on a slow idle (gem turning, legs
+                // breathing, carapace shut), its core flooded toward the infection as it rots.
+                // Grounded, like the boss and like a grounded host, so no height is passed.
+                var pose = new CrabPose(
+                    CoreSpin: elapsed * 1.3f,
+                    ClawOpen: 0f,
+                    LegPhase: elapsed * 1.8f,
+                    CoreColor: GridRenderer.LerpColor(payload, veins, corruption),
+                    SlideOffset: Vector2.Zero);
+                _crab.Draw(pose, pos, heading, cameraPos);
+                coreY = CrabRig.CoreWorldY;
+                break;
+            }
+
+            case VirusHost.Maw:
+            {
+                // The worn Maw-Core hovers. It has no legs to ground it, so it is drawn a few
+                // units above the player's hover origin rather than at the boss's own high float.
+                MawPose pose = MawCore.ShowcasePose(elapsed);
+                float bodyY = craft.Height + 3f;
+                _maw.Draw(pose, pos, bodyY, cameraPos);
+                coreY = bodyY;
+                break;
+            }
+
+            default:
+                // Defensive: the caller only enters here while Hosted, so HostKind is never None.
+                // If it somehow is, fall back to the mote rather than drawing nothing.
+                _virusModel.Draw(build, pos, heading, cameraPos, elapsed);
+                return;
+        }
+
+        _virusModel.DrawPosed(pos, heading, coreY, cameraPos, elapsed,
+            mote, veins, husk, payload, corruption);
     }
 
     /// <summary>

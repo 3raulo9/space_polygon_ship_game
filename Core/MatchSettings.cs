@@ -46,6 +46,15 @@ public sealed class MatchSettings
     /// only thing single player ever is.</summary>
     public GameMap Map { get; set; } = GameMap.Planet;
 
+    /// <summary>
+    /// Whether the world seeds and spawns anything hostile — hunters, bosses and squads alike.
+    /// On by default and independent of the map: a host can leave the city on PLANET but empty
+    /// the field entirely, turning any map into a sandbox to move and mess about in without
+    /// dropping to FLAT. Off stops <em>every</em> hostile spawn, not just the horizon hunters.
+    /// A lobby choice only — single player is always a full PLANET.
+    /// </summary>
+    public bool SpawnEnemies { get; set; } = true;
+
     public const int MinPlayers = 1;
     public const int MaxSeats = 20;
     public const int DefaultMaxPlayers = 8;
@@ -66,6 +75,7 @@ public sealed class MatchSettings
         FriendlyFire = FriendlyFire,
         Revives = Math.Clamp(Revives, 0, MaxRevives),
         Map = Enum.IsDefined(Map) ? Map : GameMap.Planet,
+        SpawnEnemies = SpawnEnemies,
     };
 
     /// <summary>The solo game: one seat, and the three lives the craft has always had.
@@ -76,12 +86,13 @@ public sealed class MatchSettings
         FriendlyFire = false,
         Revives = DefaultRevives,
         Map = GameMap.Planet,
+        SpawnEnemies = true,
     };
 
     // --- Wire format ---------------------------------------------------------------
-    // Four bytes. Sent once, reliably, when a client joins.
+    // Five bytes. Sent once, reliably, when a client joins.
 
-    public const int Size = 4;
+    public const int Size = 5;
 
     public void Write(Span<byte> dst)
     {
@@ -89,6 +100,7 @@ public sealed class MatchSettings
         dst[1] = (byte)(FriendlyFire ? 1 : 0);
         dst[2] = (byte)Revives;
         dst[3] = (byte)Map;
+        dst[4] = (byte)(SpawnEnemies ? 1 : 0);
     }
 
     public static MatchSettings Read(ReadOnlySpan<byte> src) => new MatchSettings
@@ -97,5 +109,6 @@ public sealed class MatchSettings
         FriendlyFire = src[1] != 0,
         Revives = src[2],
         Map = (GameMap)src[3],
+        SpawnEnemies = src[4] != 0,
     }.Clamped();
 }
