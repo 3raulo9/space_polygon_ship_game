@@ -23,6 +23,24 @@ public enum Msg : byte
     Field = 6,
     /// <summary>Host → all: one line for the join/quit feed, already formatted.</summary>
     Notice = 7,
+
+    // --- The 3D lobby room -------------------------------------------------------
+    /// <summary>Client → host, reliable: the chassis this player chose at the pod, and that
+    /// they are now ready. Reliable because a lost pick would leave a player un-launchable.</summary>
+    Pick = 8,
+    /// <summary>Client → host, reliable: the nickname they typed.</summary>
+    Name = 9,
+    /// <summary>Host → all, reliable: the match rules, whenever the host edits them at the
+    /// console — so every client's lobby shows the same map, seats, friendly-fire and revives
+    /// the host will launch with.</summary>
+    Rules = 10,
+    /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: every avatar in the room —
+    /// seat, chassis, ready, where they stand, and their name. Small and unreliable; the next
+    /// one supersedes it.</summary>
+    RoomState = 11,
+    /// <summary>Client → host, every lobby tick, unreliable: this player's own avatar transform.
+    /// The room is client-authoritative over each figure's position, so the host just relays it.</summary>
+    RoomMove = 12,
 }
 
 /// <summary>
@@ -130,6 +148,126 @@ public sealed class Session
         ReapDeparted();
     }
 
+    // --- The 3D lobby room --------------------------------------------------------
+
+    private const float RoomPos = 64f;
+    private const float RoomAng = 65536f / MathF.Tau;
+
+    /// <summary>
+    /// One frame of room networking, called from the loop while the walkable lobby is up in
+    /// place of a world's <see cref="Pump"/>. Drains the socket (which seats hellos and applies
+    /// picks, names and moves), then — host — broadcasts the room's state at the snapshot rate
+    /// and pushes any rules edit, or — client — sends its own transform and anything it just
+    /// chose.
+    /// </summary>
+    public void LobbyTick(World.LobbyRoom room)
+    {
+        Room = room;
+        PumpLobby();
+
+        if (IsHost)
+        {
+            if (room.PickDirty && LocalSeat >= 0)
+                ApplyPick(LocalSeat, room.MyChassis ?? PlayerClass.Tank);
+            if (room.NameDirty) { LocalName = room.MyName; _nameOfSeat[LocalSeat] = room.MyName; }
+            if (room.RulesDirty) BroadcastRules(room.Match);
+            room.ClearDirty();
+
+            if (++_sinceRoom >= TicksPerSnapshot)
+            {
+                _sinceRoom = 0;
+                BroadcastRoomState(room);
+            }
+        }
+        else if (LocalSeat >= 0)
+        {
+            if (room.PickDirty) SendPick(room.MyChassis ?? PlayerClass.Tank);
+            if (room.NameDirty) SendName(room.MyName);
+            room.ClearDirty();
+            SendRoomMove(room.Position, room.Heading, room.Pitch, room.Height);
+        }
+    }
+
+    /// <summary>Host-side: records a seat's chosen chassis, marks it ready, and rebuilds that
+    /// seat's craft in the world it is holding so the eventual match opens with the right one.</summary>
+    private void ApplyPick(int seat, PlayerClass chassis)
+    {
+        _pickOfSeat[seat] = (chassis, true);
+        Room?.ApplyPick(seat, chassis, ready: true);
+        if (World is { } w && seat >= 0 && seat < w.Players.Count && w.Players[seat].Class != chassis)
+            w.ReplacePlayer(seat, chassis);
+    }
+
+    private void SendPick(PlayerClass chassis)
+    {
+        Span<byte> p = stackalloc byte[3];
+        p[0] = (byte)Msg.Pick;
+        p[1] = (byte)chassis;
+        p[2] = 1;   // ready
+        _net.Send(0, p, reliable: true);
+    }
+
+    private void SendName(string name)
+    {
+        byte[] text = Encode(name);
+        Span<byte> p = stackalloc byte[2 + 32];
+        p[0] = (byte)Msg.Name;
+        p[1] = (byte)text.Length;
+        text.CopyTo(p.Slice(2, text.Length));
+        _net.Send(0, p.Slice(0, 2 + text.Length), reliable: true);
+    }
+
+    private void SendRoomMove(System.Numerics.Vector2 pos, float heading, float pitch, float height)
+    {
+        Span<byte> p = stackalloc byte[1 + 10];
+        int at = 0;
+        p[at++] = (byte)Msg.RoomMove;
+        WriteShort(p, ref at, pos.X * RoomPos);
+        WriteShort(p, ref at, pos.Y * RoomPos);
+        WriteShort(p, ref at, heading * RoomAng);
+        WriteShort(p, ref at, pitch * RoomAng);
+        WriteShort(p, ref at, height * RoomPos);
+        _net.Send(0, p.Slice(0, at), reliable: false);
+    }
+
+    private void BroadcastRules(MatchSettings m)
+    {
+        Span<byte> p = stackalloc byte[1 + MatchSettings.Size];
+        p[0] = (byte)Msg.Rules;
+        m.Write(p.Slice(1, MatchSettings.Size));
+        _net.Broadcast(p, reliable: true);
+    }
+
+    /// <summary>Host-side: writes every avatar — seat, chassis (255 = none yet), ready, where
+    /// they stand, and their name — into one unreliable packet and sends it to every client.</summary>
+    private void BroadcastRoomState(World.LobbyRoom room)
+    {
+        Span<byte> buf = stackalloc byte[1200];
+        int at = 0;
+        buf[at++] = (byte)Msg.RoomState;
+        int countAt = at++;
+        int written = 0;
+
+        foreach (var a in room.Avatars.Values)
+        {
+            if (at + 14 + 32 > buf.Length) break;
+            buf[at++] = (byte)a.Seat;
+            buf[at++] = a.Chassis.HasValue ? (byte)a.Chassis.Value : (byte)255;
+            buf[at++] = (byte)(a.Ready ? 1 : 0);
+            WriteShort(buf, ref at, a.Position.X * RoomPos);
+            WriteShort(buf, ref at, a.Position.Y * RoomPos);
+            WriteShort(buf, ref at, a.Heading * RoomAng);
+            WriteShort(buf, ref at, a.Pitch * RoomAng);
+            WriteShort(buf, ref at, a.Height * RoomPos);
+            byte[] name = Encode(a.Name);
+            buf[at++] = (byte)name.Length;
+            name.CopyTo(buf.Slice(at, name.Length)); at += name.Length;
+            written++;
+        }
+        buf[countAt] = (byte)written;
+        _net.Broadcast(buf.Slice(0, at), reliable: false);
+    }
+
     /// <summary>The most recent tick a client has heard about, so a packet that overtook a
     /// newer one on the wire is dropped rather than snapping the world backwards.</summary>
     public uint LastAppliedTick { get; private set; }
@@ -151,6 +289,20 @@ public sealed class Session
 
     /// <summary>This machine's own display name, sent in HELLO. Set by the loop from Steam.</summary>
     public string LocalName { get; set; } = "PLAYER";
+
+    /// <summary>The lobby room this session is driving, while one is up. Set by the loop when
+    /// the room scene is active and cleared when the match starts. Host and client both read
+    /// and write it through <see cref="LobbyTick"/>.</summary>
+    public World.LobbyRoom? Room { get; set; }
+
+    /// <summary>Throttles the host's RoomState to <see cref="SnapshotHz"/> the same way the
+    /// match's snapshots are throttled — the room does not need sixty transforms a second any
+    /// more than the world does.</summary>
+    private int _sinceRoom;
+
+    /// <summary>Each seat's chosen chassis and ready flag in the room. Host-side, so the host
+    /// can build the match with the right craft in each seat and gate LAUNCH on all-ready.</summary>
+    private readonly Dictionary<int, (PlayerClass Chassis, bool Ready)> _pickOfSeat = new();
 
     public Session(INetTransport net, bool host)
     {
@@ -222,6 +374,10 @@ public sealed class Session
             if (!_seatOfPeer.TryGetValue(peer, out int seat)) continue;
             _seatOfPeer.Remove(peer);   // the peer id is dead; the identity mapping is kept
             if (seat >= 0 && seat < World.Players.Count) World.Players[seat].Away = true;
+            // In the room (before the match) a leaver simply vanishes from the floor and stops
+            // blocking the launch gate; mid-match the seat is held for a rejoin as before.
+            _pickOfSeat.Remove(seat);
+            Room?.Remove(seat);
             string name = _nameOfSeat.TryGetValue(seat, out var n) ? n : "A PLAYER";
             Announce($"{name} LEFT");
         }
@@ -420,6 +576,74 @@ public sealed class Session
                 // No ordering guard: a field packet is scenery, and the freshest one to land
                 // wins by simply being applied last. Missing one keeps the last field.
                 Snapshot.ApplyField(World, payload.AsSpan(1));
+                break;
+            }
+
+            // --- The 3D lobby room ------------------------------------------------
+            case Msg.Pick when IsHost:
+            {
+                if (payload.Length < 3) break;
+                if (!_seatOfPeer.TryGetValue(from, out int seat)) break;
+                ApplyPick(seat, (PlayerClass)payload[1]);
+                break;
+            }
+
+            case Msg.Name when IsHost:
+            {
+                if (payload.Length < 2) break;
+                if (!_seatOfPeer.TryGetValue(from, out int seat)) break;
+                int len = payload[1];
+                if (payload.Length < 2 + len) break;
+                string name = DecodeName(payload.AsSpan(2, len));
+                if (name.Length == 0) name = "A PLAYER";
+                _nameOfSeat[seat] = name;
+                Room?.ApplyName(seat, name);
+                break;
+            }
+
+            case Msg.RoomMove when IsHost:
+            {
+                if (payload.Length < 11) break;
+                if (!_seatOfPeer.TryGetValue(from, out int seat)) break;
+                int at = 1;
+                float x = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomPos; at += 2;
+                float y = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomPos; at += 2;
+                float head = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomAng; at += 2;
+                float pitch = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomAng; at += 2;
+                float height = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomPos; at += 2;
+                Room?.ApplyTransform(seat, new System.Numerics.Vector2(x, y), head, pitch, height,
+                    _nameOfSeat.TryGetValue(seat, out var n) ? n : "PLAYER");
+                break;
+            }
+
+            case Msg.Rules when !IsHost:
+                if (payload.Length >= 1 + MatchSettings.Size)
+                    Room?.AdoptRules(MatchSettings.Read(payload.AsSpan(1, MatchSettings.Size)));
+                break;
+
+            case Msg.RoomState when !IsHost:
+            {
+                if (Room is not { } room || payload.Length < 2) break;
+                int at = 1;
+                int count = payload[at++];
+                for (int i = 0; i < count; i++)
+                {
+                    if (at + 14 > payload.Length) break;
+                    int seat = payload[at++];
+                    byte cb = payload[at++];
+                    PlayerClass? chassis = cb == 255 ? null : (PlayerClass)cb;
+                    bool ready = payload[at++] != 0;
+                    float x = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomPos; at += 2;
+                    float y = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomPos; at += 2;
+                    float head = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomAng; at += 2;
+                    float pitch = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomAng; at += 2;
+                    float height = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomPos; at += 2;
+                    int nlen = payload[at++];
+                    if (at + nlen > payload.Length) break;
+                    string name = DecodeName(payload.AsSpan(at, nlen)); at += nlen;
+                    room.ApplyAvatar(seat, name.Length == 0 ? "PLAYER" : name, chassis, ready,
+                        new System.Numerics.Vector2(x, y), head, pitch, height);
+                }
                 break;
             }
         }

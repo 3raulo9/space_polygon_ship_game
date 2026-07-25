@@ -32,6 +32,11 @@ public sealed class Settings
     public Scheme Movement { get; set; } = Scheme.Wasd;
     public FireKey Fire { get; set; } = FireKey.Ctrl;
 
+    /// <summary>The multiplayer nickname the player last set in the lobby room. Empty means
+    /// "use the Steam persona name" — the room falls back to that so a first-time player still
+    /// has a name over their head without having to type one.</summary>
+    public string Nickname { get; set; } = "";
+
     // Config file lives beside the executable so it's found regardless of CWD.
     private static string FilePath =>
         Path.Combine(AppContext.BaseDirectory, "controls.cfg");
@@ -65,6 +70,9 @@ public sealed class Settings
                     case "fire":
                         if (Enum.TryParse(val, ignoreCase: true, out FireKey fk)) s.Fire = fk;
                         break;
+                    case "nickname":
+                        s.Nickname = val;
+                        break;
                 }
             }
         }
@@ -85,7 +93,8 @@ public sealed class Settings
                 "# VOID TANKS controls\n" +
                 $"swapTurn={(SwapTurn ? 1 : 0)}\n" +
                 $"movement={Movement}\n" +
-                $"fire={Fire}\n");
+                $"fire={Fire}\n" +
+                $"nickname={Nickname}\n");
         }
         catch
         {

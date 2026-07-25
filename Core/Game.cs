@@ -44,6 +44,9 @@ public sealed class Game : IDisposable
     // All null in a solo run, which is the point: single player and multiplayer are
     // separate modes, and nothing below is constructed until the second one is chosen.
     private readonly LobbyScreen _lobby = new();
+    // The walkable 3D lobby: a domed room over a planet where players gather, pick a craft,
+    // set a name, and the host launches. Non-null only while the multiplayer front-end is up.
+    private World.LobbyRoom? _room;
     private Net.SteamNet? _steam;
     private Net.Session? _session;
 
@@ -85,7 +88,7 @@ public sealed class Game : IDisposable
     private readonly string? _captureScreen =
         Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU");
     private bool _captureMenu =>
-        _captureScreen is "1" or "menu" or "settings" or "test" or "class" or "lobby";
+        _captureScreen is "1" or "menu" or "settings" or "test" or "class" or "lobby" or "room";
     private int _frame;
 
     /// <summary>Capture-only: the harness is holding the SPIDER's lance charge, so no
@@ -370,10 +373,17 @@ public sealed class Game : IDisposable
     /// </summary>
     private void SyncCursor()
     {
-        bool wantCapture = _state == GameState.Playing
-                        && !_inventoryOpen
-                        && !_fading
-                        && _world != null;
+        // The lobby room captures the mouse too, but only while actually walking — a station
+        // panel, the name field and the code box all want the pointer handed back so typing and
+        // menu navigation behave.
+        bool roomWalking = _state == GameState.Lobby && !_fading
+                        && _room is { Where: World.LobbyRoom.Focus.Walking };
+
+        bool wantCapture = roomWalking
+                        || (_state == GameState.Playing
+                            && !_inventoryOpen
+                            && !_fading
+                            && _world != null);
 
         if (wantCapture == _mouseCaptured)
         {
@@ -421,9 +431,11 @@ public sealed class Game : IDisposable
                 break;
             case Menu.Action.StartMultiplayer:
                 // The other mode. Steam comes up here rather than at boot, so a player who
-                // only ever plays alone never waits on it and never sees it fail.
+                // only ever plays alone never waits on it and never sees it fail. The lobby is
+                // now a place you walk into: a fresh room in its antechamber, host/join undecided
+                // until the player reaches a pillar.
                 Net.SteamNet.Start();
-                _lobby.Trouble = null;
+                _room = new World.LobbyRoom();
                 BeginFade(() => _state = GameState.Lobby);
                 break;
             case Menu.Action.OpenSettings:
@@ -620,7 +632,10 @@ public sealed class Game : IDisposable
             case GameState.ClassSelect: _renderer.DrawClassSelect(_classSelect, _menuTime); break;
             case GameState.Settings: _renderer.DrawSettings(_settingsScreen, _menuTime); break;
             case GameState.Test: _renderer.DrawTest(_testScreen, _menuTime); break;
-            case GameState.Lobby: _renderer.DrawLobby(_lobby, _menuTime); break;
+            case GameState.Lobby:
+                if (_room != null) _renderer.DrawLobbyRoom(_room, _menuTime);
+                else _renderer.DrawMenu(_menu, _menuTime);
+                break;
             // Playing / Paused — but only if there is actually a world to draw. Every
             // screen above is worldless, and a state that reaches the default branch
             // without one would dereference null mid-transition, which is exactly what
@@ -662,68 +677,76 @@ public sealed class Game : IDisposable
 
     private void UpdateLobby()
     {
+        if (_room is null) { BeginFade(ReturnToMenu); return; }
         _menuTime += Raylib.GetFrameTime();
 
-        // The wire turns on the lobby screen as well as in the world. It has to: the
-        // handshake that seats a joiner happens entirely between two machines that are both
-        // still standing here, and a lobby that only listened once the match had started
-        // would never start one.
-        _session?.PumpLobby();
+        // A dial that failed, or a host that went away, drops the player back into the
+        // antechamber with a reason rather than leaving them standing in a dead room.
+        if (_steam is { Dropped: { } why }) { _room.Fail(why); TearDownMatch(); }
 
-        // Keep the roster line honest while people arrive, and keep the host's rules on the
-        // world it already built so a friendly-fire or seat-cap change made while waiting
-        // actually takes.
+        // Keep the host's live rules on the world it already built, so a change made at the
+        // console while people gather actually takes at launch.
         if (_session is { IsHost: true } host && host.World is { } hw)
-        {
-            hw.Match = _lobby.Match.Clamped();
-            _lobby.Seated = hw.Players.Count;
-        }
+            hw.Match = _room.Match.Clamped();
 
-        // A dial that failed, or a host that went away, puts the player back on the choice
-        // rather than leaving them watching dots forever.
-        if (_steam is { Dropped: { } why }) { _lobby.Fail(why); TearDownMatch(); }
+        // Once the host has seated us (their Welcome carried our seat), step out of the
+        // antechamber into the room proper.
+        if (_session is { IsHost: false } client && client.LocalSeat >= 0
+            && _room.Stage != World.LobbyRoom.Phase.InRoom)
+            _room.Seat(client.LocalSeat, client.LocalName);
 
-        switch (_lobby.Update())
+        // Drive the walker and the stations from the live keyboard.
+        World.LobbyRoom.Action act = _room.Update(_input.Current, Raylib.GetFrameTime());
+
+        // A name set here is remembered for next time — read before the tick below clears the
+        // flag on its way to the wire.
+        if (_room.NameDirty) { _settings.Nickname = _room.MyName; _settings.Save(); }
+
+        // Turn the wire while everyone is still standing here — the handshake that seats a
+        // joiner and the transforms that make the room move both happen on this screen.
+        _session?.LobbyTick(_room);
+
+        switch (act)
         {
-            case LobbyScreen.Action.Back:
+            case World.LobbyRoom.Action.Back:
                 TearDownMatch();
+                _room = null;
                 BeginFade(ReturnToMenu);
+                return;
+
+            case World.LobbyRoom.Action.StartHost:
+                StartHosting();
                 break;
 
-            case LobbyScreen.Action.HostMatch:
-                // The chassis comes first: both players pick in the hangar, and only then
-                // does anyone open a socket, so a joiner's HELLO already carries the class
-                // they chose rather than whatever the hangar last held.
-                _mpRole = MpRole.Host;
-                BeginFade(() => _state = GameState.ClassSelect);
+            case World.LobbyRoom.Action.StartJoin:
+                StartJoining();
                 break;
 
-            case LobbyScreen.Action.JoinMatch:
-                _mpRole = MpRole.Join;
-                BeginFade(() => _state = GameState.ClassSelect);
-                break;
-
-            case LobbyScreen.Action.Launch:
+            case World.LobbyRoom.Action.Launch:
                 if (_session?.World is { } ready)
                 {
                     // Anyone seated before the host settled on a revive count gets it now, so
                     // the number on every HUD matches the one the host launched with.
                     foreach (var p in ready.Players) p.Lives = ready.Match.Revives + 1;
                     _session.StartMatch();
+                    _session.Room = null;
                     _world = ready;
+                    _room = null;
                     _inventoryOpen = false;
                     BeginFade(() => _state = GameState.Playing);
+                    return;
                 }
                 break;
         }
 
         // A client comes in when the host presses LAUNCH — there is no launch button on that
-        // end, the host owns when the match starts. Being seated only means the host knows
-        // you are there.
+        // end, the host owns when the match starts.
         if (_session is { IsHost: false, MatchStarted: true, LocalSeat: >= 0 } joined
             && joined.World is { } jw)
         {
+            joined.Room = null;
             _world = jw;
+            _room = null;
             _inventoryOpen = false;
             BeginFade(() => _state = GameState.Playing);
         }
@@ -731,7 +754,7 @@ public sealed class Game : IDisposable
 
     private void DrawLobby()
     {
-        _renderer.DrawLobby(_lobby, _menuTime);
+        if (_room != null) _renderer.DrawLobbyRoom(_room, _menuTime);
         _renderer.Present();
     }
 
@@ -743,30 +766,44 @@ public sealed class Game : IDisposable
         _session = null;
     }
 
-    /// <summary>Opens the socket and builds the host's world with the chosen chassis, then
-    /// drops back onto the lobby screen — now the hosting face, with the code and the rules —
-    /// to wait for people and press LAUNCH.</summary>
-    private void StartHosting()
+    /// <summary>The multiplayer name this machine plays under: the nickname the player last
+    /// set, or their Steam persona if they never set one.</summary>
+    private string MpName()
     {
-        _mpRole = MpRole.None;
-        _steam = Net.SteamNet.Host();
-        if (_steam == null) { _lobby.Fail("COULD NOT OPEN A SOCKET"); _state = GameState.Lobby; return; }
-        _session = new Net.Session(_steam, host: true) { LocalName = Net.SteamNet.LocalName };
-        _session.HostMatch(new World.World(_loadout, _lobby.Match.Clamped()));
-        _state = GameState.Lobby;
+        string n = _settings.Nickname.Trim();
+        return n.Length > 0 ? n : Net.SteamNet.LocalName;
     }
 
-    /// <summary>Dials the host with the chosen chassis and waits on the lobby's joining face
-    /// until they press LAUNCH.</summary>
+    /// <summary>Reached from the antechamber's HOST pillar: opens the socket and builds the
+    /// host's world, then seats the host in the room proper. The host's own chassis is still
+    /// chosen at the pod like everyone else, so the world opens on a placeholder until then.</summary>
+    private void StartHosting()
+    {
+        if (_room is null) return;
+        _steam = Net.SteamNet.Host();
+        if (_steam == null) { _room.Fail("COULD NOT OPEN A SOCKET"); return; }
+        _session = new Net.Session(_steam, host: true) { LocalName = MpName() };
+        _session.HostMatch(new World.World(_loadout, _room.Match.Clamped()));
+        _session.Room = _room;
+        _room.IsHost = true;
+        _room.Seat(0, _session.LocalName);
+    }
+
+    /// <summary>Reached from the antechamber's JOIN pillar with a code typed: dials the host and
+    /// waits on the connecting banner until the Welcome seats us into the room.</summary>
     private void StartJoining()
     {
-        _mpRole = MpRole.None;
-        _steam = Net.SteamNet.Connect(_lobby.Typed);
-        if (_steam == null) { _lobby.Fail("THAT IS NOT A CODE"); _state = GameState.Lobby; return; }
-        _session = new Net.Session(_steam, host: false) { LocalName = Net.SteamNet.LocalName };
+        if (_room is null) return;
+        _steam = Net.SteamNet.Connect(_room.TypedCode);
+        if (_steam == null) { _room.Fail("THAT IS NOT A CODE"); return; }
+        _session = new Net.Session(_steam, host: false) { LocalName = MpName() };
         _session.JoinMatch(new World.World(_loadout) { DynamicSpawning = false });
+        // A placeholder chassis — the real one is chosen at the pod and sent as a Pick. The
+        // Hello still carries our name, which is how the host has it before any rename.
         _session.SendHello(_loadout.Class);
-        _state = GameState.Lobby;
+        _session.Room = _room;
+        _room.IsHost = false;
+        _room.Connecting();
     }
 
     private void EnterSinglePlayer()
@@ -813,6 +850,7 @@ public sealed class Game : IDisposable
             for (int i = 0; i < 2; i++)
             {
                 if (_captureScreen == "lobby") _renderer.DrawLobby(_lobby, _menuTime);
+                else if (_captureScreen == "room") _renderer.DrawLobbyRoom(CaptureRoom(), _menuTime);
                 else if (_captureScreen == "settings") _renderer.DrawSettings(_settingsScreen, _menuTime);
                 else if (_captureScreen == "class") _renderer.DrawClassSelect(_classSelect, _menuTime);
                 else if (_captureScreen == "test") _renderer.DrawTest(_testScreen, _menuTime);
@@ -1185,6 +1223,30 @@ public sealed class Game : IDisposable
             return true;
         }
         return false;
+    }
+
+    /// <summary>Capture-only: builds a representative lobby room so the dome, the planet, the
+    /// stations and a few avatars can be photographed headlessly. VOIDTANKS_ROOM=antechamber
+    /// grabs the entry face instead; otherwise it is the room proper with the local player
+    /// seated as host and two others milling about.</summary>
+    private World.LobbyRoom CaptureRoom()
+    {
+        if (_room != null) return _room;
+        var room = new World.LobbyRoom { IsHost = true };
+        if (Environment.GetEnvironmentVariable("VOIDTANKS_ROOM") == "antechamber")
+            return _room = room;
+
+        room.Seat(0, "HOST");
+        room.ApplyPick(0, PlayerClass.Spider, ready: true);
+        room.ApplyAvatar(1, "RAUL", PlayerClass.Tank, true,
+            new System.Numerics.Vector2(-6f, 10f), 2.4f, 0f, 0f);
+        room.ApplyAvatar(2, "MOTE", PlayerClass.Virus, false,
+            new System.Numerics.Vector2(7f, 8f), -1.2f, 0f, 2.5f);
+        // Stand the camera back a little, and tilt down so the shot frames the deck, the
+        // avatars and the planet glowing up through the glass at once.
+        room.Position = new System.Numerics.Vector2(0f, -14f);
+        room.Pitch = -0.22f;
+        return _room = room;
     }
 
     private void Update(float dt, in InputFrame input)

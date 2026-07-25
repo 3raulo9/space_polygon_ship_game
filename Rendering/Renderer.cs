@@ -37,6 +37,8 @@ public sealed class Renderer : IDisposable
     private readonly EntityRenderer _entities = new();
     // Renders the inventory's items as small rotating 3D models (see DrawInventory).
     private readonly ItemIconRenderer _itemIcons = new();
+    // The walkable multiplayer lobby's scene and panels.
+    private readonly LobbyRoomRenderer _lobbyRoom = new();
 
     public Renderer()
     {
@@ -526,6 +528,36 @@ public sealed class Renderer : IDisposable
         Raylib.BeginTextureMode(_target);
         Raylib.ClearBackground(Palette.Void);
         LobbyRenderer.Draw(screen, elapsed);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The walkable multiplayer lobby: a first-person eye at the local walker, looking into a
+    /// domed room over a planet, with everyone else drawn as their chosen craft.
+    /// </summary>
+    public void DrawLobbyRoom(World.LobbyRoom room, float elapsed)
+    {
+        var eye = new Vector3(room.Position.X, World.LobbyRoom.EyeHeight + room.Height, room.Position.Y);
+        float cp = MathF.Cos(room.Pitch), sp = MathF.Sin(room.Pitch);
+        var dir = new Vector3(MathF.Sin(room.Heading) * cp, sp, MathF.Cos(room.Heading) * cp);
+        _camera.FovY = Config.CameraFovY;
+        _camera.Position = eye;
+        _camera.Target = eye + dir;
+        _camera.Up = new Vector3(0f, 1f, 0f);
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+
+        // The sky beyond the dome: a flat starfield behind the 3D pass.
+        foreach (var (sx, sy, b) in _lobbyRoom.Stars)
+            Raylib.DrawPixel(sx, sy, new Color(b, b, (byte)Math.Min(255, b + 20), (byte)255));
+
+        Raylib.BeginMode3D(_camera);
+        _lobbyRoom.Draw3D(room, _entities, eye, elapsed);
+        Raylib.EndMode3D();
+
+        _lobbyRoom.Draw2D(room, _camera, elapsed);
+
         Raylib.EndTextureMode();
     }
 
