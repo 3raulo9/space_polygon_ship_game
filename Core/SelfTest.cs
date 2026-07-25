@@ -146,6 +146,11 @@ public static class SelfTest
         failures += Check("the handshake completes on the lobby screen alone", LobbyHandshakeSeatsAJoiner);
         failures += Check("a snapshot carries each seat's chassis, and the client rebuilds it", ChassisCrossesTheWire);
         failures += Check("two players open close enough to see each other", SeatsOpenWithinSight);
+        failures += Check("a lost field packet keeps the enemies it had", FieldPacketIsKeepLast);
+        failures += Check("a dropped player is held, then restored on rejoin", DropAndRejoinRestoresTheSeat);
+        failures += Check("a full match refuses a new joiner but not a rejoiner", FullMatchStillLetsYouBack);
+        failures += Check("FLAT keeps the city but seeds nothing hostile", FlatMapIsASandbox);
+        failures += Check("PLANET is the full world, unchanged", PlanetMapStillSpawns);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1494,6 +1499,181 @@ public static class SelfTest
             : null;
     }
 
+    private static string? FlatMapIsASandbox()
+    {
+        var flat = new World.World(null,
+            new MatchSettings { MaxPlayers = 4, Map = GameMap.Flat });
+
+        // The city still stands to fight around...
+        if (flat.Structures.Count == 0) return "FLAT threw the city away";
+        // ...but nothing hostile was seeded, and the spawn director is off.
+        if (flat.Enemies.Count != 0) return $"FLAT opened with {flat.Enemies.Count} enemies";
+        if (flat.Pickups.Count != 0) return $"FLAT seeded {flat.Pickups.Count} pickups";
+        if (flat.Boss != null || flat.Maw != null) return "FLAT raised a boss";
+        if (flat.DynamicSpawning) return "FLAT left the spawn director running";
+
+        // Stepping it a while must not conjure anything out of the empty sim.
+        for (int i = 0; i < 60 * 30; i++) flat.StepForTest((float)Config.FixedDt);
+        if (flat.Enemies.Count != 0) return $"FLAT spawned {flat.Enemies.Count} enemies over 30s";
+        return null;
+    }
+
+    private static string? PlanetMapStillSpawns()
+    {
+        // The default map is the whole game, untouched: it opens with a hunter and salvage,
+        // exactly as a solo run always has.
+        var planet = new World.World(null, new MatchSettings { MaxPlayers = 4, Map = GameMap.Planet });
+        if (planet.Enemies.Count == 0) return "PLANET opened with no hunter";
+        if (planet.Pickups.Count == 0) return "PLANET opened with no salvage";
+        if (!planet.DynamicSpawning) return "PLANET has the spawn director off";
+
+        // And a plain solo world is PLANET.
+        var solo = new World.World();
+        if (solo.Match.Map != GameMap.Planet) return "a solo world was not PLANET";
+        return null;
+    }
+
+    /// <summary>Seats a client into a started host match over a loopback and hands both
+    /// sessions back. Pumps the lobby until the handshake settles.</summary>
+    private static (LoopbackNet net, Session host, Session client, World.World hw, World.World cw)
+        SeatOne(int maxPlayers, string name)
+    {
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 3);
+        var hw = new World.World(null, new MatchSettings { MaxPlayers = maxPlayers })
+        { DynamicSpawning = false };
+        hw.Enemies.Clear();
+        var cw = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false };
+
+        var host = new Session(net[0], host: true) { LocalName = "HOST" };
+        var client = new Session(net[1], host: false) { LocalName = name };
+        host.HostMatch(hw);
+        client.JoinMatch(cw);
+        client.SendHello(PlayerClass.Tank);
+
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+        host.StartMatch();
+        for (int i = 0; i < 20; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+        return (net, host, client, hw, cw);
+    }
+
+    private static string? DropAndRejoinRestoresTheSeat()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+
+        // Play a little: the held craft has a distinct state to restore. The host owns it.
+        PlayerTank seat1 = hw.Players[1];
+        seat1.Position = Torus.Wrap(new Vector2(50f, -25f));
+        seat1.Lives = 2;
+        seat1.Ammo = 13;
+
+        // The player drops. The host must hold the seat, not free it, and tell the room.
+        net.DropPeer(0, 1);
+        for (int i = 0; i < 5; i++) { net.Advance(); host.PumpLobby(); }
+        if (!hw.Players[1].Away) return "a dropped player's seat was not marked away";
+        if (hw.Players.Count != 2) return "the dropped player's seat was removed, not held";
+        if (!FeedHas(host.Notices, "LEFT")) return "no LEFT notice was posted";
+        if (!FeedHas(host.Notices, "ACE")) return "the LEFT notice did not name the player";
+
+        // While away, the craft is frozen: stepping the host must not move or age it.
+        Vector2 held = hw.Players[1].Position;
+        for (int i = 0; i < 120; i++) hw.StepForTest((float)Config.FixedDt);
+        if (Torus.Distance(hw.Players[1].Position, held) > 0.01f)
+            return "an away craft drifted while its player was gone";
+
+        // They come back — same Steam account, so the same seat, with everything restored.
+        net.Readmit(0, 1);
+        client.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+
+        if (hw.Players[1].Away) return "the seat was still away after a rejoin";
+        if (client.LocalSeat != 1) return $"the rejoiner landed in seat {client.LocalSeat}, not their old 1";
+        if (cw.Players[client.LocalSeat].Lives != 2)
+            return $"lives came back as {cw.Players[client.LocalSeat].Lives}, not the held 2";
+        if (cw.Players[client.LocalSeat].Ammo != 13)
+            return $"ammo came back as {cw.Players[client.LocalSeat].Ammo}, not the held 13";
+        if (Torus.Distance(cw.Players[client.LocalSeat].Position, held) > 0.5f)
+            return "the rejoiner did not open where their craft was held";
+        if (!FeedHas(host.Notices, "REJOINED")) return "no REJOINED notice was posted";
+        return null;
+    }
+
+    private static string? FullMatchStillLetsYouBack()
+    {
+        // A two-seat match with both seats taken.
+        var (net, host, client, hw, cw) = SeatOne(2, "BEE");
+        if (!hw.Full) return "a two-of-two match did not call itself full";
+        if (hw.AddPlayer() != null) return "a full match seated a third craft";
+
+        // The one joiner drops. The match is still full (the seat is held), but the person who
+        // holds it must be let back even so — a rejoin reuses the seat rather than needing a
+        // free one.
+        net.DropPeer(0, 1);
+        for (int i = 0; i < 5; i++) { net.Advance(); host.PumpLobby(); }
+        net.Readmit(0, 1);
+        client.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+
+        if (hw.Players[1].Away) return "a full match refused to let its own dropped player back";
+        if (client.LocalSeat != 1) return "the rejoiner was not restored to their seat";
+        return null;
+    }
+
+    private static bool FeedHas(NoticeFeed feed, string needle)
+    {
+        foreach (var e in feed.Entries)
+            if (e.Text.Contains(needle, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private static string? FieldPacketIsKeepLast()
+    {
+        // The heart of the vanish-bug fix: players and field are separate packets, and a
+        // client that misses a field packet must keep the field it already had rather than
+        // clearing it. This proves the two are independent — applying only a players packet
+        // leaves the enemies untouched, and the busy field never rides in the players packet
+        // that always has to fit.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        for (int i = 0; i < 20; i++)
+            host.Enemies.Add(new EnemyTank(Torus.Wrap(new Vector2(i * 3f, 10f)), elite: false));
+        host.AddPlayer();
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();
+        client.LocalIndex = 0;
+
+        var buf = new byte[Snapshot.MaxSize];
+
+        // First, a field packet lands, so the client learns the enemies.
+        int nf = Snapshot.WriteField(host, forSeat: 0, tick: 1u, buf);
+        Snapshot.ApplyField(client, buf.AsSpan(0, nf));
+        int had = client.Enemies.Count;
+        if (had == 0) return "the client never received the field at all";
+
+        // Now several players packets arrive with no field packet between them — a run of
+        // field loss. The enemies must still be standing.
+        for (int t = 2; t < 8; t++)
+        {
+            int np = Snapshot.WritePlayers(host, (uint)t, buf);
+            Snapshot.ApplyPlayers(client, buf.AsSpan(0, np));
+        }
+        if (client.Enemies.Count != had)
+            return $"a run of lost field packets left {client.Enemies.Count} enemies, not {had}";
+
+        // The players packet alone is small enough to always fit one datagram — the property
+        // the whole split rests on. A full house must not exceed the players-packet ceiling.
+        var full = new World.World(null, new MatchSettings { MaxPlayers = MatchSettings.MaxSeats })
+        { DynamicSpawning = false };
+        for (int i = 1; i < MatchSettings.MaxSeats; i++) full.AddPlayer();
+        int fp = Snapshot.WritePlayers(full, 1u, buf);
+        if (fp > 1100) return $"a full players packet is {fp} bytes, over a safe datagram";
+        return null;
+    }
+
     private static string? ChassisCrossesTheWire()
     {
         // A joiner who picked a fish has to arrive as a fish on every other screen — the whole
@@ -1512,8 +1692,8 @@ public static class SelfTest
         client.LocalIndex = 0;
 
         var buf = new byte[Snapshot.MaxSize];
-        int n = Snapshot.Write(host, forSeat: 0, tick: 5u, buf);
-        Snapshot.Apply(client, buf.AsSpan(0, n));
+        int n = Snapshot.WritePlayers(host, tick: 5u, buf);
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
 
         if (client.Players[1].Class != PlayerClass.Fish)
             return $"seat 1 picked a fish and arrived as {client.Players[1].Class}";
@@ -1568,10 +1748,10 @@ public static class SelfTest
         client.LocalIndex = 0;
 
         var buf = new byte[Snapshot.MaxSize];
-        int n = Snapshot.Write(host, forSeat: 0, tick: 99u, buf);
-        if (n > Snapshot.MaxSize) return $"a snapshot wrote {n} bytes into a {Snapshot.MaxSize} buffer";
+        int n = Snapshot.WritePlayers(host, tick: 99u, buf);
+        if (n > Snapshot.MaxSize) return $"a players packet wrote {n} bytes into a {Snapshot.MaxSize} buffer";
 
-        uint tick = Snapshot.Apply(client, buf.AsSpan(0, n));
+        uint tick = Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
         if (tick != 99u) return $"the tick came back as {tick}, not 99";
 
         PlayerTank copy = client.Players[1];
@@ -1583,7 +1763,7 @@ public static class SelfTest
 
         // A truncated packet must leave the world alone rather than throwing.
         Vector2 before = copy.Position;
-        if (Snapshot.Apply(client, buf.AsSpan(0, 6)) != 0u)
+        if (Snapshot.ApplyPlayers(client, buf.AsSpan(0, 6)) != 0u)
             return "a truncated packet was accepted";
         if (client.Players[1].Position != before)
             return "a truncated packet moved something before it gave up";

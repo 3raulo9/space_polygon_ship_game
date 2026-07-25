@@ -1,6 +1,18 @@
 namespace VoidTanks.Core;
 
 /// <summary>
+/// Which world a match is played on. PLANET is the game as it has always been — the city,
+/// the hunters, the bosses rising out of the fog. FLAT keeps the same city to fight around
+/// but seeds nothing hostile and never spawns: a sandbox for a few people to move, shoot and
+/// mess about in. Single player is always PLANET.
+/// </summary>
+public enum GameMap : byte
+{
+    Planet = 0,
+    Flat = 1,
+}
+
+/// <summary>
 /// What the host decides before anyone launches, and what every client is told once on
 /// joining. Distinct from <see cref="Settings"/>, which is one person's keys and prefs and
 /// never leaves their machine — this is the rules of the match, and all twenty players are
@@ -30,6 +42,10 @@ public sealed class MatchSettings
     /// </summary>
     public int Revives { get; set; } = DefaultRevives;
 
+    /// <summary>The world this match is played on. Host's choice; PLANET by default and the
+    /// only thing single player ever is.</summary>
+    public GameMap Map { get; set; } = GameMap.Planet;
+
     public const int MinPlayers = 1;
     public const int MaxSeats = 20;
     public const int DefaultMaxPlayers = 8;
@@ -49,6 +65,7 @@ public sealed class MatchSettings
         MaxPlayers = Math.Clamp(MaxPlayers, MinPlayers, MaxSeats),
         FriendlyFire = FriendlyFire,
         Revives = Math.Clamp(Revives, 0, MaxRevives),
+        Map = Enum.IsDefined(Map) ? Map : GameMap.Planet,
     };
 
     /// <summary>The solo game: one seat, and the three lives the craft has always had.
@@ -58,18 +75,20 @@ public sealed class MatchSettings
         MaxPlayers = 1,
         FriendlyFire = false,
         Revives = DefaultRevives,
+        Map = GameMap.Planet,
     };
 
     // --- Wire format ---------------------------------------------------------------
-    // Three bytes. Sent once, reliably, when a client joins.
+    // Four bytes. Sent once, reliably, when a client joins.
 
-    public const int Size = 3;
+    public const int Size = 4;
 
     public void Write(Span<byte> dst)
     {
         dst[0] = (byte)MaxPlayers;
         dst[1] = (byte)(FriendlyFire ? 1 : 0);
         dst[2] = (byte)Revives;
+        dst[3] = (byte)Map;
     }
 
     public static MatchSettings Read(ReadOnlySpan<byte> src) => new MatchSettings
@@ -77,5 +96,6 @@ public sealed class MatchSettings
         MaxPlayers = src[0],
         FriendlyFire = src[1] != 0,
         Revives = src[2],
+        Map = (GameMap)src[3],
     }.Clamped();
 }

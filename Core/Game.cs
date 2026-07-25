@@ -154,6 +154,16 @@ public sealed class Game : IDisposable
                     Vector2 to = mate.Position - _world.Player.Position;
                     _world.Player.Heading = MathF.Atan2(to.X, to.Y);
                     if (mate.Class is PlayerClass.Fish or PlayerClass.Virus) mate.Height = 6f;
+
+                    // VOIDTANKS_MP_COMPARE=1 drops the matching enemy a few metres beside the
+                    // peer, so a capture shows player craft and hunter side by side and the
+                    // world-scale can be tuned until they read the same size. Tuning only.
+                    if (Environment.GetEnvironmentVariable("VOIDTANKS_MP_COMPARE") == "1")
+                    {
+                        var beside = Torus.Wrap(mate.Position + new Vector2(9f, 0f));
+                        if (mate.Class == PlayerClass.Soldier) _world.SpawnSoldierSquad(beside);
+                        else _world.Enemies.Add(new Entities.EnemyTank(beside, elite: false));
+                    }
                 }
             }
         }
@@ -172,6 +182,10 @@ public sealed class Game : IDisposable
             // Steam's own callbacks — connection state changes arrive through these. Cheap
             // and harmless when Steam never came up.
             Net.SteamNet.RunCallbacks();
+
+            // Age the join/quit feed once per rendered frame so its lines fade out whatever
+            // the sim is doing behind them.
+            _session?.Notices.Age(Raylib.GetFrameTime());
 
             if (_capturePath != null && RunCaptureFrame()) break;
 
@@ -737,7 +751,7 @@ public sealed class Game : IDisposable
         _mpRole = MpRole.None;
         _steam = Net.SteamNet.Host();
         if (_steam == null) { _lobby.Fail("COULD NOT OPEN A SOCKET"); _state = GameState.Lobby; return; }
-        _session = new Net.Session(_steam, host: true);
+        _session = new Net.Session(_steam, host: true) { LocalName = Net.SteamNet.LocalName };
         _session.HostMatch(new World.World(_loadout, _lobby.Match.Clamped()));
         _state = GameState.Lobby;
     }
@@ -749,7 +763,7 @@ public sealed class Game : IDisposable
         _mpRole = MpRole.None;
         _steam = Net.SteamNet.Connect(_lobby.Typed);
         if (_steam == null) { _lobby.Fail("THAT IS NOT A CODE"); _state = GameState.Lobby; return; }
-        _session = new Net.Session(_steam, host: false);
+        _session = new Net.Session(_steam, host: false) { LocalName = Net.SteamNet.LocalName };
         _session.JoinMatch(new World.World(_loadout) { DynamicSpawning = false });
         _session.SendHello(_loadout.Class);
         _state = GameState.Lobby;
@@ -1187,7 +1201,8 @@ public sealed class Game : IDisposable
 
     private void Draw()
     {
-        _renderer.DrawWorld(_world!);
+        // The join/quit feed rides along in a match; single player passes null and draws none.
+        _renderer.DrawWorld(_world!, _session?.Notices);
         _renderer.Present();
     }
 

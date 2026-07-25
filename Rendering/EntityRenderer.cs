@@ -145,8 +145,11 @@ public sealed class EntityRenderer
             if (seat == world.LocalIndex) continue;
             PlayerTank mate = world.Players[seat];
             if (!mate.Alive) continue;
-            DrawCraft(mate, Torus.NearestImage(mate.Position, eyeXZ), cameraPos,
-                      (float)Raylib.GetTime());
+            // A craft whose player has dropped is still standing there — held for their
+            // return — so it is drawn, but frozen (no idle animation clock) so it reads as
+            // dormant rather than alive.
+            float clock = mate.Away ? 0f : (float)Raylib.GetTime();
+            DrawCraft(mate, Torus.NearestImage(mate.Position, eyeXZ), cameraPos, clock);
         }
 
         foreach (var e in world.Enemies)
@@ -638,18 +641,43 @@ public sealed class EntityRenderer
     /// </summary>
     public void DrawCraft(PlayerTank craft, Vector2 pos, Vector3 cameraPos, float elapsed)
     {
-        if (craft.Height > 0.001f)
-        {
-            Rlgl.PushMatrix();
-            Rlgl.Translatef(0f, craft.Height, 0f);
-            DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
-            Rlgl.PopMatrix();
-        }
-        else
-        {
-            DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
-        }
+        // The hangar turntable draws every chassis at a scale tuned for a close camera, which
+        // in the world sits it far too small beside the enemies — a player tank a third the
+        // size of the hunters it fights. So the whole craft is scaled about its own base to
+        // match the bigness of the thing it stands next to: a player tank the size of an
+        // enemy tank, a player soldier the size of an enemy soldier, and the spider grown up
+        // from its cramped hangar size to something that reads as a war machine.
+        float s = WorldScale(craft.Class);
+
+        Rlgl.PushMatrix();
+        // Scale uniformly about the craft's ground point, then lift the result by its height,
+        // so a jump raises the whole enlarged body and the feet still meet the grid at rest.
+        Rlgl.Translatef(pos.X, craft.Height, pos.Y);
+        Rlgl.Scalef(s, s, s);
+        Rlgl.Translatef(-pos.X, 0f, -pos.Y);
+        DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
+        Rlgl.PopMatrix();
     }
+
+    /// <summary>
+    /// How much to grow each chassis when drawn out in the world, chosen so a player craft
+    /// reads at the same size as its enemy counterpart: the tank matches
+    /// <see cref="EnemyTank.Scale"/>, the soldier matches <see cref="EnemySoldier.Scale"/>,
+    /// and the two with no enemy twin (fish, virus) are sized to sit convincingly among the
+    /// rest rather than shrinking into specks. The spider is grown well past its hangar size —
+    /// larger, as a war machine should be, though still short of the Crab-Core it is a cut
+    /// down cousin of.
+    /// </summary>
+    private static float WorldScale(PlayerClass chassis) => chassis switch
+    {
+        PlayerClass.Tank => 3.2f,     // = EnemyTank.Scale; the player parts share the base size
+        PlayerClass.Soldier => 2.0f,  // = EnemySoldier.Scale
+        PlayerClass.Spider => 2.1f,   // grown up from the hangar, but the wide leg span reads
+                                      // big fast, so this stays well under the Crab-Core
+        PlayerClass.Fish => 2.4f,
+        PlayerClass.Virus => 2.4f,
+        _ => 1f,
+    };
 
     public void DrawLoadoutShowcase(Loadout loadout, Vector2 pos, float heading,
         Vector3 cameraPos, float elapsed)

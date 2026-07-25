@@ -43,4 +43,19 @@ public interface INetTransport
     /// clock. Called once per fixed step, before anything drains the queue.
     /// </summary>
     void Pump();
+
+    /// <summary>
+    /// A stable identity for a peer that survives a disconnect and reconnect — the Steam
+    /// account behind them. The transport peer id is reused freely and means nothing across a
+    /// drop; this does not, which is what lets a rejoining player be recognised as the same
+    /// person and handed their seat back. Zero when unknown (the loopback, or a peer not yet
+    /// fully connected).
+    /// </summary>
+    long IdentityOf(int peer);
+
+    /// <summary>
+    /// Takes the next peer that has dropped since the last call, or false when there are
+    /// none. Host-side this is how a seat learns its player left. Drain it in a loop.
+    /// </summary>
+    bool TryTakeDeparted(out int peer);
 }

@@ -35,6 +35,33 @@ internal static class HudRenderer
     private const int RadarMargin = 6;
     private const float RadarWorldRange = 90f;       // world units mapped to the radar edge
 
+    /// <summary>
+    /// The join/quit feed: a few short yellow lines stacked at the bottom-right, under the
+    /// instruments, each fading out as it ages. Multiplayer only — single player never has a
+    /// feed to draw. Drawn last, over everything, so a notice is never lost behind the world.
+    /// </summary>
+    public static void DrawNotices(Net.NoticeFeed feed)
+    {
+        Font font = Raylib.GetFontDefault();
+        const int size = 9;
+        const int pad = 6;
+        var lines = feed.Entries;
+
+        // Newest at the bottom, older ones stacked above it and climbing off the corner.
+        for (int i = 0; i < lines.Count; i++)
+        {
+            Net.NoticeFeed.Entry e = lines[lines.Count - 1 - i];
+            // Fade over the last second and a half of a line's life.
+            float a = Math.Clamp(e.Remaining / 1.5f, 0f, 1f);
+            byte alpha = (byte)(a * 255);
+            Vector2 m = Raylib.MeasureTextEx(font, e.Text, size, 1);
+            float x = W - pad - m.X;
+            float y = H - pad - size - i * (size + 3);
+            var col = new Color(Palette.Flag.R, Palette.Flag.G, Palette.Flag.B, alpha);
+            Raylib.DrawTextEx(font, e.Text, new Vector2(x, y), size, 1, col);
+        }
+    }
+
     public static void Draw(World.World world, ItemIconRenderer icons)
     {
         _icons = icons;

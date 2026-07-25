@@ -31,7 +31,7 @@ public sealed class LobbyScreen
     public enum Action { None, Back, HostMatch, JoinMatch, Launch }
 
     /// <summary>The rows a host can walk while waiting for people.</summary>
-    public enum Row { Seats, FriendlyFire, Revives, Launch }
+    public enum Row { Map, Seats, FriendlyFire, Revives, Launch }
 
     public Phase Where { get; private set; } = Phase.Choosing;
     public Row Selected { get; private set; } = Row.Seats;
@@ -111,6 +111,9 @@ public sealed class LobbyScreen
         {
             switch (Selected)
             {
+                case Row.Map:
+                    Match.Map = Match.Map == GameMap.Planet ? GameMap.Flat : GameMap.Planet;
+                    break;
                 case Row.Seats:
                     // Never below what is already in the room: a host cannot evict someone by
                     // winding the cap down past them.

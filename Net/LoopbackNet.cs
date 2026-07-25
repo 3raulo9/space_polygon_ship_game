@@ -1,4 +1,4 @@
-namespace VoidTanks.Net;
+﻿namespace VoidTanks.Net;
 
 /// <summary>
 /// How bad the pretend wire is. Everything is in fixed steps rather than milliseconds,
@@ -58,6 +58,14 @@ public sealed class LoopbackNet
     /// cannot tell the difference between this and Steam.</summary>
     public INetTransport this[int peer] => _ends[peer];
 
+    /// <summary>Test hook: makes <paramref name="atEndpoint"/> see <paramref name="peer"/>
+    /// drop, so a disconnect can be exercised without a real socket.</summary>
+    public void DropPeer(int atEndpoint, int peer) => _ends[atEndpoint].SimulateDeparture(peer);
+
+    /// <summary>Test hook: the reconnection half — a real transport re-adds the peer on a
+    /// fresh connection, which this stands in for.</summary>
+    public void Readmit(int atEndpoint, int peer) => _ends[atEndpoint].Readmit(peer);
+
     /// <summary>Total payloads dropped so far, across the whole rig. Handy for asserting a
     /// test actually exercised the loss it asked for.</summary>
     public int Dropped { get; private set; }
@@ -99,17 +107,42 @@ public sealed class LoopbackNet
         private readonly LoopbackNet _net;
         private readonly List<InFlight> _pending = new();
         private readonly Queue<InFlight> _ready = new();
-        private readonly int[] _peers;
+        private readonly List<int> _peers;
 
         public Endpoint(LoopbackNet net, int local, int peerCount)
         {
             _net = net;
             LocalPeer = local;
-            _peers = Enumerable.Range(0, peerCount).Where(p => p != local).ToArray();
+            _peers = Enumerable.Range(0, peerCount).Where(p => p != local).ToList();
         }
 
         public int LocalPeer { get; }
         public IReadOnlyList<int> Peers => _peers;
+
+        private readonly Queue<int> _departed = new();
+
+        /// <summary>In the loopback a peer's identity is simply its id — stable, which is all
+        /// the rejoin logic needs; the tests drive reconnection at the session level.</summary>
+        public long IdentityOf(int peer) => peer + 1;   // +1 so nobody is identity 0 ("unknown")
+
+        public bool TryTakeDeparted(out int peer)
+        {
+            if (_departed.Count > 0) { peer = _departed.Dequeue(); return true; }
+            peer = -1;
+            return false;
+        }
+
+        /// <summary>Test hook: drops a peer from this endpoint's view and queues the departure,
+        /// so a test can exercise a disconnect without a real socket.</summary>
+        public void SimulateDeparture(int peer)
+        {
+            if (_peers.Remove(peer)) _departed.Enqueue(peer);
+        }
+
+        public void Readmit(int peer)
+        {
+            if (!_peers.Contains(peer)) _peers.Add(peer);
+        }
 
         public void Send(int peer, ReadOnlySpan<byte> payload, bool reliable)
             => _net.Dispatch(LocalPeer, peer, payload, reliable);

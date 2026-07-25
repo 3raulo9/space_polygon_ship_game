@@ -56,17 +56,19 @@ internal static class LobbyRenderer
         Centered(font, $"{s.Seated} / {s.Match.MaxPlayers} IN THE ROOM", 10, 110,
             Palette.GridNear);
 
-        int y = 132;
-        Row(font, s, LobbyScreen.Row.Seats, "SEATS", s.Match.MaxPlayers.ToString(), y);
+        int y = 122;
+        Row(font, s, LobbyScreen.Row.Map, "MAP",
+            s.Match.Map == GameMap.Flat ? "FLAT" : "PLANET", y);
+        Row(font, s, LobbyScreen.Row.Seats, "SEATS", s.Match.MaxPlayers.ToString(), y + 16);
         Row(font, s, LobbyScreen.Row.FriendlyFire, "FRIENDLY FIRE",
-            s.Match.FriendlyFire ? "ON" : "OFF", y + 18);
-        Row(font, s, LobbyScreen.Row.Revives, "REVIVES", s.Match.Revives.ToString(), y + 36);
+            s.Match.FriendlyFire ? "ON" : "OFF", y + 32);
+        Row(font, s, LobbyScreen.Row.Revives, "REVIVES", s.Match.Revives.ToString(), y + 48);
 
         bool go = s.Selected == LobbyScreen.Row.Launch;
         // Only pulses once someone else is actually in, so a host staring at an empty room
         // is not being invited to start a one-player multiplayer match.
         float beat = s.Seated > 1 ? 0.7f + 0.3f * MathF.Abs(MathF.Sin(elapsed * 3f)) : 0.45f;
-        Centered(font, "LAUNCH", Size, y + 62,
+        Centered(font, "LAUNCH", Size, y + 74,
             go ? Scale(Palette.Flag, beat) : Dim());
 
         Centered(font, "< > CHANGE  ENTER LAUNCH  ESC BACK", 10, H - 26, Dim());

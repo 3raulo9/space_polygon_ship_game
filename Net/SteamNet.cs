@@ -101,6 +101,11 @@ public sealed class SteamNet : INetTransport, IDisposable
     /// </summary>
     public static string LocalCode => Available ? Encode(SteamUser.GetSteamID().GetAccountID().m_AccountID) : "--------";
 
+    /// <summary>This player's Steam display name, sent in HELLO so the others can put a name
+    /// to the craft in the join/quit feed. Others' names are not reliably readable without a
+    /// lobby on App ID 480, so each player supplies their own.</summary>
+    public static string LocalName => Available ? SteamFriends.GetPersonaName() : "PLAYER";
+
     /// <summary>Turns an account number into a code. Internal rather than private so the
     /// self-test can prove it round-trips: a code that does not decode back to the account it
     /// came from means nobody can ever connect, and that has to be caught without Steam.</summary>
@@ -139,8 +144,10 @@ public sealed class SteamNet : INetTransport, IDisposable
     private HSteamNetPollGroup _poll;
     private readonly Dictionary<int, HSteamNetConnection> _conns = new();
     private readonly Dictionary<HSteamNetConnection, int> _peerOf = new();
+    private readonly Dictionary<int, ulong> _identityOf = new();
     private readonly List<int> _peers = new();
     private readonly Queue<(int From, byte[] Payload)> _inbox = new();
+    private readonly Queue<int> _departed = new();
     private Callback<SteamNetConnectionStatusChangedCallback_t>? _statusCb;
     private int _nextPeer = 1;
     private IntPtr _send = IntPtr.Zero;
@@ -189,12 +196,23 @@ public sealed class SteamNet : INetTransport, IDisposable
         return net;
     }
 
-    private void Bind(int peer, HSteamNetConnection conn)
+    private void Bind(int peer, HSteamNetConnection conn, ulong identity = 0)
     {
         _conns[peer] = conn;
         _peerOf[conn] = peer;
+        if (identity != 0) _identityOf[peer] = identity;
         if (!_peers.Contains(peer)) _peers.Add(peer);
         SteamNetworkingSockets.SetConnectionPollGroup(conn, _poll);
+    }
+
+    public long IdentityOf(int peer)
+        => _identityOf.TryGetValue(peer, out ulong id) ? unchecked((long)id) : 0L;
+
+    public bool TryTakeDeparted(out int peer)
+    {
+        if (_departed.Count > 0) { peer = _departed.Dequeue(); return true; }
+        peer = -1;
+        return false;
     }
 
     private void OnStatusChanged(SteamNetConnectionStatusChangedCallback_t e)
@@ -207,7 +225,11 @@ public sealed class SteamNet : INetTransport, IDisposable
                 if (_isHost)
                 {
                     if (SteamNetworkingSockets.AcceptConnection(e.m_hConn) == EResult.k_EResultOK)
-                        Bind(_nextPeer++, e.m_hConn);
+                        // The remote Steam account, kept so a reconnection from the same
+                        // person is recognised and handed back their seat. This is the whole
+                        // basis of rejoin: the peer id is reused and means nothing, the
+                        // SteamID is forever.
+                        Bind(_nextPeer++, e.m_hConn, e.m_info.m_identityRemote.GetSteamID64());
                     else
                         SteamNetworkingSockets.CloseConnection(e.m_hConn, 0, null, false);
                 }
@@ -220,6 +242,10 @@ public sealed class SteamNet : INetTransport, IDisposable
                     _peers.Remove(gone);
                     _conns.Remove(gone);
                     _peerOf.Remove(e.m_hConn);
+                    // Announce the departure so the session can free the seat and post the
+                    // notice. The identity mapping is kept, not removed, so a rejoin still
+                    // resolves to the same seat.
+                    _departed.Enqueue(gone);
                 }
                 Dropped = e.m_info.m_szEndDebug is { Length: > 0 } why
                     ? why.ToUpperInvariant() : "CONNECTION LOST";

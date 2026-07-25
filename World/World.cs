@@ -290,6 +290,15 @@ public sealed class World : IAnchorField
                     || nearBoss is "1" or "seize" || nearMaw is "1" or "swallow";
         if (capture) DynamicSpawning = false;
 
+        // FLAT is a sandbox: the city still stands (Structures is built regardless, above),
+        // but nothing hostile is seeded and nothing ever spawns. Turn the director off and
+        // skip every seeding block below — no salvage, no opening hunter, no bosses.
+        if (Match.Map == GameMap.Flat)
+        {
+            DynamicSpawning = false;
+            return;
+        }
+
         // Salvage. Capture seeds one battery and one round dead ahead; play seeds a
         // small starter field at random fog bearings — no fixed spots — so there's
         // salvage on the horizon from the first frame, then the director tops it up.
@@ -418,8 +427,11 @@ public sealed class World : IAnchorField
         // and nobody else's. A remote player with their own panel up sends a frame with
         // the combat bits already cleared, so the host never has to know.
         for (int seat = 0; seat < Players.Count; seat++)
+        {
+            if (Players[seat].Away) continue;   // a dropped player pulls no triggers
             DriveSeat(Players[seat], _inputs[seat], dt,
                       live: seat != LocalIndex || acceptCombatInput);
+        }
 
         StepForTest(dt, input);
     }
@@ -527,9 +539,10 @@ public sealed class World : IAnchorField
         _inputs[LocalIndex] = input;
 
         // Every craft drives, each from its own slot. In a solo run this is the one loop
-        // iteration it has always been.
+        // iteration it has always been. A craft whose player has dropped is frozen where it
+        // stands until they reconnect — not stepped, so it neither drifts nor decays.
         for (int i = 0; i < Players.Count; i++)
-            Players[i].Update(dt, _inputs[i]);
+            if (!Players[i].Away) Players[i].Update(dt, _inputs[i]);
         // What the craft is standing on, before anything asks whether it is inside a
         // building: a SPIDER that has just landed on a roof is up there for the whole of
         // the rest of this tick, not from the next one.
@@ -2365,7 +2378,7 @@ public sealed class World : IAnchorField
         bool found = false;
         foreach (var p in Players)
         {
-            if (!p.Alive) continue;
+            if (!p.Alive || p.Away) continue;   // spectators and dropped players are not prey
             float d = Torus.DistanceSquared(p.Position, to);
             if (!found || d < bestSq) { best = p; bestSq = d; found = true; }
         }
@@ -2431,10 +2444,18 @@ public sealed class World : IAnchorField
     /// The new craft opens where the old one stood so it does not jump on the frame it changes.
     /// </summary>
     public void ReplacePlayer(int seat, PlayerClass chassis)
+        => ReplacePlayer(seat, new Loadout { Class = chassis });
+
+    /// <summary>
+    /// Swaps the craft in a seat for one built from <paramref name="build"/> — its full paint
+    /// as well as its chassis. Used both for a snapshot's placeholder-to-real swap (class only)
+    /// and for installing a client's own chosen craft at the seat the host gave it (full build).
+    /// Keeps the seat's place, position, height and lives so nothing jumps on the swap.
+    /// </summary>
+    public void ReplacePlayer(int seat, Loadout build)
     {
         if ((uint)seat >= (uint)Players.Count) return;
         PlayerTank old = Players[seat];
-        var build = new Loadout { Class = chassis };
         Players[seat] = new PlayerTank(old.Position, old.Heading, build)
         {
             Height = old.Height,
@@ -4725,7 +4746,7 @@ public sealed class World : IAnchorField
                 // rake a line of players.
                 foreach (var mark in Players)
                 {
-                if (!mark.Alive) continue;
+                if (!mark.Alive || mark.Away) continue;
                 float aimH = mark.Height + EnemyTank.AimHeight;
                 if (!mark.Captured
                     && WithinHit(p.Position, mark.Position, PlayerTank.Radius)
@@ -4809,7 +4830,7 @@ public sealed class World : IAnchorField
         PlayerTank shooter = Players[p.Owner];
         foreach (var mark in Players)
         {
-            if (!mark.Alive || mark.Captured) continue;
+            if (!mark.Alive || mark.Captured || mark.Away) continue;
             if (!CanHarm(shooter, mark)) continue;
 
             float aimH = mark.Height + EnemyTank.AimHeight;

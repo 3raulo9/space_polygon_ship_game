@@ -478,6 +478,15 @@ public sealed class PlayerTank
     public bool Captured;
 
     /// <summary>
+    /// The player driving this seat has dropped and not yet come back. Multiplayer only, and
+    /// only ever true on a craft that is not this machine's own: the host holds the seat and
+    /// its craft in place (frozen, unhurt, un-hunted) so that a reconnection from the same
+    /// Steam account can step straight back into it with its lives and position intact. The
+    /// renderer dims an away craft; the sim leaves it alone.
+    /// </summary>
+    public bool Away;
+
+    /// <summary>
     /// Drops all carried momentum — forward speed, turn rate and vertical velocity.
     /// A cinematic calls this on release so the craft comes back under control dead
     /// still, rather than resuming whatever it happened to be doing several seconds

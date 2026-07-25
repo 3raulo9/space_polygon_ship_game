@@ -75,7 +75,9 @@ public sealed class Renderer : IDisposable
     private const byte MurkAlpha = 172;
 
     /// <summary>Renders the world from the player's eye into the low-res target.</summary>
-    public void DrawWorld(World.World world)
+    public void DrawWorld(World.World world) => DrawWorld(world, null);
+
+    public void DrawWorld(World.World world, Net.NoticeFeed? notices)
     {
         PlayerTank player = world.Player;
 
@@ -335,6 +337,9 @@ public sealed class Renderer : IDisposable
         // Flat instrument panel over the scene: vital bars + radar along the top, plus
         // the R/T/Y/U equip slots showing their 3D item icons.
         HudRenderer.Draw(world, _itemIcons);
+
+        // The join/quit feed sits under the instruments, bottom-right. Only in a match.
+        if (notices != null) HudRenderer.DrawNotices(notices);
 
         Raylib.EndTextureMode();
     }
