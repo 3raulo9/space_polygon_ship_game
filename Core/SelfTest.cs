@@ -142,6 +142,10 @@ public static class SelfTest
         failures += Check("friendly fire on, a team-mate's round bites", FriendlyFireOnHurtsTheTeam);
         failures += Check("a snapshot survives the wire and lands where it was sent", SnapshotRoundTrips);
         failures += Check("a client sees the host's craft move, over a bad wire", ClientTracksTheHost);
+        failures += Check("a client's own craft obeys the host's harm and capture", OwnCraftObeysTheHost);
+        failures += Check("a remote craft glides between snapshots, it doesn't strobe", RemoteCraftInterpolates);
+        failures += Check("a boss's seizure crosses so onlookers see the grab", SeizureArmCrossesTheWire);
+        failures += Check("debris thrown on the host is seen on the client", EffectCrossesTheWire);
         failures += Check("a join code decodes back to the host who read it out", JoinCodesRoundTrip);
         failures += Check("the handshake completes on the lobby screen alone", LobbyHandshakeSeatsAJoiner);
         failures += Check("a pick in the room installs that chassis on both the client and the host", PickInstallsChosenChassis);
@@ -1625,6 +1629,181 @@ public static class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// The fix for the invulnerable-client bug. A client used to skip its own seat wholesale when
+    /// a players packet landed (<c>seat == LocalIndex</c> → continue), so its own craft could
+    /// never take shield damage, lose a life, or be seized on its own screen — every consequence
+    /// the host computed was thrown away for the one craft the player was driving. Now the host's
+    /// STATUS for the local seat is applied (shield, lives, ammo, capture); its TRANSFORM is left
+    /// to the client's own prediction to reconcile toward, not snapped.
+    /// </summary>
+    private static string? OwnCraftObeysTheHost()
+    {
+        var host = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.LocalIndex = 0;
+        PlayerTank hp = host.Players[0];
+        hp.Shield = 30f;      // the host has taken a beating
+        hp.Lives = 1;
+        hp.Ammo = 7;
+        hp.Captured = true;   // ...and been grabbed by the crab
+        hp.Position = Torus.Wrap(new Vector2(10f, 0f));
+
+        var client = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        PlayerTank cp = client.Players[0];
+        cp.Shield = cp.MaxShield;   // the client thinks it is whole and free
+        cp.Lives = 3;
+        cp.Ammo = cp.MaxAmmo;
+        cp.Captured = false;
+        cp.Position = Torus.Wrap(new Vector2(0f, 0f));   // a predicted spot away from the host's
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WritePlayers(host, tick: 1u, buf);
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
+
+        // Status is the host's now — the whole point of the fix.
+        if (MathF.Abs(cp.Shield - 30f) > 0.01f)
+            return $"the client's own shield stayed {cp.Shield:0.0}, not the host's 30";
+        if (cp.Lives != 1) return $"the client's own lives stayed {cp.Lives}, not the host's 1";
+        if (cp.Ammo != 7) return $"the client's own ammo stayed {cp.Ammo}, not the host's 7";
+        if (!cp.Captured) return "the host grabbed the client but its own craft never knew";
+
+        // Transform is reconciled, not snapped: applying the packet must not teleport the craft to
+        // the host's position — that is the prediction's to ease toward, not the packet's to impose,
+        // or steering would judder in the player's hands.
+        if (Torus.Distance(cp.Position, Torus.Wrap(new Vector2(0f, 0f))) > 0.01f)
+            return "applying a snapshot snapped the client's own craft instead of reconciling it";
+        return null;
+    }
+
+    /// <summary>
+    /// Interpolation, the fix for 20 Hz stutter. A remote craft used to be snapped to each
+    /// snapshot — twenty visible steps a second. Now the host's latest position is a target the
+    /// client eases toward every frame, so between two snapshots the craft is found part-way,
+    /// gliding, and applying a snapshot never teleports it.
+    /// </summary>
+    private static string? RemoteCraftInterpolates()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        PlayerTank watched = host.AddPlayer()!;   // seat 1 — the craft the client will watch
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        client.Structures.Clear();   // nothing to shove the puppet around while we watch it glide
+
+        var buf = new byte[Snapshot.MaxSize];
+
+        // First snapshot: the craft is at A. First sight snaps, so the client opens it there.
+        Vector2 a = Torus.Wrap(new Vector2(20f, 0f));
+        watched.Position = a;
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, Snapshot.WritePlayers(host, 1u, buf)));
+        if (client.Players.Count < 2) return "the client never learned about the watched craft";
+        if (Torus.Distance(client.Players[1].Position, a) > 0.1f)
+            return "a craft first seen did not open where the host had it";
+
+        // Second snapshot: it has jumped to B. The packet must NOT teleport the client's copy —
+        // that is only the target now, and the craft sits at A until a step eases it.
+        Vector2 b = Torus.Wrap(new Vector2(40f, 0f));
+        watched.Position = b;
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, Snapshot.WritePlayers(host, 2u, buf)));
+        if (Torus.Distance(client.Players[1].Position, a) > 0.1f)
+            return "applying a snapshot snapped the remote craft instead of easing it";
+
+        // One step eases it part-way — strictly between where it was and where it is going.
+        client.StepForTest((float)Config.FixedDt);
+        if (Torus.Distance(client.Players[1].Position, a) < 0.5f)
+            return "a step did not move the remote craft toward the host's new position";
+        if (Torus.Distance(client.Players[1].Position, b) < 0.5f)
+            return "a single step snapped the remote craft all the way, instead of easing it";
+
+        // Many steps settle it onto B.
+        for (int i = 0; i < 120; i++) client.StepForTest((float)Config.FixedDt);
+        if (Torus.Distance(client.Players[1].Position, b) > 0.5f)
+            return "the remote craft never settled onto the host's position";
+        return null;
+    }
+
+    /// <summary>
+    /// Effect replication. A client runs no combat, so a kill throws debris on the host's screen
+    /// and, before this, nothing on anyone else's — the field's deaths were silent puffs of
+    /// nothing to onlookers. Now the host records each burst and sends it, and the client replays
+    /// it. Headless there is no window, so this asserts the burst crossed and spawned pieces.
+    /// </summary>
+    private static string? EffectCrossesTheWire()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 77);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+        if (client.LocalSeat != 1) return $"the joiner never seated (at {client.LocalSeat})";
+
+        // The host blows a hunter apart where both seats opened. A client throws no debris of its
+        // own — it runs no combat — so the only way it ever sees this burst is over the wire.
+        Vector2 at = hostWorld.Players[1].Position;
+        hostWorld.Debris.Burst(new Vector3(at.X, 1f, at.Y), Palette.EliteFill, elite: true);
+
+        for (int i = 0; i < 12; i++) { net.Advance(); host.Pump(InputFrame.Empty); client.Pump(InputFrame.Empty); }
+
+        if (clientWorld.RemoteEffectsPlayed < 1)
+            return "the host threw debris and the client never saw it";
+        bool anyShard = false;
+        foreach (var s in clientWorld.Debris.Shards) if (s.Active) { anyShard = true; break; }
+        if (!anyShard) return "the effect crossed the wire but spawned no debris on the client";
+        return null;
+    }
+
+    /// <summary>
+    /// The onlooker's half of the crab seizure. The held player's own transform already crosses
+    /// the wire (players packet), so watchers see them dragged up and thrown — but the boss's
+    /// arms were the host's alone, so to everyone else the boss stood idle beside a craft floating
+    /// in the air. Now the grab and strike arms and the seizure blaze ride the bosses packet and
+    /// pose the puppet, and fall back to the plain showcase pose the instant it lets go.
+    /// </summary>
+    private static string? SeizureArmCrossesTheWire()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.SpawnCrabAhead();
+        // The host has a player in its claw mid-cinematic: the front-right limb grips, the
+        // front-left is wound part-way into the club, and the core is blazing.
+        host.Boss!.DriveSeizure(held: true, grabArm: 0.8f, strikeArm: 0.3f, glow: 0.5f);
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+
+        var buf = new byte[64];
+        Snapshot.ApplyBosses(client, buf.AsSpan(0, Snapshot.WriteBosses(host, forSeat: 0, tick: 7u, buf)));
+
+        if (client.Boss is not { IsPuppet: true } p) return "the seizing boss never reached the client";
+        CrabPose pose = p.Pose;
+        if (MathF.Abs(pose.GrabArm - 0.8f) > 0.02f)
+            return $"the grab arm crossed as {pose.GrabArm:0.00}, not the host's 0.80";
+        if (MathF.Abs(pose.StrikeArm - 0.3f) > 0.02f)
+            return $"the strike arm crossed as {pose.StrikeArm:0.00}, not the host's 0.30";
+
+        // Let go, and the puppet falls straight back to the plain showcase pose — arms down.
+        host.Boss.DriveSeizure(held: false, grabArm: 0f, strikeArm: 0f, glow: 0f);
+        Snapshot.ApplyBosses(client, buf.AsSpan(0, Snapshot.WriteBosses(host, forSeat: 0, tick: 8u, buf)));
+        if (client.Boss!.Pose.GrabArm > 0.001f || client.Boss.Pose.StrikeArm > 0.001f)
+            return "the boss let go but the puppet kept the grab arm out";
+        return null;
+    }
+
     /// <summary>Seats a client into a started host match over a loopback and hands both
     /// sessions back. Pumps the lobby until the handshake settles.</summary>
     private static (LoopbackNet net, Session host, Session client, World.World hw, World.World cw)
@@ -1904,7 +2083,7 @@ public static class SelfTest
         hostWorld.Enemies.Clear();
 
         var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
-        { DynamicSpawning = false };
+        { DynamicSpawning = false, Authoritative = false };   // a real client: it eases remotes, not simulates them
         clientWorld.Enemies.Clear();
 
         var host = new Session(net[0], host: true);

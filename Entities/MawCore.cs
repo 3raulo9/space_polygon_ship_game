@@ -141,19 +141,40 @@ public sealed class MawCore
     private float _puppetClock;
     private float _netBodyY = MawRig.BodyWorldY;
 
+    // The host reports the mouth twenty times a second; these hold its latest reported place so
+    // Animate can ease the drawn body onto it rather than snapping it there each packet.
+    private Vector2 _netPos;
+    private bool _hasNet;
+    private const float NetEaseRate = 18f;
+
+    // How open the jaw is, synced so an onlooker sees the mouth clamp shut around a swallowed
+    // player during a digestion rather than hanging generically open. 1 gaping, 0 clamped.
+    private float _netJaw = 1f;
+
+    /// <summary>How open the jaw currently is, 1 gaping to 0 clamped — read by the wire so the
+    /// clamp of a digestion is seen on every screen, not only the one being eaten.</summary>
+    public float JawOpen => _jawOpen;
+
     public static MawCore Puppet(Vector2 pos) => new(pos) { IsPuppet = true };
 
-    public void NetSet(Vector2 pos, State phase, float crystalFrac, float bodyY)
+    public void NetSet(Vector2 pos, State phase, float crystalFrac, float bodyY, float jaw)
     {
-        Position = pos;
+        if (!_hasNet) { Position = pos; _hasNet = true; }
+        _netPos = pos;
         Phase = phase;
         _health = Math.Clamp(crystalFrac, 0f, 1f) * CrystalMaxHealth;
         _netBodyY = bodyY;
+        _netJaw = jaw;
     }
 
     public void Animate(float dt)
     {
         _puppetClock += dt;
+        if (_hasNet)
+        {
+            float k = 1f - MathF.Exp(-NetEaseRate * dt);
+            Position = Torus.Wrap(Position + Torus.Delta(Position, _netPos) * k);
+        }
         if (Phase == State.Dying)
         {
             _deathTime += dt;
@@ -263,7 +284,7 @@ public sealed class MawCore
     /// <summary>The visual snapshot the renderer poses from. A puppet has no live accumulators,
     /// so it borrows the bestiary's clock-driven pose.</summary>
     public MawPose Pose => IsPuppet
-        ? ShowcasePose(_puppetClock)
+        ? ShowcasePose(_puppetClock) with { JawOpen = _netJaw }
         : new(_crystalSpin, _toothSpin, _toothSpinInner, _jawOpen,
             CrystalColorFor(Hostility, MathF.Max(_flash, _digestGlow)));
 

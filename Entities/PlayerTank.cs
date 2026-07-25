@@ -486,6 +486,37 @@ public sealed class PlayerTank
     /// </summary>
     public bool Away;
 
+    // --- Remote interpolation (client only; never the local seat, which predicts) ---
+    // A craft that is not this machine's own is a puppet the host describes twenty times a
+    // second. Snapping it to each new position was twenty discrete steps of visible stutter;
+    // instead the host's latest transform is stored here and the drawn craft is eased toward
+    // it every frame (see World.InterpolateRemotes), which is the difference between watching
+    // a team-mate glide and watching them strobe.
+    public Vector2 NetPos;
+    public float NetHeight, NetHeading, NetPitch;
+    public bool HasNet;
+
+    /// <summary>Records the host's latest transform for a remote craft. The first time, the
+    /// craft is snapped onto it — a craft first seen must appear where it is, not slide in from
+    /// wherever the placeholder opened — and eased toward it every time after.</summary>
+    public void NetTarget(Vector2 pos, float height, float heading, float pitch)
+    {
+        if (!HasNet) { Position = pos; Height = height; Heading = heading; Pitch = pitch; }
+        NetPos = pos; NetHeight = height; NetHeading = heading; NetPitch = pitch;
+        HasNet = true;
+    }
+
+    /// <summary>Eases a remote craft one frame's worth toward its last host transform;
+    /// <paramref name="k"/> is the blend fraction. A no-op until the first target has landed.</summary>
+    public void EaseToNet(float k)
+    {
+        if (!HasNet) return;
+        Position = Torus.Wrap(Position + Torus.Delta(Position, NetPos) * k);
+        Height += (NetHeight - Height) * k;
+        Heading += MathF.IEEERemainder(NetHeading - Heading, MathF.Tau) * k;
+        Pitch += (NetPitch - Pitch) * k;
+    }
+
     /// <summary>
     /// Drops all carried momentum — forward speed, turn rate and vertical velocity.
     /// A cinematic calls this on release so the craft comes back under control dead

@@ -196,6 +196,115 @@ public sealed class World : IAnchorField
     /// </summary>
     public bool Authoritative { get; set; } = true;
 
+    // --- Reconciliation of this machine's own craft (client only) -----------------
+    // A client predicts its own craft every frame for instant control, but the host is the
+    // authority on where it truly ended up — after a collision, a knockback, a seizure, or a
+    // hyperspace the host rolled its own dice for. These hold the last authoritative transform
+    // the host sent for the local seat; SmoothLocalCraft eases the predicted craft onto it so
+    // it stays honest without snapping the camera in the player's hands.
+    private Vector2 _netPos;
+    private float _netHeight, _netHeading, _netPitch;
+    private bool _hasNet;
+    private bool _netFollow;   // capture/away: the host owns the transform outright — follow it, no deadzone
+
+    // Below this much positional disagreement the prediction is simply trusted: the standing
+    // gap between a predicted craft and the host's confirmation of it is about a round-trip of
+    // travel, and correcting that every snapshot would drag the craft backward the whole time
+    // it drove. Past the snap distance the two have genuinely parted company — a teleport, a bad
+    // desync — and easing across the map would look worse than a cut.
+    private const float ReconcileDeadzone = 4f;
+    private const float ReconcileSnap = 22f;
+    private const float ReconcileRate = 12f;          // how fast a real error is eased out, per second
+    private const float ReconcileHeadingDead = 0.06f; // radians
+    private const float ReconcileHeadingSnap = 0.7f;
+
+    /// <summary>
+    /// Client-side: records the host's authoritative transform for this machine's own craft,
+    /// to be eased in by <see cref="SmoothLocalCraft"/>. <paramref name="follow"/> is set when
+    /// the host has the craft in a hold (a seizure) or frozen (away) — cases where this machine
+    /// is not predicting anything, so the transform is followed rather than blended against a
+    /// prediction that is not happening.
+    /// </summary>
+    public void ReconcileLocal(Vector2 pos, float height, float heading, float pitch, bool follow)
+    {
+        _netPos = pos;
+        _netHeight = height;
+        _netHeading = heading;
+        _netPitch = pitch;
+        _netFollow = follow;
+        _hasNet = true;
+    }
+
+    /// <summary>
+    /// Eases the local craft toward the last authoritative transform the host sent. Called once
+    /// a frame on a client, after the craft has predicted its own step. Small errors are left
+    /// alone (the prediction is trusted), real ones are blended out over a few frames, and a
+    /// craft the host has grabbed or frozen simply follows.
+    /// </summary>
+    private void SmoothLocalCraft(float dt)
+    {
+        if (!_hasNet) return;
+        PlayerTank me = Players[LocalIndex];
+        float k = 1f - MathF.Exp(-ReconcileRate * dt);
+
+        if (_netFollow)
+        {
+            // The host owns the transform (a hold, or an away freeze). Glide onto it every
+            // frame — no deadzone — so a yank into the air reads as a pull, not a jump.
+            float kf = 1f - MathF.Exp(-ReconcileRate * 2f * dt);
+            me.Position = Torus.Wrap(me.Position + Torus.Delta(me.Position, _netPos) * kf);
+            me.Height += (_netHeight - me.Height) * kf;
+            me.Heading += MathF.IEEERemainder(_netHeading - me.Heading, MathF.Tau) * kf;
+            me.Pitch += (_netPitch - me.Pitch) * kf;
+            return;
+        }
+
+        // Position: trust small errors, ease real ones, cut on a genuine parting.
+        Vector2 err = Torus.Delta(me.Position, _netPos);
+        float dist = err.Length();
+        if (dist > ReconcileSnap) me.Position = _netPos;
+        else if (dist > ReconcileDeadzone) me.Position = Torus.Wrap(me.Position + err * k);
+
+        // Heading: the same deadzone-then-blend, so mouse aim stays the player's but never
+        // drifts from what the host is telling everyone else the craft points at.
+        float dh = MathF.IEEERemainder(_netHeading - me.Heading, MathF.Tau);
+        float ah = MathF.Abs(dh);
+        if (ah > ReconcileHeadingSnap) me.Heading = _netHeading;
+        else if (ah > ReconcileHeadingDead) me.Heading += dh * k;
+
+        // Height eases in without a deadzone — a jump the host resolved differently should
+        // settle rather than hang a few units off the deck.
+        if (MathF.Abs(_netHeight - me.Height) > 0.05f) me.Height += (_netHeight - me.Height) * k;
+    }
+
+    /// <summary>How fast a remote puppet is eased onto the host's latest report of it, per
+    /// second. Fast enough to keep up with real motion, soft enough to turn 20 Hz steps into a
+    /// glide rather than a series of catches.</summary>
+    private const float RemoteSmoothRate = 18f;
+
+    /// <summary>
+    /// Client-side: eases every remote puppet — team-mates, hunters, the squad — one frame
+    /// toward the transform the host last reported for it, which is what turns the 20 Hz
+    /// snapshot into smooth motion. The bosses ease themselves in their own <c>Animate</c>; the
+    /// local craft is reconciled separately by <see cref="SmoothLocalCraft"/> because it
+    /// predicts. Called once a frame from the client's step.
+    /// </summary>
+    private void InterpolateRemotes(float dt)
+    {
+        float k = 1f - MathF.Exp(-RemoteSmoothRate * dt);
+        for (int i = 0; i < Players.Count; i++)
+            if (i != LocalIndex) Players[i].EaseToNet(k);
+        foreach (var e in Enemies) e.EaseToNet(k);
+        foreach (var s in Soldiers) s.EaseToNet(k);
+    }
+
+    /// <summary>Host-side: hands out a stable id for a hunter so a client can match the same one
+    /// across field packets and interpolate it. Assigned lazily the first time a hunter is
+    /// written to the wire (see <c>Snapshot.WriteField</c>); a byte on the wire, which is safe
+    /// because only a handful are ever alive and in range at once.</summary>
+    private int _netIdSeq;
+    public int NextNetId() => ++_netIdSeq;
+
     // The fog band new arrivals drop into — past the near fog so they resolve as
     // blips on the skyline, yet close enough to eventually drift into play.
     private const float SpawnMinRange = 72f;
@@ -412,6 +521,11 @@ public sealed class World : IAnchorField
     /// <summary>Cues raised since the last broadcast. Host-side; drained by the session.</summary>
     public readonly List<SoundCue> SoundCues = new();
 
+    /// <summary>Particle bursts raised since the last broadcast — deaths, hits, footfalls, laid
+    /// smoke. Host-side; drained by the session and replayed on every client so the field's
+    /// debris is seen off the host's machine too. Fed by the DebrisSystem's sink and LaySmoke.</summary>
+    public readonly List<EffectCue> EffectCues = new();
+
     /// <summary>Each seat's display name, for the floating tags over team-mates in a match.
     /// Filled once at launch from the lobby's roster; empty in a solo run.</summary>
     public readonly Dictionary<int, string> SeatNames = new();
@@ -421,8 +535,14 @@ public sealed class World : IAnchorField
 
     /// <summary>True only when a host session is listening for cues to broadcast. Off in a solo
     /// run, so <see cref="Emit"/> never files cues nobody will ever drain — otherwise the list
-    /// would grow without bound over a long single-player game.</summary>
-    public bool CollectSoundCues;
+    /// would grow without bound over a long single-player game. Setting it also points the debris
+    /// system's sink at <see cref="EffectCues"/>, so the same host-only switch gathers particles.</summary>
+    public bool CollectSoundCues
+    {
+        get => _collectSoundCues;
+        set { _collectSoundCues = value; Debris.CueSink = value ? EffectCues : null; }
+    }
+    private bool _collectSoundCues;
 
     /// <summary>
     /// Asks for a one-shot sound at a world position. This is how every combat noise now
@@ -452,37 +572,74 @@ public sealed class World : IAnchorField
     // has to live here on the world that owns them.
 
     /// <summary>Client-side: install or refresh the host's Crab-Core as a render-only puppet.</summary>
-    public void AdoptBoss(Vector2 pos, float heading, CrabCore.State phase, float coreFrac)
+    public void AdoptBoss(Vector2 pos, float heading, CrabCore.State phase, float coreFrac,
+        float grabArm, float strikeArm, float seizureGlow)
     {
         if (Boss is not { IsPuppet: true } p) { p = CrabCore.Puppet(pos, heading); Boss = p; }
-        p.NetSet(pos, heading, phase, coreFrac);
+        p.NetSet(pos, heading, phase, coreFrac, grabArm, strikeArm, seizureGlow);
     }
 
     /// <summary>Client-side: the host no longer reports a Crab-Core — drop the puppet.</summary>
     public void ClearBossPuppet() { if (Boss is { IsPuppet: true }) Boss = null; }
 
     /// <summary>Client-side: install or refresh the host's Maw-Core as a render-only puppet.</summary>
-    public void AdoptMaw(Vector2 pos, MawCore.State phase, float crystalFrac, float bodyY)
+    public void AdoptMaw(Vector2 pos, MawCore.State phase, float crystalFrac, float bodyY, float jaw)
     {
         if (Maw is not { IsPuppet: true } m) { m = MawCore.Puppet(pos); Maw = m; }
-        m.NetSet(pos, phase, crystalFrac, bodyY);
+        m.NetSet(pos, phase, crystalFrac, bodyY, jaw);
     }
 
     /// <summary>Client-side: the host no longer reports a Maw-Core — drop the puppet.</summary>
     public void ClearMawPuppet() { if (Maw is { IsPuppet: true }) Maw = null; }
 
-    /// <summary>Client-side: clears the squad roster ahead of adopting the host's, like the
-    /// enemy list — the soldiers are a picture redrawn each packet, not a thing simulated.</summary>
-    public void BeginAdoptSoldiers() => Soldiers.Clear();
+    /// <summary>Client-side: opens the squad adopt sweep. The soldiers are kept between packets
+    /// (matched on their slot) so they can be interpolated rather than rebuilt; this only marks
+    /// them all unseen, and <see cref="EndAdoptSoldiers"/> drops the ones this packet omits.</summary>
+    public void BeginAdoptSoldiers()
+    {
+        foreach (var s in Soldiers) s.NetSeen = false;
+    }
 
-    /// <summary>Client-side: places one host-described soldier as a render-only puppet.</summary>
+    /// <summary>Client-side: updates the host-described soldier in this slot, or creates its
+    /// puppet the first time. <see cref="EnemySoldier.NetSet"/> eases the transform rather than
+    /// snapping it, so a member kept across packets flies smoothly.</summary>
     public void AdoptSoldier(Vector2 pos, float height, float heading, SoldierMove move,
         float bank, float speed, bool leader, bool allied, int slot)
     {
-        var s = EnemySoldier.Puppet(pos, height, leader, slot);
+        EnemySoldier? s = null;
+        foreach (var m in Soldiers) if (m.Slot == slot) { s = m; break; }
+        if (s is null) { s = EnemySoldier.Puppet(pos, height, leader, slot); Soldiers.Add(s); }
         s.NetSet(pos, height, heading, move, bank, speed, allied, alive: true);
-        Soldiers.Add(s);
+        s.NetSeen = true;
     }
+
+    /// <summary>Client-side: closes the squad adopt sweep, dropping any member the latest packet
+    /// did not name.</summary>
+    public void EndAdoptSoldiers() => Soldiers.RemoveAll(s => !s.NetSeen);
+
+    /// <summary>Client-side: opens the hunter adopt sweep. Hunters are kept between field packets
+    /// (matched on the host's id) so they can be interpolated rather than rebuilt each one; this
+    /// marks them all unseen, and <see cref="EndAdoptEnemies"/> drops the ones a packet omits.</summary>
+    public void BeginAdoptEnemies()
+    {
+        foreach (var e in Enemies) e.NetSeen = false;
+    }
+
+    /// <summary>Client-side: updates the host-described hunter with this id, or creates its
+    /// puppet the first time. The transform is eased (see <see cref="EnemyTank.NetTarget"/>), so
+    /// a hunter kept across packets glides rather than stepping twenty times a second.</summary>
+    public void AdoptEnemy(int id, Vector2 pos, float heading, bool elite)
+    {
+        EnemyTank? e = null;
+        foreach (var m in Enemies) if (m.NetId == id) { e = m; break; }
+        if (e is null) { e = new EnemyTank(pos, elite) { NetId = id }; Enemies.Add(e); }
+        e.NetTarget(pos, heading);
+        e.NetSeen = true;
+    }
+
+    /// <summary>Client-side: closes the hunter adopt sweep, dropping any the latest packet did
+    /// not name (killed, or drifted out of interest range).</summary>
+    public void EndAdoptEnemies() => Enemies.RemoveAll(e => !e.NetSeen);
 
     /// <summary>Client-side: plays a cue the host sent, attenuated to this craft. Skips a cue
     /// this player caused, which they already heard the instant they did it.</summary>
@@ -648,7 +805,11 @@ public sealed class World : IAnchorField
         // iteration it has always been. A craft whose player has dropped is frozen where it
         // stands until they reconnect — not stepped, so it neither drifts nor decays.
         for (int i = 0; i < Players.Count; i++)
-            if (!Players[i].Away) Players[i].Update(dt, _inputs[i]);
+            // On a client only the local craft predicts; every other seat is a puppet eased
+            // toward the host's account by InterpolateRemotes, so stepping it here with a stale
+            // (empty) input frame would only fight that. On the host and solo, all seats step.
+            if (!Players[i].Away && (Authoritative || i == LocalIndex))
+                Players[i].Update(dt, _inputs[i]);
         // What the craft is standing on, before anything asks whether it is inside a
         // building: a SPIDER that has just landed on a roof is up there for the whole of
         // the rest of this tick, not from the next one.
@@ -671,9 +832,22 @@ public sealed class World : IAnchorField
         // decides what any of it hits.
         if (!Authoritative)
         {
+            // Ease our own craft toward the host's authoritative transform. Its status —
+            // shield, lives, capture — was already applied from the snapshot; this keeps the
+            // predicted craft honest in space without snapping the camera in the player's hands.
+            SmoothLocalCraft(dt);
+
+            // Ease every remote puppet — team-mates, hunters, the squad — toward the host's
+            // last account of it, so the 20 Hz snapshot reads as smooth motion instead of a
+            // strobe. The bosses ease themselves in their own Animate, below.
+            InterpolateRemotes(dt);
+
             if (Player.Virus is { } mine) UpdateVirusEvents(mine, Player);
+            // Advance every live round, not just our own: ours are the prediction, and the rest
+            // are dead-reckoned along the velocity the host sent, so remote fire flies smoothly
+            // between field packets rather than hopping. The host still decides what any of it hits.
             foreach (var p in _projectiles)
-                if (p.Active && p.Owner == LocalIndex) p.Update(dt);
+                if (p.Active) p.Update(dt);
             // The boss puppets carry the host's position and phase; their spin and death glitch
             // are cosmetic and run off a local clock here, no AI behind them.
             if (Boss is { IsPuppet: true } bp) bp.Animate(dt);
@@ -750,6 +924,12 @@ public sealed class World : IAnchorField
                 Debris.FootPuff(new Vector3(f.Pos.X, 0f, f.Pos.Y));
                 Emit(Cue.Footstep, f.Pos, f.Leg);
             }
+
+            // The one-shots the boss raised this tick — its alarm and the beam's charge, warning
+            // and fire. Voiced from here, where there is a world to broadcast them, so a client
+            // hears the beam spooling up over its shoulder and not only the host does.
+            foreach (var (id, param) in boss.Cues)
+                Emit(id, boss.Position, param);
 
             // Its machinery hums the whole time it exists, spooling up the moment it
             // notices the player. Fed every tick; Audio eases the rate and level.
@@ -1790,7 +1970,32 @@ public sealed class World : IAnchorField
     {
         if (Smoke.Count >= MaxSmoke) Smoke.RemoveAt(0);
         Smoke.Add(new SmokeCloud(Torus.Wrap(at), SmokeLife, SmokeRadius));
+        // Record the screen for the wire so it hides the field on every machine, not just the
+        // one that laid it. Host-only; a client replays this through PlayRemoteEffect.
+        if (CollectSoundCues) EffectCues.Add(new EffectCue(EffectKind.Smoke, new Vector3(at.X, 0f, at.Y), default));
     }
+
+    /// <summary>
+    /// Client-side: replays one particle burst the host raised, so a kill, a footfall or a laid
+    /// smoke screen is seen on this machine and not only the host's. The scatter is re-rolled
+    /// here — only the burst's kind, place and colour crossed — which is all a chaotic, one-second
+    /// spray of debris ever shows. Counted for the self-test, which can open no window to see it.
+    /// </summary>
+    public void PlayRemoteEffect(EffectKind kind, Vector3 origin, Color color)
+    {
+        RemoteEffectsPlayed++;
+        switch (kind)
+        {
+            case EffectKind.Burst: Debris.Burst(origin, color, elite: false); break;
+            case EffectKind.EliteBurst: Debris.Burst(origin, color, elite: true); break;
+            case EffectKind.FootPuff: Debris.FootPuff(origin); break;
+            case EffectKind.Smoke: LaySmoke(new Vector2(origin.X, origin.Z)); break;
+        }
+    }
+
+    /// <summary>Counts effects taken from the wire and replayed — the verification hook the
+    /// self-test reads, since headless it can see no debris.</summary>
+    public int RemoteEffectsPlayed { get; private set; }
 
     /// <summary>Test hook: lay a screen exactly as the discharger trigger would, if it has
     /// cooled. Returns whether it fired — the headless self-test can't press E.</summary>

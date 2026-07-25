@@ -506,14 +506,34 @@ public sealed class EnemySoldier
     public void NetSet(Vector2 pos, float height, float heading, SoldierMove move,
         float bank, float speed, bool allied, bool alive)
     {
-        Position = pos;
-        Height = height;
-        Heading = heading;
+        // Transform is eased, not snapped: store it as the target and let the client's step
+        // glide the drawn soldier onto it, so a squad that updates twenty times a second still
+        // flies smoothly. The first sighting snaps so a new member appears where it is.
+        if (!_hasNet) { Position = pos; Height = height; Heading = heading; _hasNet = true; }
+        _netPos = pos; _netHeight = height; _netHeading = heading;
+        // The rest is display state the renderer reads outright — no in-between to interpolate.
         Move = move;
         Bank = bank;
         Allied = allied;
         Velocity = new Vector3(MathF.Sin(heading) * speed, 0f, MathF.Cos(heading) * speed);
         Shield = alive ? MathF.Max(Shield, BaseShield) : 0f;
+    }
+
+    /// <summary>Scratch flag for the client's adopt sweep, matched on <see cref="Slot"/>: set on
+    /// every squad member the latest packet named so the rest can be dropped.</summary>
+    public bool NetSeen;
+
+    private Vector2 _netPos;
+    private float _netHeight, _netHeading;
+    private bool _hasNet;
+
+    /// <summary>Client-side: eases this soldier one frame toward its last reported transform.</summary>
+    public void EaseToNet(float k)
+    {
+        if (!_hasNet) return;
+        Position = Torus.Wrap(Position + Torus.Delta(Position, _netPos) * k);
+        Height += (_netHeight - Height) * k;
+        Heading += MathF.IEEERemainder(_netHeading - Heading, MathF.Tau) * k;
     }
 
     public EnemySoldier(Vector2 at, float height, bool leader, int slot)

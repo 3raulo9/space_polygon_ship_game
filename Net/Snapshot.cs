@@ -63,7 +63,7 @@ public static class Snapshot
     /// seat (0/0 otherwise) and are what let every other machine draw the body a mote has seized
     /// rather than a permanent naked cloud — the whole reason the class was invisible in play.</summary>
     private const int PlayerBytes = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1;
-    private const int EnemyBytes = 2 + 2 + 2 + 1;
+    private const int EnemyBytes = 1 + 2 + 2 + 2 + 1;   // id, x, y, heading, elite
     private const int RoundBytes = 2 + 2 + 2 + 2 + 2 + 1 + 1;
 
     /// <summary>
@@ -173,7 +173,29 @@ public static class Snapshot
                 while (seat >= world.Players.Count)
                     if (world.AddPlayer() is null) break;
                 if (seat >= world.Players.Count) continue;
-                if (seat == world.LocalIndex) continue;   // ours to drive, not to be told
+
+                // Our own craft. This machine predicts it for instant control, so its
+                // TRANSFORM is reconciled (eased toward the host), not snapped — but its
+                // STATUS is the host's to decide, and applying it here is what finally lets a
+                // client's own craft take shield damage, lose a life, die, and be seized on
+                // its own screen. Before this the local seat was skipped whole, so it ignored
+                // the host entirely and was an untouchable ghost that could never be hurt or
+                // grabbed. The virus's worn body is left to the client, which drains its own
+                // mote locally (see World.StepForTest's client path).
+                if (seat == world.LocalIndex)
+                {
+                    PlayerTank me = world.Players[seat];
+                    me.Shield = shield;
+                    me.Lives = lives;
+                    me.Ammo = ammo;
+                    me.Hyper = hyper * me.MaxHyper;
+                    bool held = (mark & Mark.Captured) != 0;
+                    me.Captured = held;
+                    me.Away = (mark & Mark.Away) != 0;
+                    world.ReconcileLocal(Torus.Wrap(new Vector2(x, y)), h, head, pitch,
+                        follow: held || me.Away);
+                    continue;
+                }
 
                 // A client's roster starts as placeholder tanks; the first snapshot that names
                 // a seat's real chassis rebuilds it as the right one. Only ever on the frame the
@@ -182,10 +204,10 @@ public static class Snapshot
                     world.ReplacePlayer(seat, chassis);
 
                 PlayerTank p = world.Players[seat];
-                p.Position = Torus.Wrap(new Vector2(x, y));
-                p.Height = h;
-                p.Heading = head;
-                p.Pitch = pitch;
+                // Transform is eased, not snapped: hand it to the craft as a target the client's
+                // step glides toward (snapped on first sight), so a team-mate updated 20 times a
+                // second moves smoothly instead of strobing. Status below is taken outright.
+                p.NetTarget(Torus.Wrap(new Vector2(x, y)), h, head, pitch);
                 p.Shield = shield;
                 p.Hyper = hyper * p.MaxHyper;
                 p.Lives = lives;
@@ -228,6 +250,11 @@ public static class Snapshot
             if (!e.Alive) continue;
             if (Torus.DistanceSquared(e.Position, eye) > InterestRadius * InterestRadius) continue;
 
+            // A stable id so the client can match this same hunter across packets and interpolate
+            // it. Assigned the first time it is ever written; a byte, safe because only a handful
+            // are alive and in range at once, so two live ones never share the low byte.
+            if (e.NetId == 0) e.NetId = world.NextNetId();
+            dst[at++] = (byte)e.NetId;
             BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(e.Position.X, PosScale)); at += 2;
             BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(e.Position.Y, PosScale)); at += 2;
             BitConverter.TryWriteBytes(dst.Slice(at, 2), QAngle(e.Heading)); at += 2;
@@ -304,6 +331,11 @@ public static class Snapshot
             BitConverter.TryWriteBytes(dst.Slice(at, 2), QAngle(b.Heading)); at += 2;
             dst[at++] = (byte)b.Phase;
             dst[at++] = (byte)Math.Clamp(b.CoreFraction * 255f, 0f, 255f);
+            // The seizure it is playing out, if any, so an onlooker sees it reach out and club a
+            // held player. Zero the rest of the time, which the puppet reads as "no hold".
+            dst[at++] = (byte)Math.Clamp(b.GrabArm * 255f, 0f, 255f);
+            dst[at++] = (byte)Math.Clamp(b.StrikeArm * 255f, 0f, 255f);
+            dst[at++] = (byte)Math.Clamp(b.SeizureGlow * 255f, 0f, 255f);
         }
 
         if (world.Maw is { Alive: true } m
@@ -315,6 +347,8 @@ public static class Snapshot
             dst[at++] = (byte)m.Phase;
             dst[at++] = (byte)Math.Clamp(m.CrystalFraction * 255f, 0f, 255f);
             BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(m.BodyY, PosScale)); at += 2;
+            // The jaw, so a digestion's clamp is seen and not just the mouth hanging open.
+            dst[at++] = (byte)Math.Clamp(m.JawOpen * 255f, 0f, 255f);
         }
 
         dst[flagsAt] = flags;
@@ -362,7 +396,10 @@ public static class Snapshot
                 float head = BitConverter.ToInt16(src.Slice(at, 2)) / AngScale; at += 2;
                 var phase = (Entities.CrabCore.State)src[at++];
                 float core = src[at++] / 255f;
-                world.AdoptBoss(Torus.Wrap(new Vector2(x, y)), head, phase, core);
+                float grab = src[at++] / 255f;
+                float strike = src[at++] / 255f;
+                float glow = src[at++] / 255f;
+                world.AdoptBoss(Torus.Wrap(new Vector2(x, y)), head, phase, core, grab, strike, glow);
             }
             else world.ClearBossPuppet();
 
@@ -373,7 +410,8 @@ public static class Snapshot
                 var phase = (Entities.MawCore.State)src[at++];
                 float crystal = src[at++] / 255f;
                 float bodyY = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
-                world.AdoptMaw(Torus.Wrap(new Vector2(x, y)), phase, crystal, bodyY);
+                float jaw = src[at++] / 255f;
+                world.AdoptMaw(Torus.Wrap(new Vector2(x, y)), phase, crystal, bodyY, jaw);
             }
             else world.ClearMawPuppet();
 
@@ -393,6 +431,7 @@ public static class Snapshot
                 world.AdoptSoldier(Torus.Wrap(new Vector2(x, y)), h, head, move, bank, speed,
                     leader: (sf & 1) != 0, allied: (sf & 2) != 0, slot: i);
             }
+            world.EndAdoptSoldiers();
         }
         catch (Exception e) when (e is IndexOutOfRangeException or ArgumentOutOfRangeException)
         {
@@ -413,16 +452,20 @@ public static class Snapshot
             uint tick = BitConverter.ToUInt32(src.Slice(at, 4)); at += 4;
 
             int enemies = src[at++];
-            world.Enemies.Clear();
+            // The hunters are kept between packets and matched on the host's id, so each can be
+            // eased toward its new spot rather than the whole list being torn down and rebuilt
+            // (which was twenty steps of stutter a second). The sweep drops any this packet omits.
+            world.BeginAdoptEnemies();
             for (int i = 0; i < enemies; i++)
             {
+                int id = src[at++];
                 float x = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
                 float y = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
                 float head = BitConverter.ToInt16(src.Slice(at, 2)) / AngScale; at += 2;
                 bool elite = src[at++] != 0;
-                world.Enemies.Add(new EnemyTank(Torus.Wrap(new Vector2(x, y)), elite)
-                { Heading = head });
+                world.AdoptEnemy(id, Torus.Wrap(new Vector2(x, y)), head, elite);
             }
+            world.EndAdoptEnemies();
 
             int rounds = src[at++];
             world.BeginAdoptRounds();

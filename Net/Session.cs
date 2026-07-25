@@ -50,6 +50,11 @@ public enum Msg : byte
     /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: the Crab-Core and Maw-Core
     /// near that client, so their fight is drawn and not just heard. Keep-last like the field.</summary>
     Bosses = 14,
+
+    /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: the particle bursts the sim
+    /// threw near that client — deaths, hits, footfalls, laid smoke — so a client that runs no
+    /// combat still sees the debris. Unreliable; a missed burst is a spray gone by the next tick.</summary>
+    Effect = 15,
 }
 
 /// <summary>
@@ -79,6 +84,7 @@ public sealed class Session
     private readonly byte[] _field = new byte[Snapshot.MaxSize + 8];
     private readonly byte[] _sound = new byte[1200];
     private readonly byte[] _bosses = new byte[512];
+    private readonly byte[] _effect = new byte[1200];
     private uint _tick;
     private int _sinceSnapshot;
 
@@ -495,11 +501,21 @@ public sealed class Session
                 int ns = WriteSounds(seat, _sound.AsSpan(1));
                 _net.Send(peer, _sound.AsSpan(0, ns + 1), reliable: false);
             }
+
+            // The particle bursts near this client, so it sees the field's debris and not only
+            // its own. Same interest cull and keep-nothing model as the sounds beside them.
+            if (World!.EffectCues.Count > 0)
+            {
+                _effect[0] = (byte)Msg.Effect;
+                int nx = WriteEffects(seat, _effect.AsSpan(1));
+                _net.Send(peer, _effect.AsSpan(0, nx + 1), reliable: false);
+            }
         }
 
         // The cues are spent once described to everyone — clear them whether or not anyone was
-        // listening, so a host alone in a room never lets the list grow.
+        // listening, so a host alone in a room never lets either list grow.
         World!.SoundCues.Clear();
+        World!.EffectCues.Clear();
     }
 
     /// <summary>How many cues one sound packet carries at most — plenty for a busy fight, and
@@ -527,6 +543,39 @@ public sealed class Session
                 ? (byte)Math.Clamp(c.Param * 255f, 0f, 255f)
                 : (byte)Math.Clamp(c.Param, 0f, 255f);
             dst[at++] = unchecked((byte)(sbyte)Math.Clamp(c.Owner, -128, 127));
+            n++;
+        }
+        dst[countAt] = (byte)n;
+        return at;
+    }
+
+    /// <summary>How many bursts one effect packet carries at most — capped so the packet stays
+    /// inside one datagram (40·10 = 400 bytes + a header) even when a fight is throwing debris
+    /// everywhere. The interest cull below rarely reaches it near any one client.</summary>
+    private const int MaxEffects = 40;
+
+    /// <summary>Writes the tick's particle bursts within interest range of <paramref name="forSeat"/>,
+    /// each as kind, world position and colour. Returns the bytes written.</summary>
+    private int WriteEffects(int forSeat, Span<byte> dst)
+    {
+        System.Numerics.Vector2 eye =
+            World!.Players[Math.Clamp(forSeat, 0, World.Players.Count - 1)].Position;
+        int at = 0;
+        int countAt = at++;
+        int n = 0;
+        foreach (var e in World.EffectCues)
+        {
+            if (n >= MaxEffects) break;
+            var plane = new System.Numerics.Vector2(e.Origin.X, e.Origin.Z);
+            if (Torus.DistanceSquared(plane, eye) > Snapshot.InterestRadius * Snapshot.InterestRadius)
+                continue;
+            dst[at++] = (byte)e.Kind;
+            WriteShort(dst, ref at, e.Origin.X * RoomPos);   // same 1/64 world-position scale
+            WriteShort(dst, ref at, e.Origin.Z * RoomPos);
+            WriteShort(dst, ref at, e.Origin.Y * RoomPos);   // height
+            dst[at++] = e.Color.R;
+            dst[at++] = e.Color.G;
+            dst[at++] = e.Color.B;
             n++;
         }
         dst[countAt] = (byte)n;
@@ -663,6 +712,25 @@ public sealed class Session
             case Msg.Bosses when !IsHost:
                 Snapshot.ApplyBosses(World, payload.AsSpan(1));
                 break;
+
+            case Msg.Effect when !IsHost:
+            {
+                if (payload.Length < 2) break;
+                int at = 1;
+                int count = payload[at++];
+                for (int i = 0; i < count; i++)
+                {
+                    if (at + 10 > payload.Length) break;
+                    var kind = (Entities.EffectKind)payload[at++];
+                    float x = BitConverter.ToInt16(payload.AsSpan(at, 2)) / 64f; at += 2;
+                    float z = BitConverter.ToInt16(payload.AsSpan(at, 2)) / 64f; at += 2;
+                    float y = BitConverter.ToInt16(payload.AsSpan(at, 2)) / 64f; at += 2;
+                    byte r = payload[at++], g = payload[at++], b = payload[at++];
+                    World.PlayRemoteEffect(kind, new System.Numerics.Vector3(x, y, z),
+                        new Raylib_cs.Color(r, g, b, (byte)255));
+                }
+                break;
+            }
 
             case Msg.Sound when !IsHost:
             {
