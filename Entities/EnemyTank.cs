@@ -205,6 +205,12 @@ public sealed class EnemyTank
     /// packet named, so the ones it did not name can be dropped.</summary>
     public bool NetSeen;
 
+    /// <summary>The key this hunter goes by in the host's rewind history, so a laggy client's
+    /// shot can be tested against where it actually was on that client's screen. Assigned
+    /// lazily host-side; deliberately not <see cref="NetId"/>, which is a reused byte and
+    /// would have two hunters sharing a past.</summary>
+    public int HitId;
+
     private Vector2 _netPos;
     private float _netHeading;
     private bool _hasNet;

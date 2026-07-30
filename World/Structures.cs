@@ -46,6 +46,20 @@ public sealed class Structure
     /// shapes read as a skyline rather than as a repeated prop.</summary>
     public readonly float Scale;
 
+    /// <summary>
+    /// This building's place in the layout, assigned once by <see cref="StructureField.Create"/>
+    /// and never reused. It is the name a structure goes by on the wire: the layout is
+    /// identical on every machine, so the host can say "number 41 has lost its base" in two
+    /// bytes and be understood. Deliberately <em>not</em> the position in
+    /// <see cref="World.Structures"/>, which shifts the moment a razed lot is swept.
+    /// </summary>
+    public int Index { get; internal set; }
+
+    /// <summary>True once anything has happened to this building — it is cut, coming down, or
+    /// gone. The only ones worth putting on the wire; an untouched building is implied by the
+    /// layout every machine already generated.</summary>
+    public bool Damaged => Fracture != null || Falling || Gone;
+
     public Structure(Vector2 position, float heading, StructureKind kind, int variant, float scale)
     {
         Position = position;
@@ -99,6 +113,50 @@ public sealed class Structure
         if (baseFell) Falling = true;
         if (!Fracture.AnyStanding) Gone = true;
         return baseFell;
+    }
+
+    /// <summary>
+    /// Builds the chunk model without cutting anything, so a client can install the shape the
+    /// host has been carving before it applies the host's account of which cells are left.
+    /// A no-op on an arch (which has no cells) and on a tower that already has one.
+    /// </summary>
+    public void EnsureFracture()
+    {
+        if (Kind != StructureKind.Tower) return;
+        Fracture ??= new Fracture(Position, Heading, Scale, TowerHeight, TowerFootprint, Variant);
+    }
+
+    /// <summary>
+    /// Client-side: lays the host's account of this building over the local one — which cells
+    /// are still standing, whether it is coming down, whether it is finished. Fills
+    /// <paramref name="detached"/> with the cells that died between the last packet and this
+    /// one, in world space, so the client throws the same rubble the host did rather than
+    /// having a tower quietly lose its middle between frames.
+    ///
+    /// Damage only ever runs one way here. A client predicts its own beam locally, so it can
+    /// briefly be <em>ahead</em> of the host on a tower it is cutting; reviving those cells
+    /// when the host's older account lands would make the hole flicker back and forth, and the
+    /// host's next packet agrees within a snapshot anyway.
+    /// </summary>
+    public void NetApply(bool falling, bool gone, bool fractured, ReadOnlySpan<byte> mask,
+        List<DebrisSpawn> detached)
+    {
+        if (fractured)
+        {
+            EnsureFracture();
+            Fracture?.ApplyMask(mask, detached);
+        }
+
+        if (falling && !Falling)
+        {
+            Falling = true;
+            // An arch goes over as one piece and the client runs that topple on its own clock
+            // from here — the host sends the fact of the collapse, not sixty frames of it.
+            if (Kind == StructureKind.Arch) _age = 0f;
+        }
+
+        if (gone) Gone = true;
+        if (Fracture is { AnyStanding: false }) Gone = true;
     }
 
     // Footprint radii at scale 1, matching the meshes the renderer builds. These are
@@ -342,6 +400,11 @@ public static class StructureField
         // between nine arcs and three.
         Place(rng, placed, claim, StructureKind.Arch, ArchCount, ArchExtent, 0.75f, 1.6f);
         Place(rng, placed, claim, StructureKind.Tower, TowerCount, TowerExtent, 0.6f, 1.7f);
+
+        // The name each building answers to on the wire. Handed out here, at the one point in
+        // the program where the layout is complete and in its canonical order — which is the
+        // same order on every machine, because the seed is.
+        for (int i = 0; i < placed.Count; i++) placed[i].Index = i;
 
         return placed;
     }

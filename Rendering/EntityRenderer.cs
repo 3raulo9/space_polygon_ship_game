@@ -204,40 +204,13 @@ public sealed class EntityRenderer
         // then the shaft itself. Drawn through the boss's own lance renderer at the
         // salvaged emitter's smaller reach — it is literally the same weapon, cut down,
         // so it should be the same light.
-        if (world.Player.Spider is { } spider)
-        {
-            if (spider.Charging || spider.BeamActive)
-            {
-                // The live flare rides the craft's heading, and the shaft leaves along the
-                // full look line — up or down wherever the ring is aimed.
-                Vector2 look = world.Player.Forward;
-                Vector2 muzzleXZ = world.Player.Position + look * SpiderWeapon.MuzzleForward;
-
-                // While charging the flare rides the live craft; once fired the shaft
-                // stays where it was loosed from, so a player who turns mid-burn sees
-                // the beam hold its line rather than sweep round with them.
-                Vector3 origin = spider.BeamActive
-                    ? spider.BeamOrigin
-                    : new Vector3(muzzleXZ.X,
-                        SpiderWeapon.MuzzleHeight + world.Player.Height, muzzleXZ.Y);
-                Vector3 dir = spider.BeamActive
-                    ? spider.BeamDirection
-                    : world.Player.Forward3;
-
-                // The shaft that is drawn is the shaft that burned: reach and width both
-                // come off the charge it went off at, through the weapon's own solvers, so
-                // a beam that looks like it swept a street is one that swept a street. The
-                // gathering flare shows the same thing before the fact — a meter filling
-                // is a beam visibly getting longer and fatter.
-                float power = spider.BeamActive ? spider.BeamPower : spider.ChargeFraction;
-                _crab.DrawLance(origin, dir,
-                    spider.Charging ? spider.ChargeFraction : 0f,
-                    spider.BeamProgress,
-                    SpiderWeapon.LengthAt(power),
-                    SpiderWeapon.RadiusAt(power),
-                    SpiderWeapon.FlareScale);
-            }
-        }
+        // Every craft's lance, not just this machine's. A team-mate's charged beam cutting a
+        // street in half used to be drawn from the local player's own emitter and nowhere
+        // else — so on the host it was invisible for all nineteen other seats, and on a
+        // client it was invisible for all twenty. Each seat is drawn from whichever source is
+        // actually authoritative for it: the live rig where this machine simulates the craft,
+        // the host's account off the wire where it does not.
+        DrawCraftRigs(world, eyeXZ);
 
         // Thrown CRAB CORE detonations: a cinematic energy burst. A floating light core
         // throws tapering lances out in every direction at once, the whole spray churning
@@ -289,22 +262,8 @@ public sealed class EntityRenderer
         // light — one beam per direction the corrupted core threw it, each flickering on
         // its own phase, because a stable shaft would be the one thing this weapon
         // cannot produce.
-        if (world.Player.Virus is { } virusRig)
-        {
-            float now = (float)Raylib.GetTime();
-            for (int i = 0; i < virusRig.Shafts.Length; i++)
-            {
-                ref readonly var shaft = ref virusRig.Shafts[i];
-                if (shaft.Life <= 0f) continue;
-
-                float progress = 1f - shaft.Life / Entities.VirusRig.LanceBurnTime;
-                float flicker = 0.55f + 0.45f * MathF.Sin(now * 70f + i * 2.4f);
-                _crab.DrawLance(shaft.Origin, shaft.Dir, 0f, progress,
-                    Entities.VirusRig.LanceLength,
-                    Entities.VirusRig.LanceRadius * flicker,
-                    0.4f);
-            }
-        }
+        // (Drawn for every seat by DrawCraftRigs above, along with the spider's lance and the
+        // grapple cables — all three are the same problem and are solved in one place.)
 
         // The SOLDIER's rig: both cables out to wherever their hooks have got to, and
         // the forearms holding the launchers. Drawn near the end so the cables pass in
@@ -349,6 +308,111 @@ public sealed class EntityRenderer
             // Chunks shrink as they die; sparks stay small and just wink out.
             float size = s.IsSpark ? s.Size : s.Size * (0.4f + 0.6f * f);
             mesh.Draw(posXZ, s.Angle, s.Position.Y, cameraPos, size, tint);
+        }
+    }
+
+    /// <summary>
+    /// One shaft of a stolen lance, mid-break — drawn through the boss's own lance renderer
+    /// because it is literally the same light, flickering on its own phase because a stable
+    /// shaft is the one thing this weapon cannot produce.
+    /// </summary>
+    private void DrawStolenShaft(Vector3 origin, Vector3 dir, float life, int index, float now)
+    {
+        float progress = 1f - life / Entities.VirusRig.LanceBurnTime;
+        float flicker = 0.55f + 0.45f * MathF.Sin(now * 70f + index * 2.4f);
+        _crab.DrawLance(origin, dir, 0f, progress,
+            Entities.VirusRig.LanceLength,
+            Entities.VirusRig.LanceRadius * flicker,
+            0.4f);
+    }
+
+    /// <summary>
+    /// Every craft's transient combat light: the VIRUS's stolen lance shafts and the SPIDER's
+    /// gathering flare and burning beam, for all twenty seats rather than only for the one at
+    /// this keyboard. The grapple cables ride along for the remote seats — the local craft's
+    /// are drawn off the viewmodel's own launchers, which is a different and closer thing.
+    ///
+    /// Each seat is taken from whichever source actually knows: a machine that simulates a
+    /// craft reads its live rig, and one that does not reads the host's account of it off the
+    /// wire (<c>Snapshot.WriteRigs</c>). Exactly one of the two applies per seat, so nothing
+    /// is ever drawn twice.
+    /// </summary>
+    private void DrawCraftRigs(World.World world, Vector2 eyeXZ)
+    {
+        float now = (float)Raylib.GetTime();
+
+        for (int seat = 0; seat < world.Players.Count; seat++)
+        {
+            // Does this machine simulate this craft? The host simulates every seat; a client
+            // simulates only its own and is told about the rest.
+            if (!world.Authoritative && seat != world.LocalIndex) continue;
+
+            PlayerTank craft = world.Players[seat];
+
+            if (craft.Virus is { } mote)
+            {
+                for (int i = 0; i < mote.Shafts.Length; i++)
+                {
+                    ref readonly var shaft = ref mote.Shafts[i];
+                    if (shaft.Life <= 0f) continue;
+                    DrawStolenShaft(shaft.Origin, shaft.Dir, shaft.Life, i, now);
+                }
+            }
+
+            if (craft.Spider is { } spider && (spider.Charging || spider.BeamActive))
+            {
+                // While charging the flare rides the live craft; once fired the shaft stays
+                // where it was loosed from, so a player who turns mid-burn sees the beam hold
+                // its line rather than sweep round with them.
+                Vector2 muzzleXZ = craft.Position + craft.Forward * SpiderWeapon.MuzzleForward;
+                Vector3 origin = spider.BeamActive
+                    ? spider.BeamOrigin
+                    : new Vector3(muzzleXZ.X, SpiderWeapon.MuzzleHeight + craft.Height, muzzleXZ.Y);
+                Vector3 dir = spider.BeamActive ? spider.BeamDirection : craft.Forward3;
+
+                // The shaft that is drawn is the shaft that burned: reach and width both come
+                // off the charge it went off at, through the weapon's own solvers, so a beam
+                // that looks like it swept a street is one that swept a street. The gathering
+                // flare shows the same thing before the fact — a meter filling is a beam
+                // visibly getting longer and fatter.
+                float power = spider.BeamActive ? spider.BeamPower : spider.ChargeFraction;
+                _crab.DrawLance(origin, dir,
+                    spider.Charging ? spider.ChargeFraction : 0f,
+                    spider.BeamProgress,
+                    SpiderWeapon.LengthAt(power),
+                    SpiderWeapon.RadiusAt(power),
+                    SpiderWeapon.FlareScale);
+            }
+
+            // Cables, for everybody but the craft the camera is inside — that one's are drawn
+            // off the viewmodel's own launchers half a metre from the eye, which is a much
+            // closer and more detailed thing than a line seen from outside a body.
+            if (seat != world.ViewSeat && craft.Rig is { } rig)
+                SoldierRenderer.DrawBodyCables(craft, rig, eyeXZ);
+        }
+
+        // And the seats this machine is only told about.
+        foreach (var (seat, rig) in world.RemoteRigs)
+        {
+            for (int i = 0; i < rig.ShaftCount && i < rig.Shafts.Length; i++)
+            {
+                ref readonly var shaft = ref rig.Shafts[i];
+                if (shaft.Life <= 0f) continue;
+                DrawStolenShaft(shaft.Origin, shaft.Dir, shaft.Life, i, now);
+            }
+
+            if (rig.HasBeam)
+            {
+                _crab.DrawLance(rig.BeamOrigin, rig.BeamDir,
+                    rig.BeamProgress < 0f ? rig.BeamCharge : 0f,
+                    rig.BeamProgress,
+                    SpiderWeapon.LengthAt(rig.BeamPower),
+                    SpiderWeapon.RadiusAt(rig.BeamPower),
+                    SpiderWeapon.FlareScale);
+            }
+
+            if (rig.HasCables && (uint)seat < (uint)world.Players.Count)
+                SoldierRenderer.DrawRemoteCables(world.Players[seat], rig, eyeXZ);
         }
     }
 

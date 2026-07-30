@@ -81,7 +81,14 @@ public sealed class Renderer : IDisposable
 
     public void DrawWorld(World.World world, Net.NoticeFeed? notices)
     {
-        PlayerTank player = world.Player;
+        // Whose eyes this frame is drawn from. Normally this machine's own craft; once its
+        // revives are spent it is a living team-mate's instead (see World.ViewSeat), because
+        // the revive model sends a spent player to watch the survivors and nothing was
+        // pointing the camera at one — a dead client sat staring out of its own wreck while
+        // the match carried on without it. Everything below reads this rather than
+        // world.Player, so a spectator gets the whole camera — the chassis's own eye height,
+        // its bank, its field of view, the shake of whatever is happening to it.
+        PlayerTank player = world.Eye;
 
         // First-person eye: sits at the chassis's own eye height above the craft,
         // looking down its heading. The jump lifts the eye with the craft. A soldier's
@@ -363,7 +370,9 @@ public sealed class Renderer : IDisposable
 
         for (int seat = 0; seat < world.Players.Count; seat++)
         {
-            if (seat == world.LocalIndex) continue;
+            // Never tag the craft the camera is inside — this machine's own, or, while
+            // spectating, whoever it is riding along with.
+            if (seat == world.LocalIndex || seat == world.ViewSeat) continue;
             PlayerTank mate = world.Players[seat];
             if (!mate.Alive) continue;
             string name = world.NameOf(seat);

@@ -65,7 +65,10 @@ internal static class HudRenderer
     public static void Draw(World.World world, ItemIconRenderer icons)
     {
         _icons = icons;
-        PlayerTank p = world.Player;
+        // The craft the instruments describe. Normally this machine's own; once its revives
+        // are spent, the team-mate the camera has moved to — a spent player's own bars are a
+        // row of zeroes and tell them nothing about the fight they are now watching.
+        PlayerTank p = world.Eye;
 
         // A faint panel behind the strip so the bars/radar sit on a surface
         // rather than floating over the grid — but kept dark and translucent so
@@ -74,7 +77,8 @@ internal static class HudRenderer
         Raylib.DrawRectangle(0, StripH, W, 1, Scale(Palette.GridFar, 0.6f)); // seam line
 
         DrawBars(p);
-        DrawWeaponSlots(world.Inventory);
+        DrawWeaponSlots(world.InventoryOf(world.ViewSeat));
+        if (world.Spectating) DrawSpectating(world);
         DrawRadar(world, p);
         // The firing sight sits dead centre, where the mouse aims the gun, and only on the
         // two machines: the SOLDIER and the FISH draw their own centre reticles (which
@@ -105,6 +109,19 @@ internal static class HudRenderer
         // there is a host at all. It also draws its own crosshair, since it is not a machine
         // and the dashboard's centre sight above is skipped for it. See VirusHud.
         if (p.Virus is { } virus) VirusHud.DrawOverlay(world, virus, p);
+    }
+
+    /// <summary>
+    /// Says whose eyes these are. A player out of revives is no longer in the match but is
+    /// still in the room, and the one thing they must not be left to wonder is why the craft
+    /// on screen is not answering their keys. Named, so it also tells them who is left.
+    /// </summary>
+    private static void DrawSpectating(World.World world)
+    {
+        string who = world.NameOf(world.ViewSeat);
+        if (who.Length == 0) who = $"SEAT {world.ViewSeat}";
+        PixelFont.DrawCentered("SPECTATING", W / 2, StripH + 6, 1, Palette.Warning);
+        PixelFont.DrawCentered(who, W / 2, StripH + 14, 1, Palette.HudChrome);
     }
 
     // --- The SPIDER's lance meter: 0..100 down the right-hand edge ---

@@ -31,7 +31,7 @@ internal static class VirusRenderer
 
     public static void DrawScreenEffects(World.World world, float elapsed)
     {
-        if (world.Player.Virus is not { } v) return;
+        if (world.Eye.Virus is not { } v) return;
 
         if (v.Hosted)
         {

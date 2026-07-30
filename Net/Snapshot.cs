@@ -306,6 +306,342 @@ public static class Snapshot
     /// <summary>How many pickups a field packet carries — the world's own cap.</summary>
     private const int MaxPickups = 8;
 
+    // --- Structures ---------------------------------------------------------------
+
+    /// <summary>
+    /// How many damaged buildings one packet describes. The interest cull rarely reaches
+    /// this — a player has to have levelled twenty towers inside one fog radius — and it keeps
+    /// the packet inside a datagram (20·9 = 180 bytes plus a header).
+    /// </summary>
+    private const int MaxStructures = 20;
+
+    /// <summary>Bytes per building: index, flags, and the standing-cell mask.</summary>
+    private const int StructureBytes = 2 + 1 + World.Fracture.MaskBytes;
+
+    /// <summary>Worst case for a structures packet.</summary>
+    public const int MaxStructureSize = 8 + MaxStructures * StructureBytes;
+
+    [Flags]
+    private enum StructMark : byte
+    {
+        None = 0,
+        /// <summary>Cut, and on its way down. Stops blocking; an arch starts its topple.</summary>
+        Falling = 1 << 0,
+        /// <summary>Finished. The lot is cleared and the field should let it go.</summary>
+        Gone = 1 << 1,
+        /// <summary>A tower with a chunk model — the mask that follows is meaningful.</summary>
+        Fractured = 1 << 2,
+    }
+
+    /// <summary>
+    /// Writes the damaged buildings near <paramref name="forSeat"/>: which cells of each cut
+    /// tower are still standing, and whether it is coming down or already gone.
+    ///
+    /// This is the one thing about the world two players genuinely disagreed about. The city's
+    /// <em>layout</em> has always been identical everywhere — it is generated from a fixed seed
+    /// — but nothing carried the <em>damage</em>, so a tower one player cut down with a beam
+    /// still stood on everybody else's screen, complete with collision. Undamaged buildings are
+    /// never sent: every machine already generated them.
+    ///
+    /// Keep-last and re-sent every snapshot while in range, exactly like the field, so a lost
+    /// packet heals itself and a client that walks up on a ruin it has never heard about is
+    /// told the moment it comes into range.
+    /// </summary>
+    /// <returns>Bytes written, or 0 when there is nothing damaged near this client at all —
+    /// which is most of a match, and is not worth a packet.</returns>
+    public static int WriteStructures(World.World world, int forSeat, uint tick, Span<byte> dst)
+    {
+        Vector2 eye = world.Players[Math.Clamp(forSeat, 0, world.Players.Count - 1)].Position;
+        int at = 0;
+        BitConverter.TryWriteBytes(dst.Slice(at, 4), tick); at += 4;
+        int countAt = at++;
+        int n = 0;
+
+        // The damaged buildings still standing, then the lots already cleared. Two lists
+        // rather than one iterator: this runs per client per snapshot, and a walk of seventy
+        // structures should not also be an allocation.
+        WriteSome(world.Structures, ref at, ref n, eye, dst);
+        WriteSome(world.RazedStructures, ref at, ref n, eye, dst);
+
+        dst[countAt] = (byte)n;
+        return n == 0 ? 0 : at;
+    }
+
+    private static void WriteSome(IReadOnlyList<World.Structure> from, ref int at, ref int n,
+        Vector2 eye, Span<byte> dst)
+    {
+        for (int i = 0; i < from.Count; i++)
+        {
+            if (n >= MaxStructures) return;
+            World.Structure s = from[i];
+            if (!s.Damaged) continue;
+            if (Torus.DistanceSquared(s.Position, eye) > InterestRadius * InterestRadius) continue;
+
+            StructMark mark = StructMark.None;
+            if (s.Falling) mark |= StructMark.Falling;
+            if (s.Gone) mark |= StructMark.Gone;
+            if (s.Fracture != null) mark |= StructMark.Fractured;
+
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), (ushort)s.Index); at += 2;
+            dst[at++] = (byte)mark;
+            Span<byte> mask = dst.Slice(at, World.Fracture.MaskBytes); at += World.Fracture.MaskBytes;
+            if (s.Fracture is { } f) f.WriteMask(mask);
+            else mask.Clear();
+            n++;
+        }
+    }
+
+    /// <summary>Lays a structures packet over this client's skyline. A malformed one leaves the
+    /// city as it was rather than throwing — same contract as every other apply here.</summary>
+    public static void ApplyStructures(World.World world, ReadOnlySpan<byte> src)
+    {
+        try
+        {
+            int at = 0;
+            at += 4;   // tick — keep-last, so no ordering guard
+            int n = src[at++];
+            for (int i = 0; i < n; i++)
+            {
+                int index = BitConverter.ToUInt16(src.Slice(at, 2)); at += 2;
+                var mark = (StructMark)src[at++];
+                ReadOnlySpan<byte> mask = src.Slice(at, World.Fracture.MaskBytes);
+                at += World.Fracture.MaskBytes;
+                world.AdoptStructure(index,
+                    falling: (mark & StructMark.Falling) != 0,
+                    gone: (mark & StructMark.Gone) != 0,
+                    fractured: (mark & StructMark.Fractured) != 0,
+                    mask);
+            }
+        }
+        catch (Exception e) when (e is IndexOutOfRangeException or ArgumentOutOfRangeException)
+        {
+        }
+    }
+
+    // --- Rigs: the transient combat light -----------------------------------------
+
+    /// <summary>How many seats one rigs packet describes. Interest-culled, and these are the
+    /// craft close enough to see the light off — well under this in any real fight.</summary>
+    private const int MaxRigSeats = 8;
+
+    /// <summary>Worst case for a rigs packet: header, then every described seat's cables,
+    /// stolen lance and charged beam.</summary>
+    public const int MaxRigSize = 8 + MaxRigSeats * (2 + 14 + 1 + VirusRig.MaxShafts * 10 + 12);
+
+    [Flags]
+    private enum RigMark : byte
+    {
+        None = 0,
+        /// <summary>Two grapple cables out — a SOLDIER's, or the rig a VIRUS is wearing.</summary>
+        Cables = 1 << 0,
+        /// <summary>The VIRUS's stolen lance, mid-break.</summary>
+        Shafts = 1 << 1,
+        /// <summary>The SPIDER's lance: gathering, or burning.</summary>
+        Beam = 1 << 2,
+    }
+
+    /// <summary>
+    /// Writes the transient combat light around <paramref name="forSeat"/> — cables, the
+    /// virus's stolen lance shafts, the spider's charged beam. None of it is state anything
+    /// else reads; it is purely what a fight <em>looks</em> like, and it was all host-local, so
+    /// a team-mate cutting a street in half with a lance did it invisibly on everyone else's
+    /// screen. Unreliable and keep-nothing: a shaft burns for half a second and the next packet
+    /// supersedes this one.
+    /// </summary>
+    /// <returns>Bytes written, or 0 when nothing near this client is throwing any light —
+    /// which is most of the time, and is not worth a packet.</returns>
+    public static int WriteRigs(World.World world, int forSeat, uint tick, Span<byte> dst)
+    {
+        Vector2 eye = world.Players[Math.Clamp(forSeat, 0, world.Players.Count - 1)].Position;
+        int at = 0;
+        BitConverter.TryWriteBytes(dst.Slice(at, 4), tick); at += 4;
+        int countAt = at++;
+        int n = 0;
+
+        for (int seat = 0; seat < world.Players.Count; seat++)
+        {
+            if (n >= MaxRigSeats) break;
+            PlayerTank p = world.Players[seat];
+            if (Torus.DistanceSquared(p.Position, eye) > InterestRadius * InterestRadius) continue;
+
+            SoldierRig? rig = p.Rig;
+            bool cables = rig is { } r && (r.Left.Out || r.Right.Out);
+            bool shafts = p.Virus is { } v && AnyShaft(v);
+            bool beam = p.Spider is { } sp && (sp.Charging || sp.BeamActive);
+            if (!cables && !shafts && !beam) continue;
+
+            RigMark mark = RigMark.None;
+            if (cables) mark |= RigMark.Cables;
+            if (shafts) mark |= RigMark.Shafts;
+            if (beam) mark |= RigMark.Beam;
+
+            dst[at++] = (byte)seat;
+            dst[at++] = (byte)mark;
+
+            if (cables)
+            {
+                WriteHook(rig!.Left, dst, ref at);
+                WriteHook(rig.Right, dst, ref at);
+            }
+
+            if (shafts)
+            {
+                VirusRig mote = p.Virus!;
+                int shaftCountAt = at++;
+                int ns = 0;
+                for (int i = 0; i < mote.Shafts.Length; i++)
+                {
+                    ref readonly var sh = ref mote.Shafts[i];
+                    if (sh.Life <= 0f) continue;
+                    WriteVec(dst, ref at, sh.Origin);
+                    WriteDir(dst, ref at, sh.Dir);
+                    dst[at++] = (byte)Math.Clamp(sh.Life / VirusRig.LanceBurnTime * 255f, 0f, 255f);
+                    ns++;
+                }
+                dst[shaftCountAt] = (byte)ns;
+            }
+
+            if (beam)
+            {
+                SpiderWeapon lance = p.Spider!;
+                // Where the shaft was loosed from while it burns, or the live muzzle while the
+                // meter fills — the same choice the renderer makes for the local craft, made
+                // once here so a client does not have to reason about it.
+                Vector3 origin = lance.BeamActive ? lance.BeamOrigin : MuzzleOf(p);
+                Vector3 dir = lance.BeamActive ? lance.BeamDirection : p.Forward3;
+                WriteVec(dst, ref at, origin);
+                WriteDir(dst, ref at, dir);
+                dst[at++] = (byte)Math.Clamp(
+                    (lance.BeamActive ? lance.BeamPower : lance.ChargeFraction) * 255f, 0f, 255f);
+                dst[at++] = (byte)Math.Clamp(lance.ChargeFraction * 255f, 0f, 255f);
+                // -1 while merely charging, which the reader turns back into "no shaft yet".
+                dst[at++] = lance.BeamActive
+                    ? (byte)Math.Clamp(lance.BeamProgress * 254f, 0f, 254f) : (byte)255;
+            }
+
+            n++;
+        }
+
+        dst[countAt] = (byte)n;
+        return n == 0 ? 0 : at;
+    }
+
+    private static bool AnyShaft(VirusRig v)
+    {
+        for (int i = 0; i < v.Shafts.Length; i++)
+            if (v.Shafts[i].Life > 0f) return true;
+        return false;
+    }
+
+    private static Vector3 MuzzleOf(PlayerTank p)
+    {
+        Vector2 muzzle = p.Position + p.Forward * SpiderWeapon.MuzzleForward;
+        return new Vector3(muzzle.X, SpiderWeapon.MuzzleHeight + p.Height, muzzle.Y);
+    }
+
+    private static void WriteHook(GrappleHook h, Span<byte> dst, ref int at)
+    {
+        dst[at++] = (byte)h.State;
+        BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(h.Tip.X, PosScale)); at += 2;
+        BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(h.Tip.Y, PosScale)); at += 2;
+        BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(h.TipY, PosScale)); at += 2;
+    }
+
+    private static void WriteVec(Span<byte> dst, ref int at, Vector3 v)
+    {
+        BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(v.X, PosScale)); at += 2;
+        BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(v.Y, PosScale)); at += 2;
+        BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(v.Z, PosScale)); at += 2;
+    }
+
+    /// <summary>A unit direction as three signed bytes. A beam a hundred metres long lands
+    /// within a few centimetres of where it was aimed at this resolution, which is far below
+    /// what a 320×240 frame can show.</summary>
+    private static void WriteDir(Span<byte> dst, ref int at, Vector3 d)
+    {
+        if (d.LengthSquared() > 1e-6f) d = Vector3.Normalize(d);
+        dst[at++] = unchecked((byte)(sbyte)Math.Clamp(MathF.Round(d.X * 127f), -127f, 127f));
+        dst[at++] = unchecked((byte)(sbyte)Math.Clamp(MathF.Round(d.Y * 127f), -127f, 127f));
+        dst[at++] = unchecked((byte)(sbyte)Math.Clamp(MathF.Round(d.Z * 127f), -127f, 127f));
+    }
+
+    private static Vector3 ReadVec(ReadOnlySpan<byte> src, ref int at)
+    {
+        float x = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+        float y = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+        float z = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+        return new Vector3(x, y, z);
+    }
+
+    private static Vector3 ReadDir(ReadOnlySpan<byte> src, ref int at)
+    {
+        float x = unchecked((sbyte)src[at++]) / 127f;
+        float y = unchecked((sbyte)src[at++]) / 127f;
+        float z = unchecked((sbyte)src[at++]) / 127f;
+        var d = new Vector3(x, y, z);
+        return d.LengthSquared() > 1e-6f ? Vector3.Normalize(d) : new Vector3(0f, 0f, 1f);
+    }
+
+    /// <summary>Lays a rigs packet over this client's remote craft. Purely cosmetic — nothing
+    /// read here decides anything — so a malformed packet costs a frame of light and no more.</summary>
+    public static void ApplyRigs(World.World world, ReadOnlySpan<byte> src)
+    {
+        try
+        {
+            int at = 0;
+            at += 4;   // tick — keep-nothing, so no ordering guard
+            int n = src[at++];
+            world.BeginAdoptRigs();
+            for (int i = 0; i < n; i++)
+            {
+                int seat = src[at++];
+                var mark = (RigMark)src[at++];
+
+                if ((mark & RigMark.Cables) != 0)
+                {
+                    for (int h = 0; h < 2; h++)
+                    {
+                        var state = (HookState)src[at++];
+                        float tx = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+                        float ty = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+                        float th = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+                        world.AdoptHook(seat, right: h == 1, state,
+                            Torus.Wrap(new Vector2(tx, ty)), th);
+                    }
+                }
+
+                if ((mark & RigMark.Shafts) != 0)
+                {
+                    int ns = src[at++];
+                    for (int s = 0; s < ns; s++)
+                    {
+                        Vector3 origin = ReadVec(src, ref at);
+                        Vector3 dir = ReadDir(src, ref at);
+                        float life = src[at++] / 255f * VirusRig.LanceBurnTime;
+                        world.AdoptShaft(seat, s, origin, dir, life);
+                    }
+                    world.EndAdoptShafts(seat, ns);
+                }
+
+                if ((mark & RigMark.Beam) != 0)
+                {
+                    Vector3 origin = ReadVec(src, ref at);
+                    Vector3 dir = ReadDir(src, ref at);
+                    float power = src[at++] / 255f;
+                    float charge = src[at++] / 255f;
+                    byte pb = src[at++];
+                    world.AdoptBeam(seat, origin, dir, power, charge,
+                        progress: pb == 255 ? -1f : pb / 254f);
+                }
+            }
+            world.EndAdoptRigs();
+        }
+        catch (Exception e) when (e is IndexOutOfRangeException or ArgumentOutOfRangeException)
+        {
+            world.EndAdoptRigs();
+        }
+    }
+
     // --- Bosses -------------------------------------------------------------------
 
     /// <summary>

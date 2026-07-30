@@ -55,6 +55,27 @@ public enum Msg : byte
     /// threw near that client — deaths, hits, footfalls, laid smoke — so a client that runs no
     /// combat still sees the debris. Unreliable; a missed burst is a spray gone by the next tick.</summary>
     Effect = 15,
+
+    /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: the damaged buildings near
+    /// that client — which cells of each cut tower still stand, what is coming down, what is
+    /// gone. Keep-last like the field: the city's layout is identical everywhere and only the
+    /// <em>damage</em> has to cross, so this is the packet that stops two players standing in
+    /// front of the same tower and disagreeing about whether it exists.</summary>
+    Structures = 16,
+
+    /// <summary>Host → one client, reliable, whenever it changes: that seat's own pack. Reliable
+    /// because an inventory is not a picture — a lost salvage pickup would simply never appear,
+    /// and there is no next packet to correct it until something else changes.</summary>
+    Inventory = 17,
+
+    /// <summary>Client → host, reliable: one thing the player did in their inventory panel. The
+    /// host replays it against the real pack and the echo above settles it.</summary>
+    InvAct = 18,
+
+    /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: the transient combat light
+    /// around that client — grapple cables, the VIRUS's stolen lance, the SPIDER's charged beam.
+    /// Purely cosmetic and keep-nothing; a missed one costs a frame of light.</summary>
+    Rigs = 19,
 }
 
 /// <summary>
@@ -85,6 +106,13 @@ public sealed class Session
     private readonly byte[] _sound = new byte[1200];
     private readonly byte[] _bosses = new byte[512];
     private readonly byte[] _effect = new byte[1200];
+    private readonly byte[] _structures = new byte[Snapshot.MaxStructureSize + 8];
+    private readonly byte[] _rigs = new byte[Snapshot.MaxRigSize + 8];
+    private readonly byte[] _inv = new byte[Core.Inventory.WireSize + 8];
+
+    /// <summary>The digest of each seat's pack the last time it was mirrored to its owner, so
+    /// the reliable echo only goes out when something actually changed. Host-side.</summary>
+    private readonly Dictionary<int, int> _invSent = new();
     private uint _tick;
     private int _sinceSnapshot;
 
@@ -452,15 +480,28 @@ public sealed class Session
             // Unreliable, every tick. A dropped input frame is a sixtieth of a second of
             // one player's intent and the next one supersedes it — retransmitting would
             // arrive too late to matter and block everything behind it.
-            Span<byte> p = stackalloc byte[1 + 4 + InputFrame.Size];
+            //
+            // The frame also carries the last snapshot tick this client applied. That one
+            // number is the whole of the host's ping measurement: the gap between it and the
+            // host's own tick when this packet lands is a full round trip, and it is what
+            // lets the host rewind the world to what this player could actually see when
+            // deciding whether their shot connected (see World.Rewound). Piggybacked rather
+            // than pinged separately because it costs four bytes on a packet already going.
+            Span<byte> p = stackalloc byte[1 + 4 + InputFrame.Size + 4];
             p[0] = (byte)Msg.Input;
             BitConverter.TryWriteBytes(p.Slice(1, 4), _tick);
             localInput.Write(p.Slice(5, InputFrame.Size));
+            BitConverter.TryWriteBytes(p.Slice(5 + InputFrame.Size, 4), LastAppliedTick);
             _net.Send(0, p, reliable: false);
 
             // A client still drives its own craft locally so the controls feel attached to
             // something; the host's next packet is what settles where it actually is.
             World.SetInput(LocalSeat, localInput);
+
+            // Anything the player did in their inventory panel this tick. Its own reliable
+            // messages, not folded into the input frame: a drag is an event that must arrive
+            // exactly once, which is the opposite of what the input channel promises.
+            SendInvIntents();
         }
     }
 
@@ -510,12 +551,63 @@ public sealed class Session
                 int nx = WriteEffects(seat, _effect.AsSpan(1));
                 _net.Send(peer, _effect.AsSpan(0, nx + 1), reliable: false);
             }
+
+            // The damaged skyline near this client. Its own packet for the same reason the
+            // bosses are: a busy field must never cost a client the fact that the tower it is
+            // taking cover behind is no longer there. Both of the next two write nothing at
+            // all when there is nothing to say, which is most of a match.
+            _structures[0] = (byte)Msg.Structures;
+            int nst = Snapshot.WriteStructures(World!, seat, _tick, _structures.AsSpan(1));
+            if (nst > 0) _net.Send(peer, _structures.AsSpan(0, nst + 1), reliable: false);
+
+            // The cables and beams around this client — the light a fight throws off.
+            _rigs[0] = (byte)Msg.Rigs;
+            int nrg = Snapshot.WriteRigs(World!, seat, _tick, _rigs.AsSpan(1));
+            if (nrg > 0) _net.Send(peer, _rigs.AsSpan(0, nrg + 1), reliable: false);
+
+            // And this seat's own pack, when and only when it has changed. Reliable: salvage
+            // that fell off the wire would simply never arrive, since nothing re-sends it.
+            SendInventoryIfChanged(peer, seat);
         }
 
         // The cues are spent once described to everyone — clear them whether or not anyone was
         // listening, so a host alone in a room never lets either list grow.
         World!.SoundCues.Clear();
         World!.EffectCues.Clear();
+    }
+
+    /// <summary>
+    /// Host-side: mirrors one seat its own pack, if anything in it has moved since the last
+    /// time. Reliable and change-driven rather than streamed — an inventory is small, it
+    /// changes a handful of times a minute, and every one of those changes matters exactly
+    /// once, which is the opposite of the keep-last packets around it.
+    /// </summary>
+    private void SendInventoryIfChanged(int peer, int seat)
+    {
+        Core.Inventory pack = World!.InventoryOf(seat);
+        int digest = pack.Fingerprint();
+        if (_invSent.TryGetValue(seat, out int was) && was == digest) return;
+        _invSent[seat] = digest;
+
+        _inv[0] = (byte)Msg.Inventory;
+        pack.Write(_inv.AsSpan(1, Core.Inventory.WireSize));
+        _net.Send(peer, _inv.AsSpan(0, 1 + Core.Inventory.WireSize), reliable: true);
+    }
+
+    /// <summary>Client-side: sends everything the player has done to their pack since the last
+    /// tick. Reliable and in order — a dropped move would leave the client's mirror and the
+    /// host's pack permanently disagreeing until something else happened to change it.</summary>
+    private void SendInvIntents()
+    {
+        if (World!.InvIntents.Count == 0) return;
+        Span<byte> p = stackalloc byte[1 + Core.InvIntent.Size];
+        p[0] = (byte)Msg.InvAct;
+        foreach (var intent in World.InvIntents)
+        {
+            intent.Write(p.Slice(1, Core.InvIntent.Size));
+            _net.Send(0, p, reliable: true);
+        }
+        World.InvIntents.Clear();
     }
 
     /// <summary>How many cues one sound packet carries at most — plenty for a busy fight, and
@@ -686,6 +778,15 @@ public sealed class Session
                 if (payload.Length < 5 + InputFrame.Size) return;
                 if (!_seatOfPeer.TryGetValue(from, out int seat)) return;
                 World.SetInput(seat, InputFrame.Read(payload.AsSpan(5, InputFrame.Size)));
+
+                // The acknowledgement riding on the back of the frame: how far behind this
+                // client's view of the world runs, in ticks. A frame from a build that does
+                // not carry one simply leaves the seat's lag as it was — worst case zero,
+                // which is the uncompensated behaviour this replaces.
+                if (payload.Length < 9 + InputFrame.Size) break;
+                uint ack = BitConverter.ToUInt32(payload.AsSpan(5 + InputFrame.Size, 4));
+                if (ack == 0 || ack > _tick) break;   // not seen a snapshot yet, or nonsense
+                World.SetSeatLag(seat, (int)(_tick - ack));
                 break;
             }
 
@@ -712,6 +813,37 @@ public sealed class Session
             case Msg.Bosses when !IsHost:
                 Snapshot.ApplyBosses(World, payload.AsSpan(1));
                 break;
+
+            case Msg.Structures when !IsHost:
+                Snapshot.ApplyStructures(World, payload.AsSpan(1));
+                break;
+
+            case Msg.Rigs when !IsHost:
+                Snapshot.ApplyRigs(World, payload.AsSpan(1));
+                break;
+
+            case Msg.Inventory when !IsHost:
+            {
+                if (payload.Length < 1 + Core.Inventory.WireSize) return;
+                if (LocalSeat < 0) return;
+                // Straight over the mirror. Whatever the panel optimistically did to it, this
+                // is what the player actually has.
+                World.InventoryOf(LocalSeat).Read(payload.AsSpan(1, Core.Inventory.WireSize));
+                break;
+            }
+
+            case Msg.InvAct when IsHost:
+            {
+                if (payload.Length < 1 + Core.InvIntent.Size) return;
+                if (!_seatOfPeer.TryGetValue(from, out int seat)) return;
+                World.ApplyInvIntent(seat, Core.InvIntent.Read(payload.AsSpan(1, Core.InvIntent.Size)));
+                // Every intent gets an answer, including the ones the host threw out. A
+                // refused move leaves the pack byte-for-byte identical, so the change-driven
+                // echo would say nothing — and the client would be left holding the item it
+                // invented, with nothing ever coming along to take it back.
+                _invSent.Remove(seat);
+                break;
+            }
 
             case Msg.Effect when !IsHost:
             {

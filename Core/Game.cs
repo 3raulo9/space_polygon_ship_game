@@ -290,11 +290,10 @@ public sealed class Game : IDisposable
             }
             else
             {
-                // R/T/Y/U throw whatever the matching equip slot holds (the crafted CRAB
-                // CORE). Polled once per frame as a just-pressed edge, like the debug keys.
-                int weaponSlot = InputMap.WeaponSlotPressed();
-                if (weaponSlot >= 0)
-                    _world!.UseWeaponSlot(weaponSlot);
+                // R/T/Y/U used to be polled here. They now ride the input frame into
+                // World.DriveSeat, so a remote player's throw reaches the host and is spent
+                // from their own pack rather than only ever working for whoever is sitting
+                // at this keyboard.
 
                 // Debug hatch: 'L' drops one random enemy on the horizon each press.
                 // Polled once per frame (a just-pressed edge), not per fixed step.

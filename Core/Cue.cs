@@ -28,6 +28,7 @@ public enum Cue : byte
     FishSpit,       // the FISH's spit
     FishStrike,     // the FISH's lunge connecting
     FishImpact,     // the FISH meeting a wall / round
+    FishBeach,      // the FISH meeting the seabed (param = how hard, 0..1)
     MawSpit,        // one of the mouth's little lasers (dist)
 
     // Impacts and deaths.
@@ -79,7 +80,17 @@ public static class CueBank
     /// <summary>Whether a cue's parameter is a 0..1 fraction (severity, starvation) rather than
     /// a small whole number (a leg index, a warning step). The wire packs it to one byte either
     /// way; this decides whether to scale it by 255 on the way through.</summary>
-    public static bool IsFraction(Cue id) => id is Cue.CoreHit or Cue.MawHurt or Cue.GasJump;
+    public static bool IsFraction(Cue id)
+        => id is Cue.CoreHit or Cue.MawHurt or Cue.GasJump or Cue.FishBeach;
+
+    /// <summary>
+    /// Whether only the host can ever raise this cue. Nearly every noise in the game is
+    /// raised by the machine that caused it — a client fires and hears its own shot at once,
+    /// and then ignores the host's echo of it. Salvage is the exception: clients deliberately
+    /// do not predict pickups, so a collect chime is decided on the host and nowhere else, and
+    /// the owner has to be allowed to hear the echo or they never hear it at all.
+    /// </summary>
+    public static bool RaisedOnlyByHost(Cue id) => id is Cue.Pickup;
 
     public static void Play(Cue id, float distance, float param)
     {
@@ -97,6 +108,7 @@ public static class CueBank
             case Cue.FishSpit: Audio.PlayFishSpit(); break;
             case Cue.FishStrike: Audio.PlayFishStrike(); break;
             case Cue.FishImpact: Audio.PlayFishImpact(); break;
+            case Cue.FishBeach: Audio.PlayFishBeach(param); break;
             case Cue.MawSpit: Audio.PlayMawSpit(distance); break;
 
             case Cue.Explosion: Audio.PlayExplosion(); break;

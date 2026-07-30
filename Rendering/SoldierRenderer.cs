@@ -45,7 +45,10 @@ public sealed class SoldierRenderer
     /// </summary>
     public void Draw(World.World world, Vector3 cameraPos, float elapsed)
     {
-        PlayerTank p = world.Player;
+        // The craft the camera is riding: this machine's own, or — once its revives are
+        // spent — the team-mate it is spectating. A viewmodel belongs to the eye, not to the
+        // seat, so a spectator sees the rig of the player they are actually watching.
+        PlayerTank p = world.Eye;
         // Whoever's rig it is — the SOLDIER's own, or one a VIRUS is wearing off a stolen
         // body. The kit looks the same from the inside either way, because it is the same kit.
         if (p.Rig is not { } rig) return;
@@ -209,6 +212,73 @@ public sealed class SoldierRenderer
     /// and reading how taut one of <em>theirs</em> is turns out to be the single best way to
     /// tell whether that soldier is about to arrive.
     /// </summary>
+    /// <summary>
+    /// Another player's cables, from the account the host sent (see <c>Snapshot.WriteRigs</c>).
+    /// A remote rig is not simulated here — there is no hook object to ask, only a state, a
+    /// tip and a height — so this draws the line and the steel on the end of it and nothing
+    /// else: no slack model, no tension whitening, both of which are readings off physics this
+    /// machine is not running. What it buys is the thing that was missing entirely, which is
+    /// seeing a team-mate hanging off a tower on a cable at all.
+    /// </summary>
+    internal static void DrawRemoteCables(PlayerTank craft, World.World.RemoteRig rig, Vector2 eyeXZ)
+    {
+        Vector3 from = ShoulderOf(craft, eyeXZ);
+        DrawRemoteCable(rig.LeftState, rig.LeftTip, rig.LeftTipY, from, eyeXZ);
+        DrawRemoteCable(rig.RightState, rig.RightTip, rig.RightTipY, from, eyeXZ);
+    }
+
+    /// <summary>
+    /// Another player's cables where this machine <em>does</em> simulate them — the host's view
+    /// of everyone else. Same drawing as the wire-fed version, off the live hooks: seen from
+    /// outside a body, a cable is a line from the shoulders to the anchor and the slack model
+    /// the first-person view earns is invisible.
+    /// </summary>
+    internal static void DrawBodyCables(PlayerTank craft, SoldierRig rig, Vector2 eyeXZ)
+    {
+        Vector3 from = ShoulderOf(craft, eyeXZ);
+        DrawRemoteCable(rig.Left.State, rig.Left.Tip, rig.Left.TipY, from, eyeXZ);
+        DrawRemoteCable(rig.Right.State, rig.Right.Tip, rig.Right.TipY, from, eyeXZ);
+    }
+
+    /// <summary>Where a cable leaves another player's body: shoulder height, which at any range
+    /// a remote craft is drawn at is indistinguishable from the launchers themselves.</summary>
+    private static Vector3 ShoulderOf(PlayerTank craft, Vector2 eyeXZ)
+    {
+        Vector2 near = Torus.NearestImage(craft.Position, eyeXZ);
+        return new Vector3(near.X, craft.Height + SoldierRig.EyeHeight * 0.8f, near.Y);
+    }
+
+    private static void DrawRemoteCable(HookState state, Vector2 tip, float tipY, Vector3 from,
+        Vector2 eyeXZ)
+    {
+        if (state is HookState.Stowed) return;
+
+        // Both a flying tip and an anchored one arrive as canonical torus coordinates here,
+        // so both are re-imaged: a cable across the world's seam would otherwise be drawn
+        // four hundred units the wrong way.
+        Vector2 nearTip = Torus.NearestImage(tip, eyeXZ);
+        var to = new Vector3(nearTip.X, tipY, nearTip.Y);
+
+        float span = Vector3.Distance(from, to);
+        if (span < 0.2f) return;
+
+        bool anchored = state == HookState.Anchored;
+        float sag = anchored ? 0.1f : MathF.Min(span * 0.12f, 1.2f);
+
+        Vector3 prev = from;
+        for (int i = 1; i <= CableSegments; i++)
+        {
+            float t = (float)i / CableSegments;
+            Vector3 point = Vector3.Lerp(from, to, t);
+            point.Y -= sag * MathF.Sin(t * MathF.PI);
+            Raylib.DrawCylinderEx(prev, point, CableRadius, CableRadius, 4, Palette.HudChrome);
+            prev = point;
+        }
+
+        Vector3 along = to - from;
+        if (along.LengthSquared() > 1e-6f) DrawHook(to, Vector3.Normalize(along), anchored);
+    }
+
     internal static void DrawCable(GrappleHook h, Vector3 from, Vector2 eyeXZ)
     {
         if (h.State == HookState.Stowed) return;
@@ -388,7 +458,7 @@ public sealed class SoldierRenderer
     /// </summary>
     public static void DrawScreenEffects(World.World world, float elapsed)
     {
-        if (world.Player.Rig is not { } rig) return;
+        if (world.Eye.Rig is not { } rig) return;
 
         const int w = Config.InternalWidth;
         const int h = Config.InternalHeight;
