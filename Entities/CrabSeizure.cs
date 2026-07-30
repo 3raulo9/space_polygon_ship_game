@@ -262,6 +262,12 @@ public sealed class CrabSeizure : ICinematicView
     public bool Held => _stage is Stage.Seize or Stage.Turn or Stage.Scream
                               or Stage.Strike or Stage.Wind;
 
+    /// <summary>The craft in the claw. There is exactly one — the boss has one grip — but it
+    /// is no longer assumed to be the craft at this keyboard: any seat can be cornered, and
+    /// everything that used to freeze "the player" while a seizure ran has to ask whether it
+    /// is talking about <em>this</em> one.</summary>
+    public PlayerTank Victim => _player;
+
     // --- What the renderer reads ---------------------------------------------
 
     /// <summary>How hard the view should judder, 0..1. Rides up through the scream,

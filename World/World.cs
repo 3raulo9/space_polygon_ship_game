@@ -184,8 +184,30 @@ public sealed class World : IAnchorField
     /// Whichever set piece currently owns the camera, or null. Only ever one at a
     /// time: both monsters refuse to start one on a player who is already
     /// <see cref="PlayerTank.Captured"/>, so the two can never overlap.
+    ///
+    /// Only when it is happening to the craft the camera is <em>riding</em>. A monster can now
+    /// corner any seat, and the shake, roll and stain of being in a claw belong to the person
+    /// in it — throwing the whole room's view about because somebody across the map got
+    /// grabbed would be nonsense. Measured against <see cref="Eye"/> rather than
+    /// <see cref="Player"/> so a spectator watching a team-mate get taken rides it with them.
     /// </summary>
-    public ICinematicView? Cinematic => (ICinematicView?)Seizure ?? Digestion;
+    public ICinematicView? Cinematic
+        => Seizure is { } s && ReferenceEquals(s.Victim, Eye) ? s
+         : Digestion is { } d && ReferenceEquals(d.Victim, Eye) ? d
+         : null;
+
+    /// <summary>True when <paramref name="who"/> is the craft in the crab's claw right now —
+    /// the question every trigger has to ask before refusing to fire. It used to ask whether
+    /// <em>anybody</em> was held, which once a remote seat could be seized would have frozen
+    /// all twenty players' weapons because one of them was grabbed.</summary>
+    private bool HeldInClaw(PlayerTank who)
+        => Seizure is { Held: true } s && ReferenceEquals(s.Victim, who);
+
+    /// <summary>The digestion that has <paramref name="who"/> in its throat, or null. The
+    /// escape (three shots from inside) has to be credited to the craft actually inside the
+    /// mouth, not to whoever happens to pull a trigger while a digestion is running.</summary>
+    private MawDigestion? SwallowedIn(PlayerTank who)
+        => Digestion is { } d && ReferenceEquals(d.Victim, who) ? d : null;
 
     private readonly Projectile[] _projectiles;
 
@@ -1110,8 +1132,10 @@ public sealed class World : IAnchorField
         {
             // Inside the Maw-Core's throat every trigger is the same trigger: there is
             // nothing to lob a splash round at inside a mouth, so both buttons route to the
-            // one action that can save them. Only the craft actually being digested.
-            if (local && Digestion is { Held: true })
+            // one action that can save them. Only the craft actually being digested — which
+            // is no longer assumed to be this machine's own, since the mouth can now swallow
+            // any seat and the host runs the escape for whoever is in there.
+            if (SwallowedIn(who) is { Held: true })
             {
                 if (input.Fire || input.Grenade) FirePlayerShot(laser: false, by: who);
             }
@@ -1920,11 +1944,13 @@ public sealed class World : IAnchorField
     /// </summary>
     private const float BeamTickInterval = 0.35f;
 
-    private float _beamTick;
+    /// <summary>One bite clock per seat. Shared, the first craft the beam touched would soak
+    /// the tick and everyone else standing in the same shaft would be spared it.</summary>
+    private readonly float[] _beamTick = new float[MatchSettings.MaxSeats];
 
     /// <summary>
-    /// Applies the Crab-Core's beam to the player: while it is burning, anything
-    /// inside the shaft takes a bite every <see cref="BeamTickInterval"/>.
+    /// Applies the Crab-Core's beam to every craft standing in it: while it is burning,
+    /// anything inside the shaft takes a bite every <see cref="BeamTickInterval"/>.
     ///
     /// The test is a plain point-to-ray distance in 3D, which is exactly what the
     /// renderer draws — so what looks like standing in the light is standing in the
@@ -1938,7 +1964,7 @@ public sealed class World : IAnchorField
         {
             // Reset between shots so stepping into a fresh beam bites immediately
             // rather than on whatever was left of the last one's clock.
-            _beamTick = 0f;
+            Array.Clear(_beamTick);
             return;
         }
 
@@ -1950,24 +1976,37 @@ public sealed class World : IAnchorField
         CutStructuresAlong(boss.BeamOrigin, boss.BeamDirection, CrabCore.BeamLength,
             CrabCore.BeamRadius, CrabBeamStructureRate * dt);
 
-        // Measure the player against the boss's nearest image across the torus, so a
-        // beam fired near the world's edge still burns the craft standing just over it.
-        Vector2 nearPlayer = Torus.NearestImage(Player.Position, boss.Position);
-        var target = new Vector3(nearPlayer.X, Player.Height + 1f, nearPlayer.Y);
         Vector3 from = boss.BeamOrigin;
         Vector3 dir = boss.BeamDirection;
 
-        // Distance from the craft to the beam's axis, clamped to the shaft's own
-        // length so the ray doesn't reach backwards out of the emitter.
-        float along = Math.Clamp(Vector3.Dot(target - from, dir), 0f, CrabCore.BeamLength);
-        float miss = Vector3.Distance(target, from + dir * along);
+        // Every craft the shaft passes through, not just the one at this keyboard. A beam is
+        // a line burning across the world and anybody standing in it should be burning too —
+        // measured against seat 0 alone, nineteen other players could walk straight down the
+        // middle of it and feel nothing. The tick clock is per seat for the same reason the
+        // bloom's is: one shared countdown means the first player the beam touches soaks the
+        // damage and everyone behind them is spared until it comes round again.
+        for (int seat = 0; seat < Players.Count; seat++)
+        {
+            PlayerTank mark = Players[seat];
+            _beamTick[seat] -= dt;
+            if (mark.Away || !mark.Alive) continue;
 
-        _beamTick -= dt;
-        if (miss > CrabCore.BeamRadius + PlayerTank.Radius) return;
-        if (_beamTick > 0f) return;
+            // Measure the craft against the boss's nearest image across the torus, so a
+            // beam fired near the world's edge still burns the craft standing just over it.
+            Vector2 near = Torus.NearestImage(mark.Position, boss.Position);
+            var target = new Vector3(near.X, mark.Height + 1f, near.Y);
 
-        _beamTick = BeamTickInterval;
-        DamagePlayer(BeamDamage);
+            // Distance from the craft to the beam's axis, clamped to the shaft's own
+            // length so the ray doesn't reach backwards out of the emitter.
+            float along = Math.Clamp(Vector3.Dot(target - from, dir), 0f, CrabCore.BeamLength);
+            float miss = Vector3.Distance(target, from + dir * along);
+
+            if (miss > CrabCore.BeamRadius + PlayerTank.Radius) continue;
+            if (_beamTick[seat] > 0f) continue;
+
+            _beamTick[seat] = BeamTickInterval;
+            DamagePlayer(BeamDamage, mark);
+        }
     }
 
     /// <summary>
@@ -1984,15 +2023,16 @@ public sealed class World : IAnchorField
     {
         if (Seizure is { } active)
         {
+            PlayerTank caught = active.Victim;
             switch (active.Update(dt))
             {
                 case CrabSeizure.Event.Struck:
-                    DamagePlayer(CrabSeizure.StrikeDamage);
+                    DamagePlayer(CrabSeizure.StrikeDamage, caught);
                     break;
                 case CrabSeizure.Event.Landed:
                     // A fraction of the shield's maximum, so the landing costs the
                     // same whatever state the player was in when they were caught.
-                    DamagePlayer(Player.MaxShield * CrabSeizure.LandingDamageFraction);
+                    DamagePlayer(caught.MaxShield * CrabSeizure.LandingDamageFraction, caught);
                     break;
             }
 
@@ -2000,8 +2040,24 @@ public sealed class World : IAnchorField
             return;
         }
 
-        if (Boss is { } boss && CrabSeizure.CanSeize(boss, Player))
-            Seizure = new CrabSeizure(boss, Player);
+        // Whoever it has actually cornered — not "the player", which on a host meant seat 0
+        // and on nineteen other machines meant nobody at all. Until this, a client could
+        // stand in a Crab-Core's arms indefinitely and never be picked up: the boss walked
+        // over, the protocol ran, and the grab test was asked about somebody else entirely.
+        //
+        // Still one seizure at a time, because the boss has one grip. The nearest eligible
+        // craft wins it, so a crab surrounded takes whoever is actually in reach.
+        if (Boss is not { } boss) return;
+        PlayerTank? prey = null;
+        float best = float.MaxValue;
+        foreach (var mark in Players)
+        {
+            if (mark.Away || !mark.Alive) continue;
+            if (!CrabSeizure.CanSeize(boss, mark)) continue;
+            float d = Torus.DistanceSquared(mark.Position, boss.Position);
+            if (d < best) { best = d; prey = mark; }
+        }
+        if (prey != null) Seizure = new CrabSeizure(boss, prey);
     }
 
     // --- The Maw-Core ---------------------------------------------------------
@@ -2082,25 +2138,32 @@ public sealed class World : IAnchorField
     /// </summary>
     private void UpdateMawLasers(MawCore maw)
     {
-        // Nothing can touch a player inside a set piece; they cannot act, so they
-        // must not be shot at by anything else either.
-        if (Player.Captured) return;
-
-        // The lasers live in absolute coordinates around the maw; measure the craft
-        // against the maw's nearest image so a bolt still bites a player just over the
-        // seam from it.
-        Vector2 nearPlayer = Torus.NearestImage(Player.Position, maw.Position);
-        var craft = new Vector3(nearPlayer.X, Player.Height + 1f, nearPlayer.Y);
         float reach = MawCore.LaserRadius + PlayerTank.Radius;
-
         var lasers = maw.Lasers;
+
+        // Every craft, not only seat 0 — a mouth hanging over a fight was firing exclusively
+        // at whoever happened to be hosting it. One bolt still bites once: the first craft it
+        // reaches spends it, so a burst cannot rake a line of players.
         for (int i = 0; i < lasers.Length; i++)
         {
             if (!lasers[i].Active) continue;
-            if (Vector3.DistanceSquared(lasers[i].Position, craft) > reach * reach) continue;
+            foreach (var mark in Players)
+            {
+                // Nothing can touch a player inside a set piece; they cannot act, so they
+                // must not be shot at by anything else either.
+                if (mark.Captured || mark.Away || !mark.Alive) continue;
 
-            maw.ConsumeLaser(i);      // one bolt, one bite
-            DamagePlayer(MawLaserDamage);
+                // The lasers live in absolute coordinates around the maw; measure the craft
+                // against the maw's nearest image so a bolt still bites a player just over
+                // the seam from it.
+                Vector2 near = Torus.NearestImage(mark.Position, maw.Position);
+                var craft = new Vector3(near.X, mark.Height + 1f, near.Y);
+                if (Vector3.DistanceSquared(lasers[i].Position, craft) > reach * reach) continue;
+
+                maw.ConsumeLaser(i);      // one bolt, one bite
+                DamagePlayer(MawLaserDamage, mark);
+                break;
+            }
         }
     }
 
@@ -2113,15 +2176,16 @@ public sealed class World : IAnchorField
     {
         if (Digestion is { } active)
         {
+            PlayerTank eaten = active.Victim;
             switch (active.Update(dt))
             {
                 case MawDigestion.Event.Bitten:
                     // A fraction of the maximum, so being eaten costs the same share
                     // of a life whatever state the player was caught in.
-                    DamagePlayer(Player.MaxShield * MawDigestion.BiteFraction);
+                    DamagePlayer(eaten.MaxShield * MawDigestion.BiteFraction, eaten);
                     break;
                 case MawDigestion.Event.Landed:
-                    DamagePlayer(Player.MaxShield * MawDigestion.LandingFraction);
+                    DamagePlayer(eaten.MaxShield * MawDigestion.LandingFraction, eaten);
                     break;
             }
 
@@ -2129,8 +2193,19 @@ public sealed class World : IAnchorField
             return;
         }
 
-        if (Maw is { } maw && MawDigestion.CanSwallow(maw, Player))
-            Digestion = new MawDigestion(maw, Player);
+        // Whoever is standing under it — same story as the crab's claw above: the mouth has
+        // one throat, but which craft ends up in it was decided by asking about seat 0.
+        if (Maw is not { } maw) return;
+        PlayerTank? meal = null;
+        float best = float.MaxValue;
+        foreach (var mark in Players)
+        {
+            if (mark.Away || !mark.Alive) continue;
+            if (!MawDigestion.CanSwallow(maw, mark)) continue;
+            float d = Torus.DistanceSquared(mark.Position, maw.Position);
+            if (d < best) { best = d; meal = mark; }
+        }
+        if (meal != null) Digestion = new MawDigestion(maw, meal);
     }
 
     /// <summary>
@@ -2170,6 +2245,24 @@ public sealed class World : IAnchorField
     /// self-test can drive a swallow end to end against a real world rather than
     /// against the entity in isolation.</summary>
     public void AttachMawForTest(MawCore maw) => Maw = maw;
+
+    /// <summary>Test hatch: raises a Maw-Core at a named spot rather than in front of the
+    /// local craft — which is the only way to ask whether it can reach a seat that is not
+    /// this machine's own.</summary>
+    public void SpawnMawAt(Vector2 at) => Maw = new MawCore(Torus.Wrap(at));
+
+    /// <summary>Test hatch: the Crab-Core equivalent of <see cref="SpawnMawAt"/>.</summary>
+    public void SpawnCrabAt(Vector2 at) => Boss = new CrabCore(Torus.Wrap(at));
+
+    /// <summary>Test hatch: bursts a mortar shell at a named spot, so the splash can be
+    /// asked who it actually bills without flying a round there first.</summary>
+    public void DetonateMortarForTest(Vector2 at)
+    {
+        var shell = new Projectile();
+        shell.FireGrenade(Torus.Wrap(at), new Vector2(0f, 1f), Projectile.NoOwner);
+        shell.Position = Torus.Wrap(at);
+        DetonateMortar(shell);
+    }
 
     /// <summary>
     /// The horizon spawn director: on independent timers, rolls to raise a new hunter,
@@ -2571,12 +2664,12 @@ public sealed class World : IAnchorField
         // now cools while captured (so the Maw's escape can work), which without this
         // would let a seized player plink bolts out of the crab's claw all through the
         // scream.
-        if (Seizure is { Held: true }) return;
+        if (HeldInClaw(who)) return;
 
         if (!who.TryFire(out Vector2 origin, out Vector2 dir, out float launchHeight))
             return;
 
-        if (Digestion is { } digestion && digestion.Held)
+        if (SwallowedIn(who) is { Held: true } digestion)
         {
             digestion.RegisterShot();
             Audio.PlayDetonation();
@@ -2644,7 +2737,7 @@ public sealed class World : IAnchorField
     public void FirePlayerSlug(PlayerTank? by = null)
     {
         PlayerTank who = by ?? Player;
-        if (Seizure is { Held: true }) return;
+        if (HeldInClaw(who)) return;
         if (!who.TryFireSlug(out Vector2 origin, out Vector2 dir, out float launchHeight)) return;
         SpawnProjectile(origin, dir, owner: Seat(who), launchHeight: launchHeight,
             pitch: who.GunElevation, piercing: true);
@@ -2877,16 +2970,24 @@ public sealed class World : IAnchorField
         Debris.Burst(at, Palette.EliteFill, elite: true);
         Emit(Cue.RocketBlast, p.Position);
 
-        // Dropped too close and caught in your own burst: it bites, and the hull feels it.
-        float range = Torus.Distance(p.Position, Player.Position);
-        if (range < p.SplashRadius + PlayerTank.Radius)
+        // Dropped too close and caught in the burst: it bites, and the hull feels it. Every
+        // craft near the impact, not only seat 0 — a mortar is a splash weapon and standing in
+        // one's radius should cost you whoever you are. (The view kick stays this machine's
+        // own: a client shakes its own camera from the Effect the host sends it.)
+        foreach (var mark in Players)
         {
-            DamagePlayer(GrenadeDamage);
-            Player.Jolt(0.4f);
-        }
-        else if (range < RocketShakeRange)
-        {
-            Player.Jolt(0.25f * (1f - range / RocketShakeRange));
+            if (mark.Away || !mark.Alive) continue;
+            float range = Torus.Distance(p.Position, mark.Position);
+            bool local = ReferenceEquals(mark, Eye);
+            if (range < p.SplashRadius + PlayerTank.Radius)
+            {
+                DamagePlayer(GrenadeDamage, mark);
+                if (local) mark.Jolt(0.4f);
+            }
+            else if (local && range < RocketShakeRange)
+            {
+                mark.Jolt(0.25f * (1f - range / RocketShakeRange));
+            }
         }
     }
 
@@ -2914,7 +3015,7 @@ public sealed class World : IAnchorField
         // hands are empty. A wound-up meter is stowed rather than fired into a claw, and
         // whatever was being carried is dropped — the boss is about to pick the player up,
         // and it is not picking up two of them.
-        if (Seizure is { Held: true })
+        if (HeldInClaw(who))
         {
             spider.Cancel();
             ReleaseHeldBody(claw);
@@ -4031,10 +4132,10 @@ public sealed class World : IAnchorField
     {
         // Null is the craft this machine is driving — what every caller before seats meant.
         PlayerTank who = by ?? Player;
-        if (Seizure is { Held: true }) return;
+        if (HeldInClaw(who)) return;
         if (!who.TryFireRifle(out Vector3 origin, out Vector3 dir)) return;
 
-        if (Digestion is { } digestion && digestion.Held)
+        if (SwallowedIn(who) is { Held: true } digestion)
         {
             digestion.RegisterShot();
             Audio.PlayRifleShot();
@@ -4070,7 +4171,7 @@ public sealed class World : IAnchorField
     {
         // Null is the craft this machine is driving — what every caller before seats meant.
         PlayerTank who = by ?? Player;
-        if (Seizure is { Held: true } || Digestion is { Held: true }) return;
+        if (HeldInClaw(who) || SwallowedIn(who) is { Held: true }) return;
         if (!who.TryFireRocket(out Vector3 origin, out Vector3 dir)) return;
 
         SpawnDirected(origin, dir, Projectile.RocketSpeed, rocket: true, owner: Seat(who));
@@ -5070,12 +5171,12 @@ public sealed class World : IAnchorField
     {
         // Null is the craft this machine is driving — what every caller before seats meant.
         PlayerTank who = by ?? Player;
-        if (Seizure is { Held: true }) return;
+        if (HeldInClaw(who)) return;
         if (!who.TryFireSpit(out Vector3 origin, out Vector3 dir)) return;
 
         // Inside the Maw-Core's throat every trigger is the escape trigger, exactly as it
         // is on every other chassis: there is nothing to aim at in a mouth.
-        if (Digestion is { } digestion && digestion.Held)
+        if (SwallowedIn(who) is { Held: true } digestion)
         {
             digestion.RegisterShot();
             Audio.PlayFishSpit();
@@ -5369,12 +5470,12 @@ public sealed class World : IAnchorField
     {
         // Null is the craft this machine is driving — what every caller before seats meant.
         PlayerTank who = by ?? Player;
-        if (Seizure is { Held: true }) return;
+        if (HeldInClaw(who)) return;
         if (!who.TryFireVirus(out Vector3 origin, out Vector3 dir)) return;
 
         // Inside the Maw-Core's throat every trigger is the escape trigger — there is
         // nothing to aim at in a mouth.
-        if (Digestion is { } digestion && digestion.Held)
+        if (SwallowedIn(who) is { Held: true } digestion)
         {
             digestion.RegisterShot();
             Audio.PlayLaser();
@@ -5408,7 +5509,7 @@ public sealed class World : IAnchorField
     /// </summary>
     private void FireVirusLance(VirusRig mote, PlayerTank who)
     {
-        if (Seizure is { Held: true } || Digestion is { Held: true }) return;
+        if (HeldInClaw(who) || SwallowedIn(who) is { Held: true }) return;
         if (!mote.TryLance()) return;
 
         bool voice = who == Player;
@@ -5766,17 +5867,23 @@ public sealed class World : IAnchorField
         Debris.Burst(at, Palette.EliteFill, elite: true);
         Emit(Cue.RocketBlast, p.Position);
 
-        // The pressure ripple: everything nearby is thrown about, the player included.
+        // The pressure ripple: everything nearby is thrown about, every player included.
         // A rocket fired at a wall you are swinging toward should be felt through the
-        // camera, not merely heard.
-        float range = Torus.Distance(p.Position, Player.Position);
-        if (Player.Rig is { } rig && range < RocketShakeRange)
+        // camera, not merely heard — and it should sting whoever is standing in it, which
+        // asked about seat 0 meant a soldier could rocket their own feet in perfect safety
+        // on every machine but the host's.
+        foreach (var mark in Players)
         {
-            rig.Jolt(0.35f + 0.65f * (1f - range / RocketShakeRange));
-            // And it stings if the player is genuinely inside their own blast, which a
-            // contact fuse on a fast approach makes entirely possible.
+            if (mark.Away || !mark.Alive) continue;
+            float range = Torus.Distance(p.Position, mark.Position);
+            if (range >= RocketShakeRange) continue;
+            // The kick is a camera effect and belongs to the eye behind it.
+            if (mark.Rig is { } rig && ReferenceEquals(mark, Eye))
+                rig.Jolt(0.35f + 0.65f * (1f - range / RocketShakeRange));
+            // And it stings if they are genuinely inside the blast, which a contact fuse on
+            // a fast approach makes entirely possible.
             if (range < Projectile.RocketSplash + PlayerTank.Radius)
-                DamagePlayer(GrenadeDamage * 3f);
+                DamagePlayer(GrenadeDamage * 3f, mark);
         }
     }
 

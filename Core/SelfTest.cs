@@ -183,6 +183,7 @@ public static class SelfTest
         // Everything above this line was written against a host and one client, which is the
         // one shape of session that was never actually broken.
         failures += Check("five players all see each other as the craft they picked", EveryoneSeesEveryChassis);
+        failures += Check("a craft owns its build, so nobody is redrawn as somebody else", CraftBuildIsNotShared);
         failures += Check("a hello sent into a socket that isn't up yet is repeated", HelloSurvivesADeadSocket);
         failures += Check("one player leaving does not end everybody else's match", AHostOutlivesItsPlayers);
         failures += Check("a seat given up in the lobby is handed to the next joiner", AbandonedSeatsAreReused);
@@ -190,6 +191,14 @@ public static class SelfTest
         failures += Check("somebody who joins a running match still picks their craft", LateJoinerPicksTheirChassis);
         failures += Check("a player who arrives after LAUNCH is still named on every screen", NamesReachEveryoneAfterLaunch);
         failures += Check("a rules change reaches the seat count clients grow by", RulesReachTheClientsWorld);
+
+        // --- The monsters can reach anybody, not just seat 0 ----------------------
+        failures += Check("the crab's beam burns whoever is standing in it", BeamBurnsEverySeat);
+        failures += Check("the crab seizes whoever it corners, not only the host", SeizureTakesEverySeat);
+        failures += Check("the maw swallows whoever stands under it", MawSwallowsEverySeat);
+        failures += Check("the maw's lasers bite every craft they reach", MawLasersBiteEverySeat);
+        failures += Check("one player being seized does not disarm the rest", ASeizedMateDoesNotFreezeTheRoom);
+        failures += Check("a splash round bites whoever is standing in it", SplashBitesEverySeat);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -6043,6 +6052,170 @@ public static class SelfTest
         world.Player.Heading = MathF.Atan2(to.X, to.Y);
     }
 
+    // --- The monsters can reach anybody, not just seat 0 --------------------------
+    //
+    // Every one of these was broken the same way and for the same reason: the boss attacks
+    // were written when `World.Player` meant "the player, there is only one", and they were
+    // never converted. On a host that is seat 0 — itself — so in a five-player match the
+    // Crab-Core's beam, its claw, the Maw-Core's lasers and its throat could only ever touch
+    // the person hosting. Everyone else walked through a firing boss untouched.
+
+    /// <summary>Two seats, and the world stepped without any input. Seat 0 is the local one,
+    /// as it is on a host.</summary>
+    private static World.World TwoSeatWorld()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.AddPlayer(new Loadout { Class = PlayerClass.Tank });
+        world.LocalIndex = 0;
+        // Opposite corners, not opposite edges — the torus wraps at 400, so (-150,0) and
+        // (150,0) are a hundred units apart the short way round rather than three hundred.
+        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
+        world.Players[1].Position = Torus.Wrap(new Vector2(195f, 195f));
+        return world;
+    }
+
+    private static string? BeamBurnsEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+
+        // Raise the boss beside the mate, far from the host, and let it run its protocol
+        // until it fires. The beam locks its direction at the craft it aimed at.
+        world.SpawnCrabAt(Torus.Wrap(mate.Position + new Vector2(18f, 0f)));
+        if (world.Boss is null) return "no boss was raised";
+
+        float before = mate.Shield;
+        float hostBefore = world.Players[0].Shield;
+        for (int i = 0; i < 60 * 30 && mate.Shield >= before; i++) StepWithoutInput(world);
+
+        if (mate.Shield >= before)
+            return "a Crab-Core stood next to a player for thirty seconds and never hurt them";
+        if (world.Players[0].Shield < hostBefore)
+            return "the boss hurt the host, who was on the far side of the world";
+        return null;
+    }
+
+    private static string? SeizureTakesEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+        world.SpawnCrabAt(Torus.Wrap(mate.Position + new Vector2(6f, 0f)));
+        if (world.Boss is null) return "no boss was raised";
+
+        for (int i = 0; i < 60 * 40 && world.Seizure is null; i++) StepWithoutInput(world);
+
+        if (world.Seizure is not { } grab)
+            return "a Crab-Core cornered a player for forty seconds and never picked them up";
+        if (!ReferenceEquals(grab.Victim, mate))
+            return "the boss grabbed the host, who was on the far side of the world";
+        if (!mate.Captured) return "the seized craft was never marked captured";
+        // And the camera effect belongs to the person in the claw, not to everyone.
+        if (world.Cinematic != null)
+            return "a team-mate's seizure took over the local player's camera";
+        return null;
+    }
+
+    private static string? MawSwallowsEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+        world.SpawnMawAt(Torus.Wrap(mate.Position));
+        if (world.Maw is null) return "no maw was raised";
+
+        for (int i = 0; i < 60 * 40 && world.Digestion is null; i++) StepWithoutInput(world);
+
+        if (world.Digestion is not { } meal)
+            return "a Maw-Core hung over a still player for forty seconds and never ate them";
+        if (!ReferenceEquals(meal.Victim, mate))
+            return "the mouth swallowed the host, who was on the far side of the world";
+        if (world.Cinematic != null)
+            return "a team-mate's digestion took over the local player's camera";
+        return null;
+    }
+
+    private static string? MawLasersBiteEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+        // Off to one side, so the mouth shoots at them rather than swallowing them: a
+        // digestion would mask whether the lasers themselves ever reach a remote seat.
+        mate.Position = Torus.Wrap(new Vector2(195f, 175f));
+        world.SpawnMawAt(Torus.Wrap(new Vector2(195f, 195f)));
+        if (world.Maw is null) return "no maw was raised";
+
+        float before = mate.Shield;
+        PlayerTank host = world.Players[0];
+        float hostBefore = host.Shield;
+
+        // The mouth decides for itself whether to shoot or lunge, and both are the same
+        // question here — does it engage a seat that is not this machine's? So the run ends
+        // as soon as it does either, and the assertion is that the thing it reached was the
+        // mate. Written this way rather than waiting only on laser damage, which the AI can
+        // pre-empt with a swallow and leave the check passing without having tested anything.
+        bool reached = false;
+        for (int i = 0; i < 60 * 40 && !reached; i++)
+        {
+            StepWithoutInput(world);
+            reached = mate.Shield < before || world.Digestion != null;
+        }
+
+        if (!reached)
+            return "a Maw-Core hung over a player for forty seconds and never engaged them";
+        if (world.Digestion is { } d && !ReferenceEquals(d.Victim, mate))
+            return "the mouth reached past the nearby player to swallow the distant host";
+        if (host.Shield < hostBefore)
+            return "the mouth hurt the host, who was on the far side of the world";
+        return null;
+    }
+
+    /// <summary>
+    /// The other half of making a seizure reach any seat: everything that used to freeze "the
+    /// player" while a cinematic ran asked whether <em>anybody</em> was held. Left that way,
+    /// one player getting grabbed would have locked all twenty players' triggers.
+    /// </summary>
+    private static string? ASeizedMateDoesNotFreezeTheRoom()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank host = world.Players[0];
+        PlayerTank mate = world.Players[1];
+        world.SpawnCrabAt(Torus.Wrap(mate.Position + new Vector2(6f, 0f)));
+        if (world.Boss is null) return "no boss was raised";
+
+        for (int i = 0; i < 60 * 40 && world.Seizure is null; i++) StepWithoutInput(world);
+        if (world.Seizure is not { } grab) return "the boss never grabbed anybody";
+        if (!ReferenceEquals(grab.Victim, mate)) return "the boss grabbed the wrong seat";
+
+        // The host is nowhere near it and must be able to fight normally.
+        int ammo = host.Ammo;
+        world.FirePlayerShot(laser: false, by: host);
+        if (host.Ammo == ammo)
+            return "a team-mate being seized froze the trigger of a player across the world";
+
+        bool anyRound = false;
+        foreach (var p in world.Projectiles) if (p.Active && p.Owner == 0) anyRound = true;
+        if (!anyRound) return "the shot cost ammo but no round left the barrel";
+        return null;
+    }
+
+    private static string? SplashBitesEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+        // Stand the two craft together, then lob a mortar onto them. Both should feel it;
+        // measured against seat 0 alone, the mate stood in the fireball unharmed.
+        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
+        mate.Position = Torus.Wrap(new Vector2(1.5f, 0f));
+
+        float mateBefore = mate.Shield;
+        world.DetonateMortarForTest(mate.Position);
+
+        if (mate.Shield >= mateBefore)
+            return "a mortar burst on a player's head and they did not feel it";
+        return null;
+    }
+
     // --- A room with more than two people in it -----------------------------------
     //
     // Every netcode test above this point drives a host and exactly one client, which is the
@@ -6250,6 +6423,58 @@ public static class SelfTest
                     return $"in the match, player {who} sees seat {seat} as " +
                            $"{w.Players[seat].Class}, not the {wants[seat]} they picked";
         }
+        return null;
+    }
+
+    /// <summary>
+    /// The renderer draws a craft from `PlayerTank.Build`, and every other check in this file
+    /// asserts `PlayerTank.Class`. While `Build` was the loop's own long-lived `Loadout` held
+    /// by reference — which is what `World`'s constructor handed seat 0 — those were two
+    /// different facts, and only the one nobody was looking at reached the screen.
+    ///
+    /// The shape of the bug: a client's seat 0 is the HOST. It is built from the client's own
+    /// loadout, and `ApplyPlayers` only rebuilds a seat when the class it is told differs from
+    /// the class it has. So whenever the host picked the chassis the client's craft happened to
+    /// already be (TANK, for anyone who had not been to the hangar), seat 0 was never rebuilt —
+    /// and then the launch path assigned the client's own pick straight into the object seat 0
+    /// was still pointing at. **Every client drew the host as its own chassis.**
+    /// </summary>
+    private static string? CraftBuildIsNotShared()
+    {
+        // The direct statement: a craft's build does not move when the loadout it was made
+        // from does.
+        var mine = new Loadout { Class = PlayerClass.Tank };
+        var craft = new PlayerTank(Vector2.Zero, 0f, mine);
+        mine.Class = PlayerClass.Fish;
+        if (craft.Build.Class != PlayerClass.Tank)
+            return $"editing a loadout turned an existing craft into a {craft.Build.Class}";
+        if (craft.Class != craft.Build.Class)
+            return "a craft's Class and the build the renderer draws it from disagree";
+
+        // And the same thing through the whole session, which is where it actually bit: the
+        // host takes the chassis the client's own craft already was, so seat 0 is never
+        // rebuilt from a snapshot — and the client then picks something else.
+        Session3Plus s = OpenRoom(1, new MatchSettings { MaxPlayers = 4, Revives = 2 });
+        s.Host.Room!.PickForTest(PlayerClass.Tank);      // the same class every craft starts as
+        s.All[1].Room!.PickForTest(PlayerClass.Fish);
+        s.Step(40);
+        s.Launch();
+        s.Step(240);
+
+        World.World cw = s.All[1].World;
+        if (!s.All[1].InMatch) return "the client never came in";
+        // Asserted on Build, because that is what DrawCraft reads.
+        if (cw.Players[0].Build.Class != PlayerClass.Tank)
+            return $"the client draws the host as a {cw.Players[0].Build.Class}, " +
+                   $"not the TANK the host chose";
+        if (cw.Players[1].Build.Class != PlayerClass.Fish)
+            return $"the client draws itself as a {cw.Players[1].Build.Class}, not its FISH";
+        // ...and the host's view of the client, for the mirror image of the same bug.
+        World.World hw = s.Host.World;
+        if (hw.Players[1].Build.Class != PlayerClass.Fish)
+            return $"the host draws the client as a {hw.Players[1].Build.Class}, not their FISH";
+        if (hw.Players[0].Build.Class != PlayerClass.Tank)
+            return $"the host draws itself as a {hw.Players[0].Build.Class}";
         return null;
     }
 

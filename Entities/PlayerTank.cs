@@ -185,10 +185,17 @@ public sealed class PlayerTank
     /// <summary>Which chassis the hangar sent out. Drives which trigger does what —
     /// see <see cref="World.World.Update"/> — and nothing about the physics, which are
     /// the same heavy momentum whatever you are piloting.</summary>
-    public PlayerClass Class { get; private set; } = PlayerClass.Tank;
+    ///
+    /// Derived from <see cref="Build"/> rather than copied out of it, so the chassis the sim
+    /// reasons about and the chassis the renderer draws are the same fact and cannot drift
+    /// apart. They did: this was a stored copy taken at construction while <c>Build</c> was a
+    /// shared, still-mutable object, so every check in the game (and every test) agreed on a
+    /// class that was not the one on screen.
+    public PlayerClass Class => Build.Class;
 
-    /// <summary>The hangar build this craft was made from — its chassis and its paint.
-    /// Read only from the outside, to draw another player's craft in third person.</summary>
+    /// <summary>The hangar build this craft was made from — its chassis and its paint. Read
+    /// only from the outside, to draw another player's craft in third person. Always this
+    /// craft's own copy; see the constructor.</summary>
     public Loadout Build { get; private set; } = new();
 
     /// <summary>
@@ -439,8 +446,14 @@ public sealed class PlayerTank
         // the local player, whose chassis is never on screen, but a second player's is, and
         // the renderer needs the class and the paint to know what to draw. See
         // EntityRenderer's third-person pass.
-        Build = loadout;
-        Class = loadout.Class;
+        //
+        // A COPY, emphatically. The loop keeps one long-lived Loadout for the player at this
+        // keyboard and goes on writing to it — the hangar paints it, and the multiplayer
+        // launch path assigns `Class` to it the moment the pod is used. Held by reference,
+        // seat 0 (which on a client is the HOST) was drawn from whatever that object last
+        // said, so every client rendered the host as its own chosen chassis. A craft's build
+        // is settled when the craft is built.
+        Build = loadout.Clone();
         MaxShield = loadout.MaxShield;
         MaxAmmo = loadout.MaxAmmo;
         _speedScale = loadout.SpeedScale;

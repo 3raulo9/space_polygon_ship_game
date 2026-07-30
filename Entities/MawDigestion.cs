@@ -181,6 +181,10 @@ public sealed class MawDigestion : ICinematicView
     /// <summary>True while the thing actually has the craft inside it.</summary>
     public bool Held => _stage is Stage.Swallow or Stage.Digest;
 
+    /// <summary>The craft in the throat — see <see cref="CrabSeizure.Victim"/> for why this
+    /// has to be asked for rather than assumed to be the local one.</summary>
+    public PlayerTank Victim => _player;
+
     // --- What the renderer reads (ICinematicView) -----------------------------
 
     public float Shake { get; private set; }
