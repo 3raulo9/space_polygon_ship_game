@@ -172,6 +172,12 @@ public static class SelfTest
         failures += Check("a spent player watches a living team-mate", SpentPlayerSpectatesASurvivor);
         failures += Check("cables and stolen lances cross to onlookers", RigsCrossTheWire);
         failures += Check("a laggy client's shot is scored where they saw it", LagCompensationRewindsTheTarget);
+        failures += Check("a remote player's cable leaves their own body", RigTriggersAreSeatAware);
+        failures += Check("a remote tank's smoke screen hides that tank", MachineKitsAreSeatAware);
+        failures += Check("the city is solid to every craft, not just this one", WallsAreSolidForEverySeat);
+        failures += Check("squads hunt whoever is nearest them", SquadsHuntEverySeat);
+        failures += Check("falling rubble crushes any player under it", CrushBillsEverySeat);
+        failures += Check("the field fills around every player, not just the host", SpawnsFollowEverySeat);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -5691,6 +5697,321 @@ public static class SelfTest
         world.SetSeatLag(1, 39);
         if (Torus.Distance(world.Rewound(mark.HitId, 1, mark.Position), mark.Position) > 0.01f)
             return "a rewind past the end of the history invented a position";
+        return null;
+    }
+
+    /// <summary>
+    /// The same class of bug the virus chain had, in the soldier and fish kits. The host runs
+    /// every seat's triggers, but the cable kit fired from <c>Player</c> — this machine's own
+    /// craft — so a remote player's hook left the <em>host's</em> hip, their gas jump kicked
+    /// dust up under the host, and their crosshair overwrote the host's own anchor bracket.
+    /// </summary>
+    private static string? RigTriggersAreSeatAware()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Soldier }) == null)   // seat 1
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        PlayerTank mate = world.Players[1];
+        if (mate.Soldier is not { } rig) return "the soldier seat has no rig";
+
+        // Stand them a long way from the host, facing a known way.
+        mate.Position = Torus.Wrap(new Vector2(120f, -40f));
+        mate.Heading = 0f;
+        mate.Height = 0f;
+
+        // A cable has to leave THEIR hip, not ours.
+        Vector3 muzzle = world.SoldierMuzzle(mate, right: true);
+        if (Torus.Distance(new Vector2(muzzle.X, muzzle.Z), mate.Position) > 2f)
+            return "a seat's cable muzzle is nowhere near that seat's body";
+        if (Torus.Distance(new Vector2(muzzle.X, muzzle.Z), world.Players[0].Position) < 20f)
+            return "a remote seat's cable muzzle sits on the host's own craft";
+
+        // Drive their hook from their own input frame, as the host does for a wire packet.
+        var fire = new InputFrame(Btn.E, Btn.E, Vector2.Zero);
+        world.SetInput(1, fire);
+        world.Update((float)Config.FixedDt, InputFrame.Empty);
+
+        if (!rig.Right.Out) return "the remote player's hook never left the launcher";
+        if (world.Players[0].Soldier is { Right.Out: true })
+            return "the remote player's press fired the host's own hook";
+
+        // And their aim must not have stolen this machine's crosshair readout, which is a
+        // fact about the one pair of eyes at this keyboard.
+        if (world.AnchorInSight != null)
+            return "a remote player's aim wrote the local crosshair's anchor bracket";
+        return null;
+    }
+
+    /// <summary>
+    /// The same leak again, in the last two kits: the TANK's dischargers and the SPIDER's
+    /// claw and legs. Both trigger functions took the acting seat, then called helpers that
+    /// read <c>Player</c> — so on the host a remote tank's smoke screen appeared around the
+    /// HOST's craft, a remote spider's throw flew off along the host's heading, and its
+    /// pounce launched the host up a wall.
+    /// </summary>
+    private static string? MachineKitsAreSeatAware()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Smoke.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)   // seat 1
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        PlayerTank host = world.Players[0];
+        PlayerTank mate = world.Players[1];
+        host.Position = Torus.Wrap(new Vector2(-90f, 0f));
+        mate.Position = Torus.Wrap(new Vector2(90f, 0f));
+        mate.Heading = 0f;
+
+        // Seat 1 vents its dischargers, from its own input frame as a wire packet would.
+        world.SetInput(1, new InputFrame(Btn.E, Btn.E, Vector2.Zero));
+        world.Update((float)Config.FixedDt, InputFrame.Empty);
+
+        if (world.Smoke.Count == 0) return "the remote tank's dischargers never fired";
+        foreach (var cloud in world.Smoke)
+        {
+            if (Torus.Distance(cloud.Position, mate.Position) > 12f)
+                return "the remote tank's screen was laid somewhere other than on that tank";
+            if (Torus.Distance(cloud.Position, host.Position) < 30f)
+                return "a remote tank's smoke screen was laid around the host's own craft";
+        }
+
+        // And the SPIDER's claw: the grab has to reach from ITS craft, not from the host's.
+        var spiderWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        spiderWorld.Enemies.Clear();
+        if (spiderWorld.AddPlayer(new Loadout { Class = PlayerClass.Spider }) == null)
+            return "the match refused a spider seat";
+        spiderWorld.LocalIndex = 0;
+
+        PlayerTank arachnid = spiderWorld.Players[1];
+        arachnid.Position = Torus.Wrap(new Vector2(90f, 0f));
+        spiderWorld.Players[0].Position = Torus.Wrap(new Vector2(-90f, 0f));
+
+        // A hunter in arm's reach of the SPIDER and nowhere near the host.
+        var prey = new EnemyTank(Torus.Wrap(arachnid.Position + new Vector2(2f, 0f)), elite: false);
+        spiderWorld.Enemies.Add(prey);
+
+        spiderWorld.SetInput(1, new InputFrame(Btn.Fire, Btn.Fire, Vector2.Zero));
+        spiderWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+
+        if (arachnid.Claw is not { Holding: true } claw)
+            return "the remote spider's claw never closed on a hunter in its own reach";
+        if (!ReferenceEquals(claw.Victim, prey))
+            return "the remote spider grabbed something other than the hunter beside it";
+
+        // And the TANK's ram, which read Player throughout — so on the host only the host's
+        // own hull could crush anything and a remote player drove through hunters untouched.
+        var ramWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        ramWorld.Enemies.Clear();
+        if (ramWorld.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a ramming seat";
+        ramWorld.LocalIndex = 0;
+        ramWorld.Players[0].Position = Torus.Wrap(new Vector2(-90f, 0f));
+
+        PlayerTank rammer = ramWorld.Players[1];
+        rammer.Position = Torus.Wrap(new Vector2(90f, 0f));
+        rammer.Heading = 0f;
+
+        // Wind the hull up to ramming speed under its own drive, then park a hunter on its nose.
+        var forward = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+        for (int i = 0; i < 120; i++)
+        {
+            ramWorld.SetInput(1, forward);
+            ramWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (rammer.DriveVelocity.Length() < rammer.RamThreshold)
+            return "the remote tank never reached ramming speed";
+
+        var run = new EnemyTank(Torus.Wrap(rammer.Position + rammer.Forward * 1.5f), elite: false);
+        float wasShield = run.Shield;
+        ramWorld.Enemies.Add(run);
+        ramWorld.SetInput(1, forward);
+        ramWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+
+        if (run.Alive && run.Shield >= wasShield)
+            return "a remote tank drove straight through a hunter without touching it";
+        return null;
+    }
+
+    // --- The rest of the sim, converted to seats ----------------------------------
+
+    /// <summary>
+    /// The wall pass ran on the local craft alone, so on the host every REMOTE player drove
+    /// clean through the city — and the host's own snapshots then placed them inside towers
+    /// on everybody's screen.
+    /// </summary>
+    private static string? WallsAreSolidForEverySeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        var tower = FirstTower(world);
+        if (tower == null) return "no tower to drive into";
+
+        // Park the host far away and shove seat 1 into the middle of a tower's footprint.
+        world.Players[0].Position = Torus.Wrap(tower.Position + new Vector2(150f, 0f));
+        PlayerTank mate = world.Players[1];
+        mate.Position = tower.Position;
+        mate.Height = 0f;
+
+        StepWithoutInput(world);
+
+        // It has to have been pushed clear of the footprint, whatever the footprint is.
+        if (Torus.Distance(mate.Position, tower.Position) < PlayerTank.Radius)
+            return "a remote craft was left standing inside a tower";
+        return null;
+    }
+
+    /// <summary>
+    /// Squads flew at <c>Player.Position</c> flat out, so on the host a squad only ever
+    /// hunted the host — nineteen other players could stand in the open and never be hunted,
+    /// shot at or bladed.
+    /// </summary>
+    private static string? SquadsHuntEverySeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        // Opposite corners of the torus, and a squad next to seat 1. Corners rather than
+        // opposite edges: the world wraps at 400, so (-150,0) and (150,0) are a hundred units
+        // apart the short way round, not three hundred.
+        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
+        PlayerTank mate = world.Players[1];
+        mate.Position = Torus.Wrap(new Vector2(195f, 195f));
+
+        // Raised well inside their own alert range of the mate and far outside it of the
+        // host, so "did they wake up?" is the whole question. A squad that only ever measures
+        // itself against the local seat sits on its tower and watches, forever.
+        world.SpawnSoldierSquad(Torus.Wrap(mate.Position + new Vector2(0f, 40f)));
+        if (world.Squads.Count == 0 || world.Soldiers.Count == 0) return "no squad was raised";
+
+        Vector2 startedAt = world.Soldiers[0].Position;
+        float toMate = Torus.Distance(startedAt, mate.Position);
+        float toHost = Torus.Distance(startedAt, world.Players[0].Position);
+        if (toMate > 120f) return $"the test raised the squad {toMate:0} from the mate, out of alert range";
+        if (toHost < 200f) return $"the test raised the squad only {toHost:0} from the host";
+
+        for (int i = 0; i < 60 * 10; i++) StepWithoutInput(world);
+        if (world.Squads.Count == 0) return "the squad was gone before it could be measured";
+
+        // Waking up at all is the thing: alertness is measured against whoever they decided
+        // their target is, and the only craft in range is the one that is not this machine's.
+        if (!world.Squads[0].Alerted)
+            return "a squad sat on its tower while a player stood in the open beside it";
+
+        // And they have to have actually come for them.
+        float now = float.MaxValue;
+        foreach (var s in world.Soldiers)
+            now = MathF.Min(now, Torus.Distance(s.Position, mate.Position));
+        if (now >= toMate)
+            return $"the squad never closed on the nearest player ({toMate:0} -> {now:0})";
+        return null;
+    }
+
+    /// <summary>Falling rubble billed the local craft alone — so the one thing the whole
+    /// destruction system exists for could only ever happen to one of the twenty people
+    /// standing under a collapse.</summary>
+    private static string? CrushBillsEverySeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        // A clear patch well away from the origin and from any tower's footprint, with the
+        // host nowhere near it — so nothing but the remote player can be billed.
+        var mark = new Vector2(30f, 12f);
+        world.Players[0].Position = Torus.Wrap(new Vector2(-150f, -150f));
+        PlayerTank mate = world.Players[1];
+        mate.Position = mark;
+        mate.Height = 0f;
+        float wasShield = mate.Shield;
+
+        // Steer one mass-bearing chunk straight down onto them at a section's speed — the
+        // exact moment a piece of a felled tower arrives on somebody underneath it. Driven
+        // directly rather than by felling a real building, so the test measures the billing
+        // and not the scatter of a particular tower's collapse.
+        world.Debris.Rubble(new Vector3(mark.X, 6f, mark.Y), Palette.StructureShell,
+            chunks: 8, scale: 2f);
+
+        var shards = world.Debris.Shards;
+        bool placed = false;
+        for (int i = 0; i < shards.Length; i++)
+        {
+            if (!shards[i].Active || shards[i].Mass <= 0f) continue;
+            shards[i].Position = new Vector3(mark.X, 1.5f, mark.Y);
+            shards[i].Velocity = new Vector3(0f, -14f, 0f);
+            placed = true;
+            break;
+        }
+        if (!placed) return "no mass-bearing rubble was spawned to test the crush";
+
+        StepWithoutInput(world);
+
+        if (mate.Shield >= wasShield && mate.Alive)
+            return "a section came down on a remote player and they walked away";
+        if (world.Players[0].Shield < world.Players[0].MaxShield)
+            return "the chunk billed the host, who was on the other side of the world";
+        return null;
+    }
+
+    /// <summary>The whole spawn director hung off <c>Player</c>, so the field was built
+    /// around the host and a client who drove away found an empty world.</summary>
+    private static string? SpawnsFollowEverySeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+        world.Enemies.Clear();
+        world.Pickups.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        // Two players as near to opposite corners of the torus as it has. The separation is
+        // chosen against the spawn ring deliberately: nothing dropped around the host can
+        // land within Near of the mate, so anything that does is unambiguously theirs. A
+        // plain "nearer to one than the other" test would be decided by the wrap.
+        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
+        PlayerTank mate = world.Players[1];
+        mate.Position = Torus.Wrap(new Vector2(195f, 195f));
+        const float Near = 130f;   // just past the ring's outer edge (SpawnMaxRange is 120)
+
+        // Counted rather than merely spotted: with the anchor rolled per spawn, roughly half
+        // of everything the director produces belongs to each player, so a healthy share near
+        // the mate is the signal. One stray sighting would not be — a hunter chases whoever
+        // is nearest it and could wander.
+        int mateSpawns = 0;
+        var seen = new HashSet<object>();
+        for (int i = 0; i < 60 * 90; i++)
+        {
+            StepWithoutInput(world);
+            // Score each thing once, at the moment it first appears, so a chaser that drifts
+            // across the map later cannot be mistaken for something that spawned there.
+            foreach (var e in world.Enemies)
+                if (seen.Add(e) && Torus.Distance(e.Position, mate.Position) < Near) mateSpawns++;
+            foreach (var pk in world.Pickups)
+                if (seen.Add(pk) && Torus.Distance(pk.Position, mate.Position) < Near) mateSpawns++;
+        }
+
+        if (mateSpawns < 3)
+            return $"ninety seconds of spawning put {mateSpawns} things near the second player";
         return null;
     }
 

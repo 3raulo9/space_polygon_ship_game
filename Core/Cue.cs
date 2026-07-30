@@ -29,6 +29,9 @@ public enum Cue : byte
     FishStrike,     // the FISH's lunge connecting
     FishImpact,     // the FISH meeting a wall / round
     FishBeach,      // the FISH meeting the seabed (param = how hard, 0..1)
+    FishCoil,       // the FISH winding a strike
+    TailBeat,       // one beat of the FISH's tail, swimming (param = starvation 0..1)
+    TailFlop,       // the same beat beached — a body flopping on the grid (param = starvation)
     MawSpit,        // one of the mouth's little lasers (dist)
 
     // Impacts and deaths.
@@ -57,6 +60,8 @@ public enum Cue : byte
     MawSwallow,     // the throat closing on a craft
     MawDive,        // the mouth dropping
     MawRelease,     // the jaw throwing a craft clear
+    MawTeeth,       // the teeth working over each other (dist)
+    MawCrystal,     // the crystal ringing (param = agitation 0..1; dist)
 
     // The SOLDIER's rig.
     GasJump,        // the gas kick of a jump (param = starvation 0..1)
@@ -81,7 +86,8 @@ public static class CueBank
     /// a small whole number (a leg index, a warning step). The wire packs it to one byte either
     /// way; this decides whether to scale it by 255 on the way through.</summary>
     public static bool IsFraction(Cue id)
-        => id is Cue.CoreHit or Cue.MawHurt or Cue.GasJump or Cue.FishBeach;
+        => id is Cue.CoreHit or Cue.MawHurt or Cue.GasJump or Cue.FishBeach
+              or Cue.TailBeat or Cue.TailFlop or Cue.MawCrystal;
 
     /// <summary>
     /// Whether only the host can ever raise this cue. Nearly every noise in the game is
@@ -109,6 +115,11 @@ public static class CueBank
             case Cue.FishStrike: Audio.PlayFishStrike(); break;
             case Cue.FishImpact: Audio.PlayFishImpact(); break;
             case Cue.FishBeach: Audio.PlayFishBeach(param); break;
+            case Cue.FishCoil: Audio.PlayFishCoil(); break;
+            // One clip with a flag rather than two cues would need a second parameter the
+            // wire does not carry, so the beached beat is simply its own id.
+            case Cue.TailBeat: Audio.PlayTailBeat(param, beached: false); break;
+            case Cue.TailFlop: Audio.PlayTailBeat(param, beached: true); break;
             case Cue.MawSpit: Audio.PlayMawSpit(distance); break;
 
             case Cue.Explosion: Audio.PlayExplosion(); break;
@@ -134,6 +145,8 @@ public static class CueBank
             case Cue.MawSwallow: Audio.PlayMawSwallow(); break;
             case Cue.MawDive: Audio.PlayMawDive(); break;
             case Cue.MawRelease: Audio.PlayMawRelease(); break;
+            case Cue.MawTeeth: Audio.PlayMawTeeth(distance); break;
+            case Cue.MawCrystal: Audio.PlayMawCrystal(distance, param); break;
 
             case Cue.GasJump: Audio.PlayGasJump(param); break;
             case Cue.CableFire: Audio.PlayCableFire(); break;

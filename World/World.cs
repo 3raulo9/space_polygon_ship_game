@@ -1836,14 +1836,30 @@ public sealed class World : IAnchorField
     /// </summary>
     private void ResolveStructureCollisions()
     {
-        if (Player.Captured) return;
+        // Every craft this machine is responsible for. The host owns all twenty, so all
+        // twenty are kept out of the walls; a client owns only its own prediction and lets
+        // the host settle everyone else. Before this the pass ran on the local craft alone,
+        // so on the host every REMOTE player drove clean through the city — and the host's
+        // own snapshots then placed them inside towers on everybody's screen.
+        for (int seat = 0; seat < Players.Count; seat++)
+        {
+            PlayerTank who = Players[seat];
+            if (who.Away) continue;
+            if (!Authoritative && seat != LocalIndex) continue;
+            ResolveStructureCollisionsFor(who);
+        }
+    }
+
+    private void ResolveStructureCollisionsFor(PlayerTank who)
+    {
+        if (who.Captured) return;
 
         // An exposed VIRUS mote passes straight through the city, and that is not a
         // convenience — it is the other half of being blind. A payload with no body cannot
         // see matter because it does not touch matter, and a player who has been told they
         // cannot see the walls must not then be stopped by them. Take a body and the world
         // becomes solid again in the same instant it becomes visible.
-        if (Player.Virus is { Exposed: true }) return;
+        if (who.Virus is { Exposed: true }) return;
 
         Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
 
@@ -1860,7 +1876,7 @@ public sealed class World : IAnchorField
             // pressed against the wall (see ResolveRoofs, which put it there a moment ago)
             // — so the test has to include its own height, or a SPIDER that has just
             // landed on a tower is immediately shoved off the side of it.
-            if (Player.Height >= s.BlockHeight) continue;
+            if (who.Height >= s.BlockHeight) continue;
 
             int n = s.Blockers(blockers);
             for (int b = 0; b < n; b++)
@@ -1870,7 +1886,7 @@ public sealed class World : IAnchorField
 
                 // Measured the short way round the torus, so a building sitting over the
                 // seam blocks the craft that has just wrapped past it.
-                Vector2 out_ = Torus.Delta(at, Player.Position);
+                Vector2 out_ = Torus.Delta(at, who.Position);
                 float distSq = out_.LengthSquared();
                 if (distSq >= reach * reach) continue;
 
@@ -1880,15 +1896,15 @@ public sealed class World : IAnchorField
                     ? out_ / MathF.Sqrt(distSq) * reach
                     : new Vector2(reach, 0f);
 
-                Player.Position = Torus.Wrap(at + push);
+                who.Position = Torus.Wrap(at + push);
 
                 // For a soldier this is not a scrape but a possible crash: meeting a wall
                 // at speed is the way this chassis dies, and the rig decides which of the
                 // two just happened from the momentum it was carrying. A fish threading a
                 // reef is the same bargain at a lower threshold — it has no armour and the
                 // whole run is spent at speed between buildings.
-                Player.Rig?.RegisterWallHit();
-                Player.Fish?.RegisterWallHit();
+                who.Rig?.RegisterWallHit();
+                who.Fish?.RegisterWallHit();
             }
         }
     }
@@ -2037,14 +2053,17 @@ public sealed class World : IAnchorField
             if (_mawTeethTimer <= 0f)
             {
                 _mawTeethTimer = MawTeethInterval;
-                Audio.PlayMawTeeth(dist);
+                // Through the cue channel, so the mouth is audible to everyone standing
+                // under it and not only to whoever happens to be hosting. The timers are the
+                // host's, which is exactly right — one mouth, one rhythm, heard by all.
+                Emit(Cue.MawTeeth, maw.Position);
             }
 
             _mawCrystalTimer -= dt;
             if (_mawCrystalTimer <= 0f)
             {
                 _mawCrystalTimer = MawCrystalInterval;
-                Audio.PlayMawCrystal(dist, maw.Agitation);
+                Emit(Cue.MawCrystal, maw.Position, maw.Agitation);
             }
         }
 
@@ -2406,22 +2425,67 @@ public sealed class World : IAnchorField
     /// player, so the capture harness can photograph the cinematic without timing a throw.</summary>
     public void StageCrabBlastAheadForTest() => StageCrabBlast(Player.Position + Player.Forward * 20f);
 
+    /// <summary>
+    /// A random fog-ring point around <em>somebody</em> — a living seat picked at random each
+    /// time, not always this machine's craft.
+    ///
+    /// This is what the whole spawn director hangs off, and while it read <c>Player</c> the
+    /// field was built entirely around the host: a client who drove away from them found an
+    /// empty world with nothing in it to fight, salvage or run from, however long they
+    /// roamed. Rolling the seat per spawn means the field fills around everyone over time
+    /// without any one player's neighbourhood being favoured.
+    /// </summary>
     private Vector2 RandomPointAroundPlayer(float minDist, float maxDist)
-        => PointAround(Player.Position, minDist, maxDist);
+        => PointAround(SpawnAnchor().Position, minDist, maxDist);
 
-    /// <summary>Drops the item farthest from the player from a list — used to make room
-    /// for a fresh spawn so a full field never blocks new arrivals.</summary>
+    /// <summary>The craft a fresh spawn is measured from. A living seat at random, falling
+    /// back to this machine's own when everybody is spent (or in a solo run, where it is the
+    /// only answer there has ever been).</summary>
+    private PlayerTank SpawnAnchor()
+    {
+        int alive = 0;
+        for (int i = 0; i < Players.Count; i++)
+            if (!Players[i].Away && Players[i].Alive) alive++;
+        if (alive == 0) return Players[LocalIndex];
+
+        int pick = Random.Shared.Next(alive);
+        for (int i = 0; i < Players.Count; i++)
+        {
+            if (Players[i].Away || !Players[i].Alive) continue;
+            if (pick-- == 0) return Players[i];
+        }
+        return Players[LocalIndex];
+    }
+
+    /// <summary>Drops the item farthest from everyone from a list — used to make room for a
+    /// fresh spawn so a full field never blocks new arrivals. Measured against the NEAREST
+    /// player rather than against this machine's craft, so a hunter parked in a team-mate's
+    /// face is never the one released to make room.</summary>
     private void RemoveFarthest<T>(List<T> list, Func<T, Vector2> posOf)
     {
         if (list.Count == 0) return;
         int farthest = 0;
-        float best = Torus.DistanceSquared(posOf(list[0]), Player.Position);
+        float best = DistanceToNearestPlayer(posOf(list[0]));
         for (int i = 1; i < list.Count; i++)
         {
-            float d = Torus.DistanceSquared(posOf(list[i]), Player.Position);
+            float d = DistanceToNearestPlayer(posOf(list[i]));
             if (d > best) { best = d; farthest = i; }
         }
         list.RemoveAt(farthest);
+    }
+
+    /// <summary>How far the nearest living craft is from a point, squared. The field's
+    /// measure of "out of play" once there is more than one player in it.</summary>
+    private float DistanceToNearestPlayer(Vector2 at)
+    {
+        float best = float.MaxValue;
+        for (int i = 0; i < Players.Count; i++)
+        {
+            if (Players[i].Away || !Players[i].Alive) continue;
+            best = MathF.Min(best, Torus.DistanceSquared(at, Players[i].Position));
+        }
+        return best == float.MaxValue
+            ? Torus.DistanceSquared(at, Players[LocalIndex].Position) : best;
     }
 
     private static Vector2 PointAround(Vector2 origin, float minDist, float maxDist)
@@ -2544,16 +2608,20 @@ public sealed class World : IAnchorField
         if (input.TankPlantPressed)
         {
             who.TogglePlant();
-            Audio.PlayClamp();   // the clank of the tracks locking, or letting go
+            // The clank of the tracks locking, or letting go. Through the cue channel like
+            // every other combat noise, so a team-mate digging in beside you is something
+            // you hear rather than something only their own machine knows about.
+            Emit(Cue.Clamp, who.Position, owner: Seat(who));
         }
 
         // The lurch: a Hyper-fed track-boost dodge in the drive direction. Refused while dug in.
         if (input.TankLurchPressed && who.TryLurch(input))
-            Audio.PlayGasJump(0f);   // borrow the soldier's kick — a hard gout of thrust
+            // Borrow the soldier's kick — a hard gout of thrust.
+            Emit(Cue.GasJump, who.Position, 0f, owner: Seat(who));
 
         // The dischargers: a screen of smoke to blind the field and break contact.
         if (input.TankSmokePressed && who.TryDeploySmoke())
-            DeploySmoke();
+            DeploySmoke(who);
 
         // The AP slug: a heavy piercing shot. Ahead of the cannon so holding fire and tapping
         // its key fires the slug rather than swallowing it under the ordinary round.
@@ -2583,13 +2651,15 @@ public sealed class World : IAnchorField
     }
 
     /// <summary>Lays a smoke screen off the dischargers: one bank on the hull and one just
-    /// behind it, so the murk is a wall to hide the whole craft rather than a puff beside it.</summary>
-    private void DeploySmoke()
+    /// behind it, so the murk is a wall to hide the whole craft rather than a puff beside it.
+    /// Off <paramref name="who"/>'s hull — the host runs this for every seat, and a remote
+    /// tank's screen used to appear around the host's own craft instead of theirs.</summary>
+    private void DeploySmoke(PlayerTank who)
     {
-        LaySmoke(Player.Position);
-        LaySmoke(Player.Position - Player.Forward * 6f);
-        Audio.PlayThrowWhoosh();
-        Debris.Burst(new Vector3(Player.Position.X, 1.2f, Player.Position.Y),
+        LaySmoke(who.Position);
+        LaySmoke(who.Position - who.Forward * 6f);
+        Emit(Cue.ThrowWhoosh, who.Position, owner: Seat(who));
+        Debris.Burst(new Vector3(who.Position.X, 1.2f, who.Position.Y),
             Palette.StructureShell, elite: false);
     }
 
@@ -2629,7 +2699,7 @@ public sealed class World : IAnchorField
     public bool DeploySmokeForTest()
     {
         if (!Player.TryDeploySmoke()) return false;
-        DeploySmoke();
+        DeploySmoke(Player);
         return true;
     }
 
@@ -2650,29 +2720,47 @@ public sealed class World : IAnchorField
     /// the contact line, and that separation (not a per-enemy timer) is what makes one slam one
     /// hit. Reads the velocity <see cref="PlayerTank"/> stashed on its own move this tick.
     /// </summary>
+    /// <remarks>
+    /// Every seat's hull, not just this machine's. A ram is a thing a driving craft does to
+    /// whatever is in front of it, and there are up to twenty of them driving — this used to
+    /// read <c>Player</c> throughout, so on the host only the host's own tank could ever
+    /// crush anything, and a remote player could drive through a hunter at full speed to no
+    /// effect whatsoever.
+    /// </remarks>
     private void UpdateRam()
     {
-        if (Player.Class != PlayerClass.Tank || Player.IsAirborne || Player.Captured) return;
+        for (int seat = 0; seat < Players.Count; seat++)
+        {
+            PlayerTank who = Players[seat];
+            if (who.Away) continue;
+            RamFor(who, seat);
+        }
+    }
 
-        float speed = Player.DriveVelocity.Length();
-        if (speed < Player.RamThreshold) return;
+    private void RamFor(PlayerTank who, int seat)
+    {
+        if (who.Class != PlayerClass.Tank || who.IsAirborne || who.Captured) return;
+
+        float speed = who.DriveVelocity.Length();
+        if (speed < who.RamThreshold) return;
 
         float reach = PlayerTank.Radius + EnemyTank.Radius;
-        float over = Math.Clamp((speed - Player.RamThreshold) / (PlayerTank.MaxSpeed * 0.9f), 0f, 1.5f);
+        float over = Math.Clamp((speed - who.RamThreshold) / (PlayerTank.MaxSpeed * 0.9f), 0f, 1.5f);
 
         foreach (var e in Enemies)
         {
             if (!e.Alive) continue;
-            if (!WithinHit(Player.Position, e.Position, reach)) continue;
+            if (!WithinHit(who.Position, e.Position, reach)) continue;
 
             DamageEnemy(e, RamDamage * (0.6f + over));
 
-            Vector2 push = Torus.Delta(Player.Position, e.Position);
-            push = push.LengthSquared() > 1e-4f ? Vector2.Normalize(push) : Player.Forward;
+            Vector2 push = Torus.Delta(who.Position, e.Position);
+            push = push.LengthSquared() > 1e-4f ? Vector2.Normalize(push) : who.Forward;
             e.Position = Torus.Wrap(e.Position + push * RamShove);
 
-            Player.Jolt(0.35f);
-            Audio.PlayDetonation();   // the crunch of the hull meeting a hull
+            who.Jolt(0.35f);
+            // The crunch of the hull meeting a hull.
+            Emit(Cue.Detonation, who.Position, owner: seat);
         }
 
         // A soldier who has been put on the grid is, for as long as that lasts, a person
@@ -2682,10 +2770,10 @@ public sealed class World : IAnchorField
         foreach (var s in Soldiers)
         {
             if (!s.Alive || s.Height > EnemySoldier.BodyHeight) continue;
-            if (!WithinHit(Player.Position, s.Position, personReach)) continue;
+            if (!WithinHit(who.Position, s.Position, personReach)) continue;
             DamageSoldier(s, RamDamage * (0.6f + over) * 2f);
-            Player.Jolt(0.2f);
-            Audio.PlayDetonation();
+            who.Jolt(0.2f);
+            Emit(Cue.Detonation, who.Position, owner: seat);
         }
     }
 
@@ -2818,6 +2906,9 @@ public sealed class World : IAnchorField
     private void UpdateSpiderTriggers(SpiderWeapon spider, float dt, in InputFrame input, PlayerTank who)
     {
         SpiderClaw claw = who.Claw!;
+        // The beds below belong to the listener, not to the craft: the host winds every
+        // seat's meter, and only the one at this keyboard is worth hearing.
+        bool local = ReferenceEquals(who, Players[LocalIndex]);
 
         // A cinematic has hold of the craft: nothing is charging, nothing is rooted, the
         // hands are empty. A wound-up meter is stowed rather than fired into a claw, and
@@ -2827,7 +2918,7 @@ public sealed class World : IAnchorField
         {
             spider.Cancel();
             ReleaseHeldBody(claw);
-            Audio.SetLanceCharge(false, 0f);
+            if (local) Audio.SetLanceCharge(false, 0f);
             who.Rooted = false;
             return;
         }
@@ -2838,7 +2929,7 @@ public sealed class World : IAnchorField
 
         // The legs. Off the triggers entirely, so a climb can be made with the hands full
         // or the meter half wound.
-        if (input.SpiderPouncePressed) TrySpiderPounce();
+        if (input.SpiderPouncePressed) TrySpiderPounce(who);
 
         // The right trigger: the lance. Refused outright while the claw is full, and that
         // is the whole relationship between the two — this chassis has one pair of front
@@ -2851,12 +2942,14 @@ public sealed class World : IAnchorField
             // it is getting nothing for.
             who.Rooted = spider.Charging;
             // The whine climbs with the meter, so the player can hear how loaded the
-            // shot is while they are busy watching the thing that is walking at them.
-            Audio.SetLanceCharge(spider.Charging, spider.ChargeFraction);
+            // shot is while they are busy watching the thing that is walking at them. A bed,
+            // so only ever the craft at this machine — the host winds every seat's meter and
+            // a remote player's charge must not whine in the host's ear.
+            if (local) Audio.SetLanceCharge(spider.Charging, spider.ChargeFraction);
             return;
         }
 
-        Audio.SetLanceCharge(false, 0f);
+        if (local) Audio.SetLanceCharge(false, 0f);
         who.Rooted = false;
 
         if (spider.Charging)
@@ -2865,7 +2958,7 @@ public sealed class World : IAnchorField
             return;
         }
 
-        UpdateSpiderClaw(claw, dt, input);
+        UpdateSpiderClaw(who, claw, dt, input);
     }
 
     // --- The claw ------------------------------------------------------------------
@@ -2885,37 +2978,39 @@ public sealed class World : IAnchorField
     /// While something is in the hand the same trigger is the hold: down squeezes, and the
     /// frame it comes up the body is thrown. Same grammar as the lance, one limb over.
     /// </summary>
-    private void UpdateSpiderClaw(SpiderClaw claw, float dt, in InputFrame input)
+    private void UpdateSpiderClaw(PlayerTank who, SpiderClaw claw, float dt, in InputFrame input)
     {
         if (claw.Holding)
         {
             if (!input.Fire)
             {
-                ThrowHeldBody(claw);
+                ThrowHeldBody(who, claw);
                 return;
             }
 
             // Carried out in front of the core, turned to face the way the player is —
             // which is what makes it cover as well as cargo (see ShieldsFrom, below).
-            Vector2 grip = Torus.Wrap(Player.Position + Player.Forward * SpiderClaw.HoldReach);
-            float lift = Player.Height + SpiderClaw.HoldHeight;
-            float bite = claw.Hold(dt, grip, lift, Player.Heading);
+            // In front of <paramref name="who"/>: the host runs this for every seat, and a
+            // remote spider used to carry its hostage out in front of the host's craft.
+            Vector2 grip = Torus.Wrap(who.Position + who.Forward * SpiderClaw.HoldReach);
+            float lift = who.Height + SpiderClaw.HoldHeight;
+            float bite = claw.Hold(dt, grip, lift, who.Heading);
             if (bite > 0f && claw.Victim is { } held) DamageEnemy(held, bite);
             return;
         }
 
         if (!input.Fire) return;
 
-        if (NearestGrabbable() is { } prey && claw.TryGrab(prey))
+        if (NearestGrabbable(who) is { } prey && claw.TryGrab(prey))
         {
             // The same brutal mechanical snap the boss's clamp display makes, now with
             // something else in it. The hull rocks as it takes the weight.
-            Audio.PlayClamp();
-            Player.Jolt(0.3f);
+            Emit(Cue.Clamp, who.Position, owner: Seat(who));
+            who.Jolt(0.3f);
             return;
         }
 
-        FirePlayerShot(laser: true);
+        FirePlayerShot(laser: true, by: who);
     }
 
     /// <summary>
@@ -2924,7 +3019,7 @@ public sealed class World : IAnchorField
     /// — a machine forty metres below a craft standing on a roof is not within arm's
     /// reach however good the planar distance looks.
     /// </summary>
-    private EnemyTank? NearestGrabbable()
+    private EnemyTank? NearestGrabbable(PlayerTank who)
     {
         EnemyTank? best = null;
         float bestSq = SpiderClaw.Reach * SpiderClaw.Reach;
@@ -2932,9 +3027,9 @@ public sealed class World : IAnchorField
         foreach (var e in Enemies)
         {
             if (!e.Alive || e.Grabbed || e.Flung) continue;
-            if (MathF.Abs(Player.Height - e.Height) > EnemyTank.BodyHeight) continue;
+            if (MathF.Abs(who.Height - e.Height) > EnemyTank.BodyHeight) continue;
 
-            float d = Torus.DistanceSquared(e.Position, Player.Position);
+            float d = Torus.DistanceSquared(e.Position, who.Position);
             if (d > bestSq) continue;
             bestSq = d;
             best = e;
@@ -2947,11 +3042,14 @@ public sealed class World : IAnchorField
     /// world's half of it. The body flies on its own from here (see
     /// <see cref="UpdateFlungBodies"/>); what happens here is only the launch.
     /// </summary>
-    private void ThrowHeldBody(SpiderClaw claw)
+    private void ThrowHeldBody(PlayerTank who, SpiderClaw claw)
     {
-        if (claw.Throw(Player.Forward3) is null) return;
-        Audio.PlayThrowWhoosh();
-        Player.Jolt(0.2f);
+        // Down <paramref name="who"/>'s look line. This read the local craft's heading, so on
+        // the host a remote player's throw flew off along whatever direction the host happened
+        // to be facing — a hostage hurled at nothing, from the thrower's point of view.
+        if (claw.Throw(who.Forward3) is null) return;
+        Emit(Cue.ThrowWhoosh, who.Position, owner: Seat(who));
+        who.Jolt(0.2f);
     }
 
     /// <summary>Opens the hand without throwing — a crushed catch, a cinematic, the
@@ -3009,7 +3107,8 @@ public sealed class World : IAnchorField
 
         Debris.Collapse(new Vector3(at.X, 0.6f, at.Y), Vector2.UnitX, 2f,
             body.IsElite ? Palette.EliteFill : Palette.EnemyFill, 1f);
-        Audio.PlayExplosionAt(Torus.Distance(at, Player.Position));
+        // A hull the size of a car meeting the grid, heard wherever anyone is standing.
+        Emit(Cue.ExplosionAt, at);
 
         // And the landing itself, which the thrown machine wears whether it hit anything
         // or not. Last, so a body that dies on impact bursts where it came down.
@@ -3029,7 +3128,10 @@ public sealed class World : IAnchorField
     /// the hunters on the grid and reaches things a shot from down there never will, and
     /// the class with six legs should be the one that can get up there.
     /// </summary>
-    private bool TrySpiderPounce()
+    /// <param name="who">The craft doing the climbing. This used to be the local player
+    /// unconditionally, so on the host a remote spider's kick was measured against the walls
+    /// near the <em>host's</em> craft and then launched the host up one of them.</param>
+    private bool TrySpiderPounce(PlayerTank who)
     {
         Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
 
@@ -3037,7 +3139,7 @@ public sealed class World : IAnchorField
         {
             // Above the parapet there is nothing left to push against — you are standing
             // on it, and what you want from there is the ordinary hop.
-            if (Player.Height >= s.BlockHeight) continue;
+            if (who.Height >= s.BlockHeight) continue;
 
             int n = s.Blockers(blockers);
             for (int b = 0; b < n; b++)
@@ -3045,16 +3147,16 @@ public sealed class World : IAnchorField
                 var (wall, radius) = blockers[b];
                 float reach = radius + PlayerTank.Radius + PlayerTank.PounceReach;
 
-                Vector2 out_ = Torus.Delta(wall, Player.Position);
+                Vector2 out_ = Torus.Delta(wall, who.Position);
                 float distSq = out_.LengthSquared();
                 if (distSq >= reach * reach) continue;
 
                 Vector2 outward = distSq > 1e-6f
                     ? out_ / MathF.Sqrt(distSq)
-                    : Player.Forward;
+                    : who.Forward;
 
-                if (!Player.TryPounce(outward)) return false;
-                Audio.PlayThrowWhoosh();
+                if (!who.TryPounce(outward)) return false;
+                Emit(Cue.ThrowWhoosh, who.Position, owner: Seat(who));
                 return true;
             }
         }
@@ -3080,9 +3182,23 @@ public sealed class World : IAnchorField
     /// </summary>
     private void ResolveRoofs()
     {
-        if (!Player.IsMachine || Player.Captured)
+        // Per seat, for the same reason the wall pass is: a remote SPIDER that pounced onto
+        // a tower used to have no roof under it at all and simply fell back to the grid on
+        // the one machine that decides where it really is.
+        for (int seat = 0; seat < Players.Count; seat++)
         {
-            Player.GroundHeight = 0f;
+            PlayerTank who = Players[seat];
+            if (who.Away) continue;
+            if (!Authoritative && seat != LocalIndex) continue;
+            ResolveRoofsFor(who);
+        }
+    }
+
+    private void ResolveRoofsFor(PlayerTank who)
+    {
+        if (!who.IsMachine || who.Captured)
+        {
+            who.GroundHeight = 0f;
             return;
         }
 
@@ -3092,7 +3208,7 @@ public sealed class World : IAnchorField
         foreach (var s in Structures)
         {
             if (s.Falling) continue;                       // no standing on something on its way down
-            if (Player.Height < s.BlockHeight - RoofSnap) continue;   // still down the side of it
+            if (who.Height < s.BlockHeight - RoofSnap) continue;   // still down the side of it
             if (s.BlockHeight <= roof) continue;
 
             int n = s.Blockers(blockers);
@@ -3102,18 +3218,18 @@ public sealed class World : IAnchorField
                 // Genuinely over the footprint, not merely brushing the parapet: measured
                 // against the block's own radius rather than that plus the craft's, so a
                 // hull hanging half off the edge falls, as it should.
-                if (Torus.Delta(at, Player.Position).LengthSquared() > radius * radius) continue;
+                if (Torus.Delta(at, who.Position).LengthSquared() > radius * radius) continue;
                 roof = s.BlockHeight;
                 break;
             }
         }
 
-        Player.GroundHeight = roof;
+        who.GroundHeight = roof;
 
         // Caught on the way down: put the craft on the surface this tick rather than a
         // frame later, so the wall pass below sees a hull that is standing on the roof
         // instead of one buried a few centimetres inside the top of a tower.
-        if (roof > 0f && Player.Height < roof) Player.Height = roof;
+        if (roof > 0f && who.Height < roof) who.Height = roof;
     }
 
     /// <summary>
@@ -3534,21 +3650,30 @@ public sealed class World : IAnchorField
         Vector3 eye = who.Eye;
         Vector3 look = who.Forward3;
 
-        AnchorInSight = TryFindAnchor(eye, look, out Vector3 at, out Structure? holding)
-            ? at : null;
-        AnchorIsWeak = AnchorInSight != null && holding is { } h && h.Scale < SoldierRig.WeakScale;
+        bool found = TryFindAnchor(eye, look, out Vector3 at, out Structure? holding);
+
+        // The crosshair's answer is a HUD readout, and this machine has one crosshair. The
+        // host runs this for every seat, so writing the world's fields from a remote player's
+        // aim would put somebody else's anchor bracket on our screen — and, worse, hand our
+        // own hook their anchor when we fired (the hook used to read the field rather than
+        // the cast, which is exactly that bug). The cast is passed through explicitly below.
+        if (ReferenceEquals(who, Players[LocalIndex]))
+        {
+            AnchorInSight = found ? at : null;
+            AnchorIsWeak = found && holding is { } h && h.Scale < SoldierRig.WeakScale;
+        }
 
         // E and Q are the same button twice: throw if stowed, let go if out. Which is
         // what makes the alternating chain — fire E, swing, fire Q, release E, re-anchor
         // E further ahead — a rhythm on two keys rather than a chord on four.
-        if (input.RightHookPressed) ToggleSoldierHook(rig, right: true, eye, look, at, holding);
-        if (input.LeftHookPressed) ToggleSoldierHook(rig, right: false, eye, look, at, holding);
+        if (input.RightHookPressed) ToggleSoldierHook(who, rig, right: true, look, found, at, holding);
+        if (input.LeftHookPressed) ToggleSoldierHook(who, rig, right: false, look, found, at, holding);
 
         if (input.HighJumpPressed && rig.Jump(who))
         {
-            Audio.PlayGasJump(rig.Starvation);
+            Emit(Cue.GasJump, who.Position, rig.Starvation, owner: Seat(who));
             // The ring of dust blasted out from under the launch.
-            Debris.FootPuff(new Vector3(Player.Position.X, 0f, Player.Position.Y));
+            Debris.FootPuff(new Vector3(who.Position.X, 0f, who.Position.Y));
         }
 
         return true;
@@ -3560,24 +3685,27 @@ public sealed class World : IAnchorField
     /// cable pays out its full reach and zips back, which is the honest feedback that
     /// the player aimed at sky.
     /// </summary>
-    private void ToggleSoldierHook(SoldierRig rig, bool right, Vector3 eye, Vector3 look,
-        Vector3 at, Structure? holding)
+    private void ToggleSoldierHook(PlayerTank who, SoldierRig rig, bool right, Vector3 look,
+        bool found, Vector3 at, Structure? holding)
     {
         GrappleHook hook = rig.Hook(right);
+        int seat = Seat(who);
 
         if (hook.Out)
         {
             rig.ReleaseHook(right);
-            Audio.PlayCableZip();
+            Emit(Cue.CableZip, hook.Tip, owner: seat);
             return;
         }
 
         // Fired from the hip on the matching side rather than from the eye, so the two
         // cables visibly leave different points on the body and cross where they should.
-        Vector3 from = SoldierMuzzle(right);
+        // Off <paramref name="who"/>'s hip, not this machine's player's: the host runs this
+        // for every seat, and a remote soldier's cable used to leave the host's own body.
+        Vector3 from = SoldierMuzzle(who, right);
         rig.FireHook(right, new Vector2(from.X, from.Z), from.Y, look,
-            AnchorInSight, AnchorInSight != null ? holding : null);
-        Audio.PlayCableFire();
+            found ? at : null, found ? holding : null);
+        Emit(Cue.CableFire, who.Position, owner: seat);
     }
 
     /// <summary>
@@ -3585,14 +3713,18 @@ public sealed class World : IAnchorField
     /// Shared by the sim (which fires from here) and the renderer (which draws from
     /// here), so the line the player sees is the line the hook actually flew.
     /// </summary>
-    public Vector3 SoldierMuzzle(bool right)
+    public Vector3 SoldierMuzzle(bool right) => SoldierMuzzle(Player, right);
+
+    /// <summary>As above, for a named seat's body — what the host needs when it fires a
+    /// hook on behalf of a remote player.</summary>
+    public Vector3 SoldierMuzzle(PlayerTank who, bool right)
     {
-        Vector2 fwd = Player.Forward;
+        Vector2 fwd = who.Forward;
         var side = new Vector2(-fwd.Y, fwd.X) * (right ? 0.55f : -0.55f);
         return new Vector3(
-            Player.Position.X + side.X + fwd.X * 0.4f,
-            Player.Height + SoldierRig.ShoulderHeight,
-            Player.Position.Y + side.Y + fwd.Y * 0.4f);
+            who.Position.X + side.X + fwd.X * 0.4f,
+            who.Height + SoldierRig.ShoulderHeight,
+            who.Position.Y + side.Y + fwd.Y * 0.4f);
     }
 
     /// <summary>
@@ -3753,7 +3885,7 @@ public sealed class World : IAnchorField
 
             // And the tick that says the bottle is nearly out. Rate-limited inside Audio, so
             // it is safe to ask for on every tick the gauge is in the red.
-            if (who.Hyper < GasWarnLevel && !rig.Grounded) Audio.PlayGasLow();
+            if (who.Hyper < GasWarnLevel && !rig.Grounded) Audio.PlayGasLow();   // local bed-adjacent tick
         }
 
         if (rig.JustCrashed)
@@ -3904,8 +4036,10 @@ public sealed class World : IAnchorField
         // the host off — rot it out, spend it, lose it to a hunter — and the three people
         // flying beside you are, on the very next tick, three people who have just watched a
         // mote of corruption climb out of their friend.
-        if (Player.Virus is not { HostKind: VirusHost.Soldier }) _escort = null;
-        if (_escort != null && !Squads.Contains(_escort)) _escort = null;
+        // The escort follows the seat that earned it, not this machine's craft: it was
+        // bought by one player flying in a stolen body, and it ends when THAT body does.
+        if (_escortFor?.Virus is not { HostKind: VirusHost.Soldier }) { _escort = null; _escortFor = null; }
+        if (_escort != null && !Squads.Contains(_escort)) { _escort = null; _escortFor = null; }
 
         foreach (var squad in Squads)
         {
@@ -3913,8 +4047,13 @@ public sealed class World : IAnchorField
             squad.SetEscort(escorting);
             foreach (var m in squad.Members) m.Allied = escorting;
 
-            squad.Update(dt, Player.Position,
-                targetVisible: escorting || !PlayerPassesForOneOfThem);
+            // Whoever is nearest the squad, exactly as the hunters pick their quarry. This
+            // used to be the local craft flat out, so on the host a squad only ever flew at
+            // the host — nineteen other players could stand in the open and never be hunted.
+            PlayerTank quarry = NearestPlayer(squad.Members.Count > 0
+                ? squad.Members[0].Position : Players[LocalIndex].Position);
+            squad.Update(dt, quarry.Position,
+                targetVisible: escorting || !PassesForOneOfThem(quarry));
             // Going loud. One call for the whole squad, pitched by how far away the nearest
             // of them is, so four figures dropping off a spire two hundred metres out is a
             // sound on the horizon rather than a shout in your ear.
@@ -3938,8 +4077,12 @@ public sealed class World : IAnchorField
             // for a carrier or an escort it is whichever of the other side is nearest, which
             // is the whole of what changing sides does — the brain is identical, and only the
             // target moved.
-            Vector2 mark = Player.Position;
-            float markY = Player.Height;
+            // Each of them picks the nearest craft for themselves, so a squad that has
+            // spread across a street splits onto whoever is in front of them rather than all
+            // four converging on one player.
+            PlayerTank target = NearestPlayer(s.Position);
+            Vector2 mark = target.Position;
+            float markY = target.Height;
             bool starved = false;
             bool holdFire = false;
 
@@ -3970,7 +4113,7 @@ public sealed class World : IAnchorField
 
             s.Update(dt, mark, markY, this, starved, holdFire);
             KeepSoldierOutOfTheCity(s);
-            DrainSoldierEvents(s, mark, markY);
+            DrainSoldierEvents(s, target, mark, markY);
         }
     }
 
@@ -4017,9 +4160,9 @@ public sealed class World : IAnchorField
     /// the entity for the same reason the player's rig is — the physics stay a pure
     /// function of their own state, and the world keeps sole ownership of hurting anybody.
     /// </summary>
-    private void DrainSoldierEvents(EnemySoldier s, Vector2 mark, float markY)
+    private void DrainSoldierEvents(EnemySoldier s, PlayerTank target, Vector2 mark, float markY)
     {
-        float range = Torus.Distance(s.Position, Player.Position);
+        float range = Torus.Distance(s.Position, target.Position);
 
         // The tick the corruption takes root. One cue, and a spray of the stuff off the body
         // it has just claimed.
@@ -4030,19 +4173,19 @@ public sealed class World : IAnchorField
                 Palette.NeonMagenta, elite: true);
         }
 
-        SoundEnemyHook(s.Left, range);
-        SoundEnemyHook(s.Right, range);
+        SoundEnemyHook(s.Left);
+        SoundEnemyHook(s.Right);
 
         if (s.JustLaunched)
         {
-            Audio.PlayGasJump(0.35f);
+            Emit(Cue.GasJump, s.Position, 0.35f);
             if (s.Height < 1.5f)
                 Debris.FootPuff(new Vector3(s.Position.X, 0f, s.Position.Y));
         }
 
         if (s.JustLanded && s.LandingSpeed > SoldierRig.HardLanding)
         {
-            Audio.PlayCrashLanding();
+            Emit(Cue.CrashLanding, s.Position);
             Debris.FootPuff(new Vector3(s.Position.X, 0f, s.Position.Y));
         }
 
@@ -4056,8 +4199,8 @@ public sealed class World : IAnchorField
         // the player. The kills even pay out salvage, because as far as the world is
         // concerned the mote that turned them fired it.
         bool friendly = s.Carrier || s.Allied;
-        if (s.JustFired && (friendly || (!Player.Captured && !PlayerPassesForOneOfThem
-                && !SmokeBlocks(s.Position, Player.Position))))
+        if (s.JustFired && (friendly || (!target.Captured && !PassesForOneOfThem(target)
+                && !SmokeBlocks(s.Position, target.Position))))
         {
             SpawnDirected(s.ShotOrigin, s.ShotDir, Projectile.RifleSpeed,
                 rocket: false, acid: false,
@@ -4066,7 +4209,7 @@ public sealed class World : IAnchorField
         }
 
         if (friendly) StrikeFriendlyBlades(s, mark, markY);
-        else StrikeWithBlades(s, range);
+        else StrikeWithBlades(s, target, range);
     }
 
     /// <summary>
@@ -4110,13 +4253,15 @@ public sealed class World : IAnchorField
     /// hunter outright — the plague is not a distraction, it is a weapon.</summary>
     private const float CarrierBladeDamage = 4f;
 
-    /// <summary>Voices one enemy hook's events at whatever the range earns.</summary>
-    private void SoundEnemyHook(GrappleHook h, float range)
+    /// <summary>Voices one enemy hook's events at whatever the range earns. Through the cue
+    /// channel, so a client hears the squad swinging through the city over its shoulder — the
+    /// steel biting was audible on the host's machine and nowhere else.</summary>
+    private void SoundEnemyHook(GrappleHook h)
     {
-        if (h.JustBit) Audio.PlayAnchorBite(range);
+        if (h.JustBit) Emit(Cue.AnchorBite, h.Tip);
         if (h.JustTore)
         {
-            Audio.PlayAnchorTear();
+            Emit(Cue.AnchorTear, h.Tip);
             Debris.Burst(new Vector3(h.Tip.X, h.TipY, h.Tip.Y), Palette.StructureShell, elite: false);
         }
     }
@@ -4129,10 +4274,10 @@ public sealed class World : IAnchorField
     /// have to be level, and they have to still be carrying the arc that got them there. A
     /// player who broke the geometry of the run in any of those three ways has dodged it.
     /// </summary>
-    private void StrikeWithBlades(EnemySoldier s, float range)
+    private void StrikeWithBlades(EnemySoldier s, PlayerTank target, float range)
     {
-        if (!s.BladesOut || !s.BladeReady || Player.Captured) return;
-        if (PlayerPassesForOneOfThem) return;   // they are not running at one of their own
+        if (!s.BladesOut || !s.BladeReady || target.Captured) return;
+        if (PassesForOneOfThem(target)) return;   // they are not running at one of their own
         if (s.PlanarSpeed < EnemySoldier.BladeSpeed) return;
         if (range > EnemySoldier.BladeReach + PlayerTank.Radius) return;
 
@@ -4141,15 +4286,15 @@ public sealed class World : IAnchorField
         // something standing on the grid arrives with the blades somewhere down the length
         // of them — a soldier who screams past overhead has missed and reads as having
         // missed, and one whose boots go through you has not.
-        float mine = Player.Height + EnemyTank.AimHeight;
+        float mine = target.Height + EnemyTank.AimHeight;
         if (mine < s.Height - BladeVertical
             || mine > s.Height + EnemySoldier.BodyHeight + BladeVertical) return;
 
         s.RegisterSlash();
-        DamagePlayer(SoldierBladeDamage);
+        DamagePlayer(SoldierBladeDamage, target);
         Emit(Cue.ClawSlam, s.Position);
-        JoltPlayerView(0.65f);
-        Debris.Burst(new Vector3(Player.Position.X, mine, Player.Position.Y),
+        JoltPlayerView(target, 0.65f);
+        Debris.Burst(new Vector3(target.Position.X, mine, target.Position.Y),
             Palette.SoldierBlade, elite: true);
     }
 
@@ -4159,12 +4304,12 @@ public sealed class World : IAnchorField
     /// one that is actually driving rather than to all of them at once — which would be a
     /// way of setting a number on three objects that nothing on the live path rings down.
     /// </summary>
-    private void JoltPlayerView(float amount)
+    private void JoltPlayerView(PlayerTank who, float amount)
     {
-        if (Player.Rig is { } rig) rig.Jolt(amount);
-        else if (Player.Fish is { } body) body.Jolt(amount);
-        else if (Player.Virus is { } mote) mote.Jolt(amount);
-        else Player.Jolt(amount);
+        if (who.Rig is { } rig) rig.Jolt(amount);
+        else if (who.Fish is { } body) body.Jolt(amount);
+        else if (who.Virus is { } mote) mote.Jolt(amount);
+        else who.Jolt(amount);
     }
 
     /// <summary>How far off level a pass can be and still cut. Roughly a body's height
@@ -4444,8 +4589,7 @@ public sealed class World : IAnchorField
         s.TakeDamage(amount);
         if (!wasAlive || s.Alive) return;
 
-        float range = Torus.Distance(s.Position, Player.Position);
-        Audio.PlayExplosionAt(range);
+        Emit(Cue.ExplosionAt, s.Position);
         Debris.Burst(new Vector3(s.Position.X, s.Height + EnemySoldier.AimHeight, s.Position.Y),
             s.IsLeader ? Palette.SoldierMark : Palette.SoldierCloth, s.IsLeader);
 
@@ -4565,7 +4709,8 @@ public sealed class World : IAnchorField
         // pointed at. The best thing the class can buy, and it is bought by taking a body out
         // of the middle of the people who came with it. The escort is a disguise-side notion
         // tied to the local player's cover; only the local seat claims one.
-        if (who == Player) _escort = SquadOf(prey);
+        _escort = SquadOf(prey);
+        _escortFor = who;
 
         // Worn, not wrecked: the body comes off the roster the way every other host does,
         // without a death, a blast or a payout. It is not a kill — it is a change of driver.
@@ -4576,7 +4721,9 @@ public sealed class World : IAnchorField
         _escort?.Members.Remove(prey);
 
         mote.Possess(who, VirusHost.Soldier);
-        if (who == Player) { Audio.PlayMawSwallow(); Audio.PlayAnchorBite(0f); }
+        // A body being climbed into, heard by anyone near enough to watch it happen.
+        Emit(Cue.MawSwallow, who.Position, owner: Seat(who));
+        Emit(Cue.AnchorBite, who.Position, owner: Seat(who));
         return true;
     }
 
@@ -4616,7 +4763,7 @@ public sealed class World : IAnchorField
         // empty should still feel like a lunge, and the shove is often enough to close on
         // whatever was just outside it.
         mote.Velocity += who.Forward3 * LungeKick;
-        if (who == Player) Audio.PlayCableZip();
+        Emit(Cue.CableZip, who.Position, owner: Seat(who));
     }
 
     /// <summary>How hard an empty grab throws the mote forward.</summary>
@@ -4645,8 +4792,14 @@ public sealed class World : IAnchorField
     /// get back, because a squad that has just watched one of its own open fire on it does
     /// not go back to assuming.
     /// </summary>
-    public bool PlayerPassesForOneOfThem
-        => Player.Virus is { HostKind: VirusHost.Soldier } && _coverBlown <= 0f;
+    public bool PlayerPassesForOneOfThem => PassesForOneOfThem(Player);
+
+    /// <summary>Whether a squad reads this particular craft as one of their own. Per craft,
+    /// because the disguise is a body one player is wearing — asked of the local seat alone
+    /// it made every OTHER player invisible to a squad whenever the host happened to be
+    /// wearing a stolen soldier.</summary>
+    public bool PassesForOneOfThem(PlayerTank who)
+        => who.Virus is { HostKind: VirusHost.Soldier } && _coverBlown <= 0f;
 
     private float _coverBlown;
 
@@ -4658,6 +4811,11 @@ public sealed class World : IAnchorField
     public SoldierSquad? Escort => _escort;
 
     private SoldierSquad? _escort;
+
+    /// <summary>The craft the escort is flying for. The squad was bought by one player
+    /// climbing into one of their bodies, and it ends when that body does — which is a
+    /// question about that seat, not about whoever is at this keyboard.</summary>
+    private PlayerTank? _escortFor;
 
     /// <summary>Which squad a soldier belongs to, or null for one flying on their own.</summary>
     private SoldierSquad? SquadOf(EnemySoldier who)
@@ -4676,9 +4834,14 @@ public sealed class World : IAnchorField
     private void BreakEscort()
     {
         if (_escort == null) return;
+        PlayerTank? betrayed = _escortFor;
         _escort = null;
+        _escortFor = null;
         BlowCover();
-        Audio.PlayCrabScream();
+        // Heard by the player who just lost their cover, wherever they are — and by anyone
+        // close enough to hear a squad turn on one of its own.
+        Emit(Cue.CrabScream, betrayed?.Position ?? Players[LocalIndex].Position,
+            owner: betrayed is null ? Projectile.NoOwner : Seat(betrayed));
     }
 
     /// <summary>How long the squads stay wise to a body that has shown its hand. Long
@@ -4794,31 +4957,34 @@ public sealed class World : IAnchorField
         // around by its tail is not a situation the water has an opinion about.
         if (who.Captured) return;
 
-        if (input.BeatPressed) BeatFish(body);
+        if (input.BeatPressed) BeatFish(who, body);
 
         // The strike before the spit: on a frame both are down, the committed attack
         // wins. They share the fire cooldown, and a player holding the spit while
         // clicking for a strike should get the strike rather than have it eaten.
-        if (input.StrikePressed) StrikeFish(body);
+        if (input.StrikePressed) StrikeFish(who, body);
         else if (input.SpitDown) FireFishSpit(who);
     }
 
     /// <summary>One beat of the tail, with its cue and — off the deck — the puff of grid
-    /// dust a flop kicks up under it.</summary>
-    private void BeatFish(FishRig body)
+    /// dust a flop kicks up under it. The beat is spent by <paramref name="who"/>'s own
+    /// body: the host runs this for every seat, and a remote swimmer used to beat the
+    /// host's tail and drain the host's breath.</summary>
+    private void BeatFish(PlayerTank who, FishRig body)
     {
         bool beached = body.Beached;
-        if (!body.Beat(Player)) return;
+        if (!body.Beat(who)) return;
 
-        Audio.PlayTailBeat(body.Starvation, beached);
+        Emit(beached ? Cue.TailFlop : Cue.TailBeat, who.Position, body.Starvation,
+            owner: Seat(who));
         if (beached)
-            Debris.FootPuff(new Vector3(Player.Position.X, 0f, Player.Position.Y));
+            Debris.FootPuff(new Vector3(who.Position.X, 0f, who.Position.Y));
     }
 
     /// <summary>Winds a strike, if the reserve and the body will allow one.</summary>
-    private void StrikeFish(FishRig body)
+    private void StrikeFish(PlayerTank who, FishRig body)
     {
-        if (body.BeginStrike(Player)) Audio.PlayFishCoil();
+        if (body.BeginStrike(who)) Emit(Cue.FishCoil, who.Position, owner: Seat(who));
     }
 
     /// <summary>
@@ -5103,7 +5269,8 @@ public sealed class World : IAnchorField
 
         if (mote.WornRig == null)
         {
-            AnchorInSight = null;
+            // Only ever this machine's own crosshair readout — see UpdateCableKit.
+            if (ReferenceEquals(who, Players[LocalIndex])) AnchorInSight = null;
             // Exposed, the same key is the grab. E throws the mote at whatever body is
             // nearest and climbs into it — the deliberate version of the contact that
             // happens on its own, and the answer to a target too quick to simply bump into.
@@ -5195,7 +5362,10 @@ public sealed class World : IAnchorField
                 VirusRig.LanceRadius, VirusRig.LanceDamage);
         }
 
-        if (voice) Emit(Cue.UnstableLance, who.Position, owner: Seat(who));
+        // Unconditional: Emit already decides who hears it, and gating it on "is this our own
+        // seat" meant a remote player's stolen lance was never even filed for the wire — the
+        // loudest thing this class does went off in silence on every other machine.
+        Emit(Cue.UnstableLance, who.Position, owner: Seat(who));
         mote.Jolt(0.3f);
 
         // A shot fired on the last of the meter finished the host (see VirusRig.TryLance):
@@ -5306,7 +5476,11 @@ public sealed class World : IAnchorField
 
         who.TakeDamage(WitherBite);
         mote.Jolt(0.15f);
-        if (voice) { if (!who.Alive) Audio.PlayExplosion(); else Audio.PlayWarning(); }
+        // The bite reaches its owner wherever they are — this used to sound only when the
+        // withering mote happened to be the one at this keyboard, so a remote player rotting
+        // in the open was told nothing at all.
+        if (!who.Alive) Emit(Cue.Explosion, who.Position, owner: Seat(who));
+        else Emit(Cue.Warning, who.Position, owner: Seat(who), personal: true);
     }
 
     /// <summary>One withering clock per seat. Per seat because the host drains every mote on
@@ -5349,9 +5523,10 @@ public sealed class World : IAnchorField
     {
         if (who.Captured) return;
 
-        // Only the mote at this machine gulps aloud; a remote seat the host is simulating
-        // takes its body silently (its own machine will voice it once audio is networked).
-        bool voice = who == Player;
+        // Every possession is voiced now, wherever the mote is: the gulp goes out as a cue
+        // with its owner's seat, so the player wearing the body hears it and so does anyone
+        // standing close enough to watch. (This used to be gated on "is it our own mote",
+        // which meant a remote seat took its body in silence on every machine.)
 
         // A soldier, taken in the air. Checked before the machines: a squad in the middle
         // of a fight is a far more urgent offer than a monster standing about.
@@ -5365,7 +5540,8 @@ public sealed class World : IAnchorField
             who.Position = boss.Position;
             Boss = null;                        // worn, not wrecked
             mote.Possess(who, VirusHost.Crab);
-            if (voice) { Audio.PlayMawSwallow(); Audio.PlayClamp(); }
+            Emit(Cue.MawSwallow, who.Position, owner: Seat(who));
+            Emit(Cue.Clamp, who.Position, owner: Seat(who));
             return;
         }
 
@@ -5377,7 +5553,7 @@ public sealed class World : IAnchorField
             who.Position = maw.Position;
             Maw = null;
             mote.Possess(who, VirusHost.Maw);
-            if (voice) Audio.PlayMawSwallow();
+            Emit(Cue.MawSwallow, who.Position, owner: Seat(who));
             return;
         }
 
@@ -5402,7 +5578,8 @@ public sealed class World : IAnchorField
         prey.TakeDamage(float.MaxValue);   // quietly consumed; RemoveAll clears it this tick
         who.Position = prey.Position;      // climb into where the body stood
         mote.Possess(who, elite ? VirusHost.Elite : VirusHost.Hunter);
-        if (voice) Audio.PlayMawSwallow(); // a wet gulp — something climbing inside a body
+        // A wet gulp — something climbing inside a body.
+        Emit(Cue.MawSwallow, who.Position, owner: Seat(who));
     }
 
     /// <summary>How far off the grid the mote may be and still reach a hunter to infect —
@@ -5425,7 +5602,7 @@ public sealed class World : IAnchorField
 
         Debris.Burst(new Vector3(who.Position.X, who.Height + 1f, who.Position.Y),
             Palette.NeonMagenta, elite: false);
-        if (who == Player) Audio.PlayDetonation();
+        Emit(Cue.Detonation, who.Position, owner: Seat(who));
     }
 
     /// <summary>Planar flight speed past which the mote's rush is audible at all.</summary>
@@ -5670,7 +5847,7 @@ public sealed class World : IAnchorField
                     else
                         // A shriek over the impact, pitched by how far gone the core
                         // is — the boss loses composure as it's worn down.
-                        Audio.PlayCoreHit(1f - liveBoss.CoreFraction);
+                        Emit(Cue.CoreHit, liveBoss.Position, 1f - liveBoss.CoreFraction);
                     p.Active = false;
                     continue;
                 }
@@ -5685,7 +5862,7 @@ public sealed class World : IAnchorField
                     if (liveMaw.DamageCrystal(PlayerShotDamage))
                         DestroyMaw(liveMaw);
                     else
-                        Audio.PlayMawHurt(1f - liveMaw.CrystalFraction);
+                        Emit(Cue.MawHurt, liveMaw.Position, 1f - liveMaw.CrystalFraction);
                     p.Active = false;
                     continue;
                 }
@@ -5796,7 +5973,7 @@ public sealed class World : IAnchorField
                     {
                         DamageEnemy(shieldBody, claw.Soak());
                         mark.Jolt(0.15f);
-                        if (ReferenceEquals(mark, Player)) Audio.PlayHit();
+                        Emit(Cue.Hit, mark.Position, owner: Seat(mark));
                         p.Active = false;
                         break;
                     }
@@ -5897,7 +6074,7 @@ public sealed class World : IAnchorField
                 {
                     // Wholly soaked: the body took it, the player didn't. A plain hit cue,
                     // so a corrupted host being worn down still sounds like being shot at.
-                    Audio.PlayHit();
+                    Emit(Cue.Hit, victim.Position, owner: Seat(victim));
                     return;
                 }
                 // The host broke and the overflow is about to reach a naked mote — it eats
@@ -5921,8 +6098,8 @@ public sealed class World : IAnchorField
             Emit(Cue.Explosion, victim.Position);
         else
             Emit(Cue.Hit, victim.Position);
-        if (ReferenceEquals(victim, Player) && victim.Alive && victim.ShieldFraction <= LowShieldWarning)
-            Audio.PlayWarning();
+        if (victim.Alive && victim.ShieldFraction <= LowShieldWarning)
+            Emit(Cue.Warning, victim.Position, owner: Seat(victim), personal: true);
     }
 
     /// <summary>
@@ -5973,7 +6150,10 @@ public sealed class World : IAnchorField
     /// a chunk staggers and a full section coming down at speed is lethal.</summary>
     private const float CrushDamagePerImpulse = 3f;
 
-    private float _crushInvuln;
+    /// <summary>The i-frame clock, per seat. Shared, it would have one player's lucky escape
+    /// cover everybody standing under the same collapse — and, worse, one player being pinned
+    /// under rubble would make the whole team briefly immune to it.</summary>
+    private readonly float[] _crushInvuln = new float[MatchSettings.MaxSeats];
 
     /// <summary>
     /// Bills every falling structural chunk that lands on a character this tick. Only pieces
@@ -5989,7 +6169,8 @@ public sealed class World : IAnchorField
     /// </summary>
     private void ResolveCrush(float dt)
     {
-        if (_crushInvuln > 0f) _crushInvuln -= dt;
+        for (int i = 0; i < _crushInvuln.Length; i++)
+            if (_crushInvuln[i] > 0f) _crushInvuln[i] -= dt;
 
         var shards = Debris.Shards;
         for (int i = 0; i < shards.Length; i++)
@@ -6007,19 +6188,25 @@ public sealed class World : IAnchorField
             var atXZ = new Vector2(c.Position.X, c.Position.Z);
             float chunkR = c.Size * 0.6f;
 
-            // The player: grounded-ish, not mid-cinematic, and off i-frames.
-            if (_crushInvuln <= 0f && !Player.Captured && Player.Height < 3f)
+            // The players: grounded-ish, not mid-cinematic, and off i-frames. Every seat, not
+            // just this machine's — a tower coming down on a team-mate used to pass straight
+            // through them, so the one thing the whole destruction system is for could only
+            // ever happen to one of the twenty people standing under it.
+            for (int seat = 0; seat < Players.Count; seat++)
             {
+                PlayerTank who = Players[seat];
+                if (who.Away || _crushInvuln[Math.Min(seat, _crushInvuln.Length - 1)] > 0f) continue;
+                if (who.Captured || who.Height >= 3f) continue;
+
                 float reach = PlayerTank.Radius + chunkR;
-                if (Torus.DistanceSquared(atXZ, Player.Position) <= reach * reach)
-                {
-                    float dmg = damage;
-                    // An active shield eats a would-be one-shot: a section can gut it but not
-                    // end the run in a single blow while any of the shield remains.
-                    if (dmg >= Player.Shield && Player.Shield > 1f) dmg = Player.Shield - 1f;
-                    DamagePlayer(dmg);
-                    _crushInvuln = CrushInvuln;
-                }
+                if (Torus.DistanceSquared(atXZ, who.Position) > reach * reach) continue;
+
+                float dmg = damage;
+                // An active shield eats a would-be one-shot: a section can gut it but not
+                // end the run in a single blow while any of the shield remains.
+                if (dmg >= who.Shield && who.Shield > 1f) dmg = who.Shield - 1f;
+                DamagePlayer(dmg, who);
+                _crushInvuln[Math.Min(seat, _crushInvuln.Length - 1)] = CrushInvuln;
             }
 
             // Enemies: a chunk that lands on a hunter crushes it and is spent.
