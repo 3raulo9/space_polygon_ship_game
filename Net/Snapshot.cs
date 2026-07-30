@@ -170,9 +170,7 @@ public static class Snapshot
                 // with a higher seat number — is named by every snapshot and created by none,
                 // and stays invisible. The placeholders become the right chassis on the class
                 // line below.
-                while (seat >= world.Players.Count)
-                    if (world.AddPlayer() is null) break;
-                if (seat >= world.Players.Count) continue;
+                if (!world.EnsureSeat(seat)) continue;
 
                 // Our own craft. This machine predicts it for instant control, so its
                 // TRANSFORM is reconciled (eased toward the host), not snapped — but its

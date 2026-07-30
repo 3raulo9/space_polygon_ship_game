@@ -142,7 +142,10 @@ public sealed class EntityRenderer
         // is gone from the field even though their camera lingers to spectate.
         for (int seat = 0; seat < world.Players.Count; seat++)
         {
-            if (seat == world.LocalIndex) continue;
+            // The seat behind the camera, which while spectating is somebody else's — skipping
+            // our own instead put the craft we were riding directly on top of the lens, so a
+            // spent player watching a team-mate saw the inside of that team-mate's hull.
+            if (seat == world.ViewSeat) continue;
             PlayerTank mate = world.Players[seat];
             if (!mate.Alive) continue;
             // A craft whose player has dropped is still standing there — held for their

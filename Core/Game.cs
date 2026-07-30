@@ -193,6 +193,17 @@ public sealed class Game : IDisposable
 
             if (_capturePath != null && RunCaptureFrame()) break;
 
+            // The host went away mid-match. Nothing here is simulated locally — a client is
+            // shown the world, it does not run it — so what is left after the link dies is a
+            // frozen city the player can walk a ghost around in for ever. Bail back to the
+            // multiplayer front door with the reason on screen instead. Host-side this can
+            // never fire: one player leaving is a departure, not a dead session.
+            if (_steam is { Dropped: { } lost } && !_fading
+                && _state is GameState.Playing or GameState.Paused)
+            {
+                BeginFade(() => AbandonMatch(lost), _pauseBlur);
+            }
+
             SyncCursor();
 
             // The one place a live device becomes simulation input. Read once here, then
@@ -681,8 +692,12 @@ public sealed class Game : IDisposable
         _menuTime += Raylib.GetFrameTime();
 
         // A dial that failed, or a host that went away, drops the player back into the
-        // antechamber with a reason rather than leaving them standing in a dead room.
+        // antechamber with a reason rather than leaving them standing in a dead room. Only
+        // ever a client's problem: a host sees a peer leave through the departure queue, and
+        // reporting it here used to tear the whole session down and evict everybody.
         if (_steam is { Dropped: { } why }) { _room.Fail(why); TearDownMatch(); }
+        // The host answered, and the answer was no — or never came at all.
+        else if (_session is { Rejected: { } refused }) { _room.Fail(refused); TearDownMatch(); }
 
         // Keep the host's live rules on the world it already built, so a change made at the
         // console while people gather actually takes at launch.
@@ -743,8 +758,16 @@ public sealed class Game : IDisposable
 
         // A client comes in when the host presses LAUNCH — there is no launch button on that
         // end, the host owns when the match starts.
+        //
+        // ...but not before they have chosen a craft. Somebody who dials into a match that is
+        // already running is seated and told START in the same breath, and walking them
+        // straight in gave them no moment at the pod at all: they arrived permanently as the
+        // placeholder TANK their hello carried, with no way ever to be anything else. So a
+        // client with no pick yet stays on the floor by the pod, and comes in the instant
+        // they choose. The host honours that pick mid-match like any other.
         if (_session is { IsHost: false, MatchStarted: true, LocalSeat: >= 0 } joined
-            && joined.World is { } jw)
+            && joined.World is { } jw
+            && _room is { MyChassis: not null })
         {
             // Install the craft this player chose at the pod as their own seat. The host has
             // been authoritative on it since the Pick and the snapshot names it for everyone
@@ -756,11 +779,15 @@ public sealed class Game : IDisposable
                 _loadout.Class = chosen;
                 jw.ReplacePlayer(joined.LocalSeat, _loadout);
             }
-            // Carry the room's roster of names into the match so team-mates wear a tag.
+            // Carry the room's roster of names into the match so team-mates wear a tag. Only
+            // where the host has not already named the seat: its SeatName packets are the
+            // authority, and a stale figure still called PLAYER must not overwrite one.
             if (_room is { } r)
             {
-                foreach (var a in r.Avatars.Values) jw.SeatNames[a.Seat] = a.Name;
-                jw.SeatNames[joined.LocalSeat] = r.MyName;
+                foreach (var a in r.Avatars.Values)
+                    if (!jw.SeatNames.ContainsKey(a.Seat)) jw.SeatNames[a.Seat] = a.Name;
+                if (!jw.SeatNames.ContainsKey(joined.LocalSeat))
+                    jw.SeatNames[joined.LocalSeat] = r.MyName;
             }
             joined.Room = null;
             _world = jw;
@@ -831,6 +858,24 @@ public sealed class Game : IDisposable
         _world = new World.World(_loadout, MatchSettings.SinglePlayer);
         _state = GameState.Playing;
         _inventoryOpen = false;
+    }
+
+    /// <summary>
+    /// The link died while playing: tear the match down and set the player back down in the
+    /// multiplayer antechamber with the reason showing, rather than at the title screen with
+    /// no explanation for why their match stopped existing.
+    /// </summary>
+    private void AbandonMatch(string why)
+    {
+        TearDownMatch();
+        _world = null;
+        _inventoryOpen = false;
+        _accumulator = 0;
+        _pauseBlur = 0f;
+        _resuming = false;
+        _room = new World.LobbyRoom();
+        _room.Fail(why);
+        _state = GameState.Lobby;
     }
 
     private void ReturnToMenu()

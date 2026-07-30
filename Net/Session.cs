@@ -76,6 +76,21 @@ public enum Msg : byte
     /// around that client — grapple cables, the VIRUS's stolen lance, the SPIDER's charged beam.
     /// Purely cosmetic and keep-nothing; a missed one costs a frame of light.</summary>
     Rigs = 19,
+
+    /// <summary>Host → one client, reliable: there is no seat for you. A joiner has to be
+    /// <em>told</em> it was refused — before this a full match simply ignored the hello, and
+    /// the dial sat on CONNECTING for ever with nothing ever coming to say why.</summary>
+    Full = 20,
+
+    /// <summary>
+    /// Host → all, reliable, whenever the roster changes: one seat's display name.
+    ///
+    /// The room's names only ever reached the match by being copied onto the world at LAUNCH,
+    /// which means everyone who arrives <em>after</em> that — every rejoin, every late joiner —
+    /// is a nameless craft on every screen but the host's, for the rest of the match. This is
+    /// the packet that keeps the roster honest once the lobby is gone.
+    /// </summary>
+    SeatName = 21,
 }
 
 /// <summary>
@@ -214,7 +229,7 @@ public sealed class Session
         {
             if (room.PickDirty && LocalSeat >= 0)
                 ApplyPick(LocalSeat, room.MyChassis ?? PlayerClass.Tank);
-            if (room.NameDirty) { LocalName = room.MyName; _nameOfSeat[LocalSeat] = room.MyName; }
+            if (room.NameDirty) { LocalName = room.MyName; Rename(LocalSeat, room.MyName); }
             if (room.RulesDirty) BroadcastRules(room.Match);
             room.ClearDirty();
 
@@ -224,7 +239,12 @@ public sealed class Session
                 BroadcastRoomState(room);
             }
         }
-        else if (LocalSeat >= 0)
+        else if (LocalSeat < 0)
+        {
+            // Still waiting on a seat: keep asking. Everything below needs one.
+            RetryHello();
+        }
+        else
         {
             if (room.PickDirty)
             {
@@ -241,18 +261,38 @@ public sealed class Session
             }
             if (room.NameDirty) SendName(room.MyName);
             room.ClearDirty();
-            SendRoomMove(room.Position, room.Heading, room.Pitch, room.Height);
+            // At the same rate the host describes the room back, rather than sixty times a
+            // second. The room is people strolling about a floor; twenty transforms a second
+            // is already more than the renderer can show, and the old per-tick send was three
+            // times the traffic of the match itself for a screen nobody is playing on.
+            if (++_sinceRoom >= TicksPerSnapshot)
+            {
+                _sinceRoom = 0;
+                SendRoomMove(room.Position, room.Heading, room.Pitch, room.Height);
+            }
         }
     }
 
-    /// <summary>Host-side: records a seat's chosen chassis, marks it ready, and rebuilds that
-    /// seat's craft in the world it is holding so the eventual match opens with the right one.</summary>
+    /// <summary>
+    /// Host-side: records a seat's chosen chassis, marks it ready, and rebuilds that seat's
+    /// craft in the world it is holding so the eventual match opens with the right one.
+    ///
+    /// Deliberately not gated on the lobby: a pick that lands mid-match is honoured too, and
+    /// the next players packet carries the new chassis to every other machine. That is what
+    /// lets somebody who joined a match already in progress choose a craft at all, rather than
+    /// being stuck for ever in the placeholder tank they were seated as.
+    /// </summary>
     private void ApplyPick(int seat, PlayerClass chassis)
     {
+        if (!Enum.IsDefined(chassis)) return;   // a malformed byte is not a chassis
         _pickOfSeat[seat] = (chassis, true);
         Room?.ApplyPick(seat, chassis, ready: true);
-        if (World is { } w && seat >= 0 && seat < w.Players.Count && w.Players[seat].Class != chassis)
-            w.ReplacePlayer(seat, chassis);
+        if (World is not { } w || seat < 0 || seat >= w.Players.Count) return;
+        if (w.Players[seat].Class == chassis) return;
+        // The host's own seat keeps its full hangar build — paint and points, not just the
+        // chassis. Everyone else's paint does not cross the wire, so they get a clean one.
+        if (seat == LocalSeat) { w.Loadout.Class = chassis; w.ReplacePlayer(seat, w.Loadout); }
+        else w.ReplacePlayer(seat, chassis);
     }
 
     private void SendPick(PlayerClass chassis)
@@ -375,7 +415,7 @@ public sealed class Session
         World.LocalIndex = 0;
         World.CollectSoundCues = true;   // the host gathers cues to broadcast; solo runs do not
         LocalSeat = 0;
-        _nameOfSeat[0] = LocalName;       // the host's own name, for the roster and the tags
+        Rename(0, LocalName);             // the host's own name, for the roster and the tags
     }
 
     /// <summary>Every seat's name the host knows, for the loop to copy onto the world at launch
@@ -388,17 +428,71 @@ public sealed class Session
     /// </summary>
     public void JoinMatch(World.World world) => World = world;
 
-    /// <summary>Client-side: announces the chassis this player picked and their name. Reliable
-    /// — a lost hello would seat somebody as a tank they did not choose.</summary>
+    /// <summary>
+    /// Client-side: announces the chassis this player picked and their name.
+    ///
+    /// This used to be a single send, made the instant <c>ConnectP2P</c> handed back a
+    /// connection handle — which is long before that connection exists. A handle is not a
+    /// link: Steam is still punching through to the other machine, and a message pushed into
+    /// a socket in that state has nowhere to go. When it went nowhere there was nothing to
+    /// notice it and nothing to try again, so the joiner sat on CONNECTING for ever and the
+    /// only cure was to back out and re-dial. So the hello is now <em>repeated</em> until the
+    /// host answers with a seat — see <see cref="RetryHello"/>, which the lobby tick drives.
+    /// </summary>
     public void SendHello(PlayerClass chassis)
+    {
+        _helloChassis = chassis;
+        _helloWanted = true;
+        _sinceHello = 0;
+        _helloTicks = 0;
+        PushHello();
+    }
+
+    private void PushHello()
     {
         byte[] name = Encode(LocalName);
         Span<byte> p = stackalloc byte[3 + 32];
         p[0] = (byte)Msg.Hello;
-        p[1] = (byte)chassis;
+        p[1] = (byte)_helloChassis;
         p[2] = (byte)name.Length;
         name.CopyTo(p.Slice(3, name.Length));
         _net.Send(0, p.Slice(0, 3 + name.Length), reliable: true);
+    }
+
+    private PlayerClass _helloChassis;
+    private bool _helloWanted;
+    private int _sinceHello;
+    private int _helloTicks;
+
+    /// <summary>How often an unanswered hello is repeated, in lobby ticks (60 = once a
+    /// second). Slow enough to be nothing on the wire, fast enough that a joiner whose first
+    /// attempt landed on a half-open socket is seated well inside the time it takes them to
+    /// wonder whether it worked.</summary>
+    private const int HelloEvery = 45;
+
+    /// <summary>How long a dial is given before it is called a failure, in lobby ticks. Ten
+    /// seconds is comfortably past Steam's own relay handshake and well short of the point a
+    /// person decides the game is broken.</summary>
+    private const int HelloPatience = 60 * 10;
+
+    /// <summary>Why the join failed, for the room to show instead of the CONNECTING banner:
+    /// the host refused us (no seat), or nobody ever answered. Null while all is well.</summary>
+    public string? Rejected { get; private set; }
+
+    /// <summary>Client-side: repeats an unanswered hello, and gives up eventually. Called from
+    /// the lobby tick, which is the only place a client is ever waiting to be seated.</summary>
+    private void RetryHello()
+    {
+        if (!_helloWanted || LocalSeat >= 0) { _helloWanted = false; return; }
+        if (++_helloTicks > HelloPatience)
+        {
+            _helloWanted = false;
+            Rejected ??= "NO ANSWER FROM THAT CODE";
+            return;
+        }
+        if (++_sinceHello < HelloEvery) return;
+        _sinceHello = 0;
+        PushHello();
     }
 
     /// <summary>A display name as at most 31 bytes of UTF-8 — long enough for any real Steam
@@ -411,6 +505,47 @@ public sealed class Session
 
     private static string DecodeName(ReadOnlySpan<byte> src)
         => System.Text.Encoding.UTF8.GetString(src).Trim();
+
+    /// <summary>
+    /// Host-side: records one seat's display name and tells everybody — the room, the world
+    /// (so the craft wears the tag in-match), and every client.
+    ///
+    /// The names used to reach the match only by being copied off the room at LAUNCH, which
+    /// left everyone who arrived after that — every rejoin, every late joiner — a nameless
+    /// craft on every screen but this one, for the rest of the match.
+    /// </summary>
+    private void Rename(int seat, string name)
+    {
+        if (seat < 0) return;
+        if (_nameOfSeat.TryGetValue(seat, out var was) && was == name) return;
+        _nameOfSeat[seat] = name;
+        Room?.ApplyName(seat, name);
+        if (World is { } w) w.SeatNames[seat] = name;
+        if (!IsHost) return;
+        Span<byte> p = stackalloc byte[3 + 32];
+        int at = WriteSeatName(p, seat, name);
+        _net.Broadcast(p.Slice(0, at), reliable: true);
+    }
+
+    private static int WriteSeatName(Span<byte> p, int seat, string name)
+    {
+        byte[] text = Encode(name);
+        p[0] = (byte)Msg.SeatName;
+        p[1] = (byte)seat;
+        p[2] = (byte)text.Length;
+        text.CopyTo(p.Slice(3, text.Length));
+        return 3 + text.Length;
+    }
+
+    /// <summary>Host-side: the whole roster, by name, to one peer. What a late arrival needs —
+    /// they have missed every <see cref="Msg.SeatName"/> that went out before they existed.</summary>
+    private void SendRosterTo(int peer)
+    {
+        if (!IsHost) return;
+        Span<byte> p = stackalloc byte[3 + 32];
+        foreach (var kv in _nameOfSeat)
+            _net.Send(peer, p.Slice(0, WriteSeatName(p, kv.Key, kv.Value)), reliable: true);
+    }
 
     /// <summary>Posts a line to this machine's feed and, on the host, mirrors it to everyone
     /// else so the whole room sees the same comings and goings.</summary>
@@ -436,12 +571,34 @@ public sealed class Session
         {
             if (!_seatOfPeer.TryGetValue(peer, out int seat)) continue;
             _seatOfPeer.Remove(peer);   // the peer id is dead; the identity mapping is kept
-            if (seat >= 0 && seat < World.Players.Count) World.Players[seat].Away = true;
-            // In the room (before the match) a leaver simply vanishes from the floor and stops
-            // blocking the launch gate; mid-match the seat is held for a rejoin as before.
+            string name = _nameOfSeat.TryGetValue(seat, out var n) ? n : "A PLAYER";
+
+            if (MatchStarted)
+            {
+                // Mid-match: the craft is held exactly where it stood, frozen and unhurt, so
+                // a reconnection from the same Steam account steps straight back into it.
+                if (seat >= 0 && seat < World.Players.Count) World.Players[seat].Away = true;
+            }
+            else
+            {
+                // Before LAUNCH there is nothing worth holding — they had a spawn point and a
+                // chassis and no history — so the seat is genuinely given up and handed to the
+                // next person through the door. Holding it instead meant a lobby people came
+                // and went from opened its match with a row of abandoned craft on the grid,
+                // each one still counting against the seat limit.
+                World.VacateSeat(seat);
+                // Forget who held it, so a return through the front door is an ordinary
+                // join into whatever seat is free rather than a "rejoin" that would restore
+                // the emptied craft they just walked away from.
+                foreach (var kv in _seatOfIdentity)
+                    if (kv.Value == seat) { _seatOfIdentity.Remove(kv.Key); break; }
+                _nameOfSeat.Remove(seat);
+                World.SeatNames.Remove(seat);
+                _invSent.Remove(seat);
+            }
+
             _pickOfSeat.Remove(seat);
             Room?.Remove(seat);
-            string name = _nameOfSeat.TryGetValue(seat, out var n) ? n : "A PLAYER";
             Announce($"{name} LEFT");
         }
     }
@@ -696,32 +853,55 @@ public sealed class Session
                 if (identity != 0 && _seatOfIdentity.TryGetValue(identity, out int kept)
                     && kept < World.Players.Count)
                 {
+                    bool wasHere = _seatOfPeer.ContainsValue(kept);
                     _seatOfPeer[from] = kept;
-                    _nameOfSeat[kept] = name;
+                    Rename(kept, name);
                     World.Players[kept].Away = false;
-                    Announce($"{name} REJOINED");
+                    // Their pack has to be told again from scratch: the machine coming back is
+                    // holding an empty mirror, and the change-driven echo would say nothing at
+                    // all because the pack itself has not moved since they left.
+                    _invSent.Remove(kept);
+                    if (!wasHere) Announce($"{name} REJOINED");
                     SendWelcome(from, kept);
+                    SendRosterTo(from);
                     if (MatchStarted) SendStartTo(from);
                     break;
                 }
 
                 // Otherwise a new player. A repeat hello from a peer already seated (its Welcome
-                // was lost and it asked again) just gets another Welcome, not a second seat.
+                // was lost, or it was sent again while the link was still coming up) just gets
+                // another Welcome, not a second seat.
                 if (_seatOfPeer.TryGetValue(from, out int have))
                 {
+                    Rename(have, name);
                     SendWelcome(from, have);
+                    SendRosterTo(from);
+                    if (MatchStarted) SendStartTo(from);
                     break;
                 }
 
                 var craft = World.AddPlayer(new Loadout { Class = chassis });
-                if (craft is null) return;   // match full — they stay out
+                if (craft is null)
+                {
+                    // No seat for them. Say so: a joiner that is merely ignored waits on the
+                    // CONNECTING banner until they give up, with nothing to tell them the room
+                    // was simply full.
+                    Span<byte> no = stackalloc byte[1];
+                    no[0] = (byte)Msg.Full;
+                    _net.Send(from, no, reliable: true);
+                    break;
+                }
 
                 int seat = World.Seat(craft);
                 _seatOfPeer[from] = seat;
                 if (identity != 0) _seatOfIdentity[identity] = seat;
-                _nameOfSeat[seat] = name;
+                _invSent.Remove(seat);
+                Rename(seat, name);
                 Announce($"{name} JOINED");
                 SendWelcome(from, seat);
+                // Everyone already here, by name — a late arrival has missed every roster
+                // update the room ever sent.
+                SendRosterTo(from);
                 // A player who arrives after LAUNCH is dropped straight into the running match.
                 if (MatchStarted) SendStartTo(from);
                 break;
@@ -732,15 +912,31 @@ public sealed class Session
                 const int fixedLen = 2 + MatchSettings.Size + 12;
                 if (payload.Length < fixedLen) return;
                 int at = 1;
-                LocalSeat = payload[at++];
+                int given = payload[at++];
+                if (given < 0 || given >= MatchSettings.MaxSeats) return;
+                // Everything below rebuilds our craft from scratch and puts it where the host
+                // says. That is exactly right for a seating and for a rejoin, and exactly
+                // wrong for the extra Welcomes a repeated hello earns (see SendHello): once
+                // seated, another one would tear down the craft we are driving and snap it
+                // back to a transform from a hundred milliseconds ago. So it applies only when
+                // we were actually asking — which a rejoin is, since it sends a fresh hello.
+                bool asked = _helloWanted || LocalSeat != given;
+                LocalSeat = given;
+                _helloWanted = false;
+                Rejected = null;
                 World.Match = MatchSettings.Read(payload.AsSpan(at, MatchSettings.Size));
                 at += MatchSettings.Size;
+                // The rules the host is actually holding, onto the lobby's own copy — so a
+                // player who joins after the host has finished at the console sees the map,
+                // seats and revives they will really be playing with, rather than the
+                // defaults they started the room with.
+                Room?.AdoptRules(World.Match);
+                if (!asked) break;
 
                 // Fill the roster out to our own seat with placeholders the host's snapshots
                 // will overwrite, then install our own chosen craft — full build, not a
                 // placeholder tank — at the seat we were actually given.
-                while (World.Players.Count <= LocalSeat && World.AddPlayer() != null) { }
-                if (LocalSeat < 0 || LocalSeat >= World.Players.Count) return;
+                if (!World.EnsureSeat(LocalSeat)) return;
                 World.ReplacePlayer(LocalSeat, World.Loadout);
                 World.LocalIndex = LocalSeat;
 
@@ -900,8 +1096,7 @@ public sealed class Session
                 if (payload.Length < 2 + len) break;
                 string name = DecodeName(payload.AsSpan(2, len));
                 if (name.Length == 0) name = "A PLAYER";
-                _nameOfSeat[seat] = name;
-                Room?.ApplyName(seat, name);
+                Rename(seat, name);
                 break;
             }
 
@@ -921,9 +1116,36 @@ public sealed class Session
             }
 
             case Msg.Rules when !IsHost:
-                if (payload.Length >= 1 + MatchSettings.Size)
-                    Room?.AdoptRules(MatchSettings.Read(payload.AsSpan(1, MatchSettings.Size)));
+            {
+                if (payload.Length < 1 + MatchSettings.Size) break;
+                MatchSettings rules = MatchSettings.Read(payload.AsSpan(1, MatchSettings.Size));
+                Room?.AdoptRules(rules);
+                // And onto the world, not only the lobby's readout. The seat count in
+                // particular is load-bearing: a client's roster refuses to grow past its own
+                // MaxPlayers, so a host who widened the room after this client joined would
+                // have had every player past the old limit be named by the snapshot and
+                // created by none — invisible, on that machine alone.
+                World.Match = rules;
                 break;
+            }
+
+            case Msg.Full when !IsHost:
+                Rejected = "THAT MATCH IS FULL";
+                _helloWanted = false;
+                break;
+
+            case Msg.SeatName when !IsHost:
+            {
+                if (payload.Length < 3) break;
+                int seat = payload[1];
+                int len = payload[2];
+                if (payload.Length < 3 + len) break;
+                string who = DecodeName(payload.AsSpan(3, len));
+                if (who.Length == 0) who = "A PLAYER";
+                World.SeatNames[seat] = who;
+                Room?.ApplyName(seat, who);
+                break;
+            }
 
             case Msg.RoomState when !IsHost:
             {

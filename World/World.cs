@@ -3428,8 +3428,61 @@ public sealed class World : IAnchorField
 
     // --- Seats -------------------------------------------------------------------
 
-    /// <summary>True once the match is as full as the host said it could get.</summary>
-    public bool Full => Players.Count >= Match.MaxPlayers;
+    /// <summary>
+    /// Seats nobody is sitting in — people who walked out of the lobby before LAUNCH. The
+    /// roster list itself stays dense (a seat is one byte on the wire and everything addresses
+    /// a craft by its index, so seats can never be renumbered under a running session); these
+    /// are simply the indices the next joiner is handed before a fresh one is appended.
+    ///
+    /// Without this, a room that five people wandered in and out of opened its match with a
+    /// dozen abandoned craft standing on the grid, each still counting against the seat limit.
+    /// Host-side: a client never vacates anything, it is told what every seat holds.
+    /// </summary>
+    private readonly HashSet<int> _vacant = new();
+
+    /// <summary>How many seats actually have somebody in them.</summary>
+    public int Occupied => Players.Count - _vacant.Count;
+
+    /// <summary>True once the match is as full as the host said it could get. Counts people,
+    /// not list entries — an abandoned seat is not somebody taking up room.</summary>
+    public bool Full => Occupied >= Match.MaxPlayers;
+
+    /// <summary>
+    /// Host-side: nobody is in this seat any more. Used when a player leaves <em>before</em>
+    /// the match starts, where there is nothing to hold for them — a mid-match drop keeps its
+    /// craft frozen and waiting instead (see <see cref="PlayerTank.Away"/>).
+    ///
+    /// The craft is emptied rather than removed: no lives and no shield makes it
+    /// <see cref="PlayerTank.Alive"/>-false, which every renderer, every tag, the spectator
+    /// picker and every hunter in the game already reads as "not there" — so the seat goes
+    /// quiet everywhere at once, including on clients, without a byte of new protocol.
+    /// </summary>
+    public void VacateSeat(int seat)
+    {
+        if ((uint)seat >= (uint)Players.Count) return;
+        _vacant.Add(seat);
+        PlayerTank gone = Players[seat];
+        gone.Away = true;
+        gone.Lives = 0;
+        gone.Shield = 0f;
+    }
+
+    /// <summary>
+    /// Client-side: makes sure <paramref name="seat"/> exists in the roster, appending
+    /// placeholder craft up to it. Deliberately not <see cref="AddPlayer"/>, which reuses
+    /// abandoned seats and so cannot be relied on to make the list longer — a growth loop
+    /// built on it would spin for ever the first time a seat came free.
+    /// </summary>
+    public bool EnsureSeat(int seat)
+    {
+        if (seat < 0 || seat >= MatchSettings.MaxSeats) return false;
+        while (Players.Count <= seat)
+        {
+            if (Players.Count >= Match.MaxPlayers) return false;
+            OpenSeat(Players.Count, null);
+        }
+        return true;
+    }
 
     /// <summary>
     /// What each seat is doing this tick. The host fills every entry — its own from the
@@ -3496,14 +3549,30 @@ public sealed class World : IAnchorField
     public PlayerTank? AddPlayer(Loadout? loadout = null)
     {
         if (Full) return null;
+        if (Players.Count >= MatchSettings.MaxSeats && _vacant.Count == 0) return null;
 
-        // Open the joiners clustered just ahead of the host and facing back toward the
-        // origin, so on the first frame everyone can already see everyone — which is the
-        // whole point while there are only a few of them and you want to check the other
-        // craft is really there, really the right chassis, and really moving. They fan out
-        // along a short line rather than stacking: seat 1 dead ahead, seat 2 a lane to its
-        // left, seat 3 to its right, and so on, so nobody opens inside anybody.
+        // A seat somebody abandoned in the lobby comes back into use before the roster is
+        // made any longer, so a room people walk in and out of does not grow a tail of dead
+        // craft. Lowest first, purely so seat numbers stay as tidy as they can.
         int seat = Players.Count;
+        foreach (int free in _vacant) if (free < seat) seat = free;
+        _vacant.Remove(seat);
+        return OpenSeat(seat, loadout);
+    }
+
+    /// <summary>
+    /// Builds the craft for one seat and puts it in the roster — appending if the seat is
+    /// past the end, replacing if it is a vacancy being reused.
+    ///
+    /// The joiners open clustered just ahead of the host and facing back toward the origin,
+    /// so on the first frame everyone can already see everyone — which is the whole point
+    /// while there are only a few of them and you want to check the other craft is really
+    /// there, really the right chassis, and really moving. They fan out along a short line
+    /// rather than stacking: seat 1 dead ahead, seat 2 a lane to its left, seat 3 to its
+    /// right, and so on, so nobody opens inside anybody.
+    /// </summary>
+    private PlayerTank OpenSeat(int seat, Loadout? loadout)
+    {
         float lane = ((seat + 1) / 2) * SeatSpacing * ((seat & 1) == 1 ? 1f : -1f);
         var at = new Vector2(lane, SeatAhead);
 
@@ -3514,7 +3583,12 @@ public sealed class World : IAnchorField
         {
             Lives = Match.Revives + 1,
         };
-        Players.Add(craft);
+        if (seat < Players.Count) Players[seat] = craft;
+        else Players.Add(craft);
+
+        // A reused seat starts clean: the pack the last occupant filled is not this
+        // person's, and the salvage they collected should not be waiting for a stranger.
+        if (seat < _inventories.Count) _inventories[seat] = new Inventory();
 
         // The two chassis that cannot open where everyone else does — see the constructor
         // for why a soldier starts in the city and a fish starts already swimming.

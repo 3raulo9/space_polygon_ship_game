@@ -157,9 +157,22 @@ public sealed class SteamNet : INetTransport, IDisposable
     public IReadOnlyList<int> Peers => _peers;
 
     /// <summary>True on a client once the host has actually accepted it.</summary>
-    public bool Connected => _isHost || _peers.Count > 0;
+    public bool Connected => _isHost || _linkUp;
 
-    /// <summary>Set when the connection dies, so the lobby screen can say why.</summary>
+    /// <summary>Client-side: true once Steam reports the connection to the host actually
+    /// established. Distinct from having a connection <em>handle</em>, which
+    /// <see cref="Connect"/> hands back the instant it is asked for and long before anything
+    /// has reached the other machine.</summary>
+    private bool _linkUp;
+
+    /// <summary>
+    /// Set when <em>this machine's</em> session has died, so the lobby can say why.
+    ///
+    /// Host-side this stays null when a client leaves. A peer dropping is ordinary — the
+    /// seat is held, the room is told, and the other eighteen people keep playing — and
+    /// reporting it here used to tear the host's whole session down and dump everyone,
+    /// which is the single worst thing that can happen in a room of five.
+    /// </summary>
     public string? Dropped { get; private set; }
 
     private SteamNet(bool host)
@@ -235,9 +248,16 @@ public sealed class SteamNet : INetTransport, IDisposable
                 }
                 break;
 
+            case ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected:
+                // The client's half of the handshake finally completing. Only meaningful on
+                // a joiner: the host learns it has a peer by accepting one, above.
+                if (!_isHost && _peerOf.ContainsKey(e.m_hConn)) _linkUp = true;
+                break;
+
             case ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ClosedByPeer:
             case ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
-                if (_peerOf.TryGetValue(e.m_hConn, out int gone))
+                bool wasOurs = _peerOf.TryGetValue(e.m_hConn, out int gone);
+                if (wasOurs)
                 {
                     _peers.Remove(gone);
                     _conns.Remove(gone);
@@ -247,8 +267,14 @@ public sealed class SteamNet : INetTransport, IDisposable
                     // resolves to the same seat.
                     _departed.Enqueue(gone);
                 }
-                Dropped = e.m_info.m_szEndDebug is { Length: > 0 } why
-                    ? why.ToUpperInvariant() : "CONNECTION LOST";
+                // Only a client has a session to lose here. On the host this is one player of
+                // several going away, which the departure queue above already reports properly.
+                if (!_isHost && wasOurs)
+                {
+                    _linkUp = false;
+                    Dropped = e.m_info.m_szEndDebug is { Length: > 0 } why
+                        ? why.ToUpperInvariant() : "CONNECTION LOST";
+                }
                 SteamNetworkingSockets.CloseConnection(e.m_hConn, 0, null, false);
                 break;
         }

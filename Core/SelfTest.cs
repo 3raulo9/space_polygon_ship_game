@@ -179,6 +179,18 @@ public static class SelfTest
         failures += Check("falling rubble crushes any player under it", CrushBillsEverySeat);
         failures += Check("the field fills around every player, not just the host", SpawnsFollowEverySeat);
 
+        // --- A room with more than two people in it -------------------------------
+        // Everything above this line was written against a host and one client, which is the
+        // one shape of session that was never actually broken.
+        failures += Check("five players all see each other as the craft they picked", EveryoneSeesEveryChassis);
+        failures += Check("a hello sent into a socket that isn't up yet is repeated", HelloSurvivesADeadSocket);
+        failures += Check("one player leaving does not end everybody else's match", AHostOutlivesItsPlayers);
+        failures += Check("a seat given up in the lobby is handed to the next joiner", AbandonedSeatsAreReused);
+        failures += Check("a full match tells the joiner so instead of ignoring them", AFullMatchRefusesOutLoud);
+        failures += Check("somebody who joins a running match still picks their craft", LateJoinerPicksTheirChassis);
+        failures += Check("a player who arrives after LAUNCH is still named on every screen", NamesReachEveryoneAfterLaunch);
+        failures += Check("a rules change reaches the seat count clients grow by", RulesReachTheClientsWorld);
+
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
             : $"SELFTEST: {failures} check(s) FAILED");
@@ -6029,5 +6041,431 @@ public static class SelfTest
         if (world.Enemies.Count == 0) return;
         Vector2 to = world.Enemies[0].Position - world.Player.Position;
         world.Player.Heading = MathF.Atan2(to.X, to.Y);
+    }
+
+    // --- A room with more than two people in it -----------------------------------
+    //
+    // Every netcode test above this point drives a host and exactly one client, which is the
+    // one arrangement that mostly worked. Almost everything that was actually wrong with this
+    // game's multiplayer only shows up with a third person in the room, or with somebody
+    // walking out of it, or with somebody arriving after everyone else had settled.
+    //
+    // Rather than hand-rolling the handshake in each test, this stands up a whole session the
+    // way the loop really does — Game.StartHosting, Game.StartJoining and Game.UpdateLobby,
+    // step for step — so a test exercises the code that ships rather than a sketch of it.
+
+    /// <summary>One machine in a test session: its transport, its session, its lobby room and
+    /// its world, driven exactly as <see cref="Game"/> drives them.</summary>
+    private sealed class Machine
+    {
+        public Session Net = null!;
+        public World.LobbyRoom? Room;
+        public World.World World = null!;
+        public Loadout Build = null!;
+        public string Name = "";
+        public bool InMatch;
+        public bool GoneAway;
+    }
+
+    /// <summary>A whole test session: one host and up to nineteen clients on a shared wire.</summary>
+    private sealed class Session3Plus
+    {
+        public LoopbackNet Wire = null!;
+        public Machine[] All = null!;
+        public MatchSettings Rules = null!;
+
+        public Machine Host => All[0];
+
+        /// <summary>One frame everywhere: the wire ticks, then each machine runs whichever of
+        /// the loop's two paths it is on (the lobby screen, or the live match).</summary>
+        public void Step()
+        {
+            Wire.Advance();
+            foreach (Machine m in All)
+            {
+                if (m.GoneAway || m.Net is null) continue;
+
+                if (m.InMatch)
+                {
+                    m.Net.Pump(InputFrame.Empty);
+                    m.World.Update((float)Config.FixedDt, InputFrame.Empty);
+                    continue;
+                }
+                if (m.Room is null) continue;
+
+                // --- Game.UpdateLobby ---
+                if (m.Net.Rejected is { } no) { m.Room.Fail(no); continue; }
+                if (!m.Net.IsHost && m.Net.LocalSeat >= 0
+                    && m.Room.Stage != World.LobbyRoom.Phase.InRoom)
+                    m.Room.Seat(m.Net.LocalSeat, m.Net.LocalName);
+                if (m.Net.IsHost && m.Net.World is { } hw) hw.Match = m.Room.Match.Clamped();
+                m.Room.Update(InputFrame.Empty, (float)Config.FixedDt);
+                m.Net.LobbyTick(m.Room);
+
+                // A client comes in on LAUNCH, but only once it has chosen a craft.
+                if (!m.Net.IsHost && m.Net is { MatchStarted: true, LocalSeat: >= 0 }
+                    && m.Room is { MyChassis: not null } r)
+                {
+                    World.World jw = m.Net.World!;
+                    m.Build.Class = r.MyChassis.Value;
+                    jw.ReplacePlayer(m.Net.LocalSeat, m.Build);
+                    foreach (var a in r.Avatars.Values)
+                        if (!jw.SeatNames.ContainsKey(a.Seat)) jw.SeatNames[a.Seat] = a.Name;
+                    m.Net.Room = null;
+                    m.Room = null;
+                    m.World = jw;
+                    m.InMatch = true;
+                }
+            }
+        }
+
+        public void Step(int frames) { for (int i = 0; i < frames; i++) Step(); }
+
+        /// <summary>Game.StartJoining: dials the host and waits to be seated.</summary>
+        public void Join(int peer)
+        {
+            Machine m = All[peer];
+            m.GoneAway = false;
+            // A reconnection is a fresh socket the host can reach again, which is what a real
+            // transport does for it; without this a rejoiner would get the host's directed
+            // sends and none of its broadcasts.
+            Wire.Readmit(0, peer);
+            m.Build = new Loadout { Class = PlayerClass.Tank };
+            m.World = new World.World(m.Build) { DynamicSpawning = false, Authoritative = false };
+            m.Net = new Session(Wire[peer], host: false) { LocalName = m.Name };
+            m.Net.JoinMatch(m.World);
+            m.Net.SendHello(m.Build.Class);
+            m.Room = new World.LobbyRoom { IsHost = false };
+            m.Net.Room = m.Room;
+            m.Room.Connecting();
+        }
+
+        /// <summary>Game.UpdateLobby's LAUNCH branch.</summary>
+        public void Launch()
+        {
+            World.World hw = Host.Net.World!;
+            foreach (var p in hw.Players) p.Lives = hw.Match.Revives + 1;
+            Host.Net.StartMatch();
+            Host.Net.Room = null;
+            Host.Room = null;
+            Host.InMatch = true;
+        }
+
+        /// <summary>Somebody's connection dies, from the host's point of view.</summary>
+        public void Leave(int peer)
+        {
+            Wire.DropPeer(0, peer);
+            All[peer].GoneAway = true;
+        }
+    }
+
+    /// <summary>
+    /// Stands up a host and room for <paramref name="clients"/> joiners, dials
+    /// <paramref name="joinNow"/> of them in (all of them by default), and pumps until the
+    /// handshake has settled. The rest are machines the wire knows about that have not picked
+    /// up the phone yet — which is what a test of a late arrival needs.
+    /// </summary>
+    private static Session3Plus OpenRoom(int clients, MatchSettings rules,
+        LinkQuality quality = default, int seed = 4242, int joinNow = -1)
+    {
+        if (joinNow < 0) joinNow = clients;
+        var s = new Session3Plus
+        {
+            Wire = new LoopbackNet(clients + 1, quality, seed),
+            All = new Machine[clients + 1],
+            Rules = rules,
+        };
+        for (int i = 0; i <= clients; i++)
+            s.All[i] = new Machine { Name = i == 0 ? "HOST" : $"PLAYER{i}" };
+
+        // Game.StartHosting.
+        Machine h = s.Host;
+        h.Build = new Loadout { Class = PlayerClass.Tank };
+        h.Room = new World.LobbyRoom { IsHost = true };
+        h.Room.AdoptRules(rules);
+        h.World = new World.World(h.Build, h.Room.Match.Clamped()) { DynamicSpawning = false };
+        h.World.Enemies.Clear();
+        h.Net = new Session(s.Wire[0], host: true) { LocalName = h.Name };
+        h.Net.HostMatch(h.World);
+        h.Net.Room = h.Room;
+        h.Room.Seat(0, h.Name);
+
+        for (int i = 1; i <= joinNow; i++) s.Join(i);
+        s.Step(120);
+        return s;
+    }
+
+    /// <summary>The whole point of the mode: five people pick five different craft and every
+    /// machine — the host's included — shows every one of them as what its player chose. This
+    /// is asserted twice, because they are two entirely separate paths: the lobby room carries
+    /// a chassis in its own RoomState packet, and the match carries it in the players packet.</summary>
+    private static string? EveryoneSeesEveryChassis()
+    {
+        var picks = new[] { PlayerClass.Spider, PlayerClass.Virus, PlayerClass.Fish,
+                            PlayerClass.Soldier, PlayerClass.Tank };
+        Session3Plus s = OpenRoom(4, new MatchSettings { MaxPlayers = 8, Revives = 2 },
+            LinkQuality.Awful);
+
+        // Four people dialling at once are seated in the order their hellos actually land,
+        // which a jittery wire shuffles — so what each of them picked is keyed by the seat
+        // they were really given, not by which machine in the test they happen to be.
+        var wants = new PlayerClass[5];
+        for (int i = 0; i < 5; i++)
+        {
+            int seat = s.All[i].Net.LocalSeat;
+            if (seat < 0 || seat > 4) return $"player {i} was never seated (at {seat})";
+            if (wants[seat] != default && seat != 0)
+                return $"two players were handed seat {seat}";
+            wants[seat] = picks[i];
+            s.All[i].Room!.PickForTest(picks[i]);
+            s.Step(20);
+        }
+        if (s.Host.Net.LocalSeat != 0) return "the host was not seat 0";
+        s.Step(90);
+
+        // The lobby floor: everyone's figure, on everyone's screen, as the craft they chose.
+        for (int who = 0; who < 5; who++)
+            for (int seat = 0; seat < 5; seat++)
+            {
+                if (!s.All[who].Room!.Avatars.TryGetValue(seat, out var a))
+                    return $"player {who} could not see seat {seat} in the room at all";
+                if (a.Chassis != wants[seat])
+                    return $"player {who} saw seat {seat} in the room as " +
+                           $"{a.Chassis?.ToString() ?? "nothing"}, not {wants[seat]}";
+                if (!a.Ready) return $"player {who} saw seat {seat} as not ready after it picked";
+            }
+        if (!s.Host.Room!.AllReady) return "everybody had picked and the launch gate stayed shut";
+
+        // ...and the match.
+        s.Launch();
+        s.Step(300);
+        for (int who = 0; who < 5; who++)
+        {
+            World.World w = s.All[who].World;
+            if (!s.All[who].InMatch) return $"player {who} never came in when the host launched";
+            if (w.Players.Count != 5)
+                return $"player {who} sees {w.Players.Count} craft in the match, not five";
+            for (int seat = 0; seat < 5; seat++)
+                if (w.Players[seat].Class != wants[seat])
+                    return $"in the match, player {who} sees seat {seat} as " +
+                           $"{w.Players[seat].Class}, not the {wants[seat]} they picked";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The join handshake, against the one condition it is guaranteed to meet: a P2P
+    /// connection that has a handle but not yet a route. The hello sent into that window is
+    /// gone for good — no reliable channel retransmits a message that never entered one — so
+    /// a single-shot hello left the joiner on CONNECTING for ever with no way back but Escape.
+    /// </summary>
+    private static string? HelloSurvivesADeadSocket()
+    {
+        Session3Plus s = OpenRoom(1, new MatchSettings { MaxPlayers = 4 }, joinNow: 0);
+
+        // The socket is not up. Everything this joiner says goes into the void.
+        s.Wire.Mute(1, true);
+        s.Join(1);
+        s.Step(90);
+        if (s.All[1].Net.LocalSeat >= 0) return "the joiner was seated through a dead socket";
+
+        // Steam finishes punching through. Nothing re-sends the lost hello but the client.
+        s.Wire.Mute(1, false);
+        s.Step(180);
+        if (s.All[1].Net.LocalSeat != 1)
+            return $"the link came up and the joiner never asked again (seat {s.All[1].Net.LocalSeat})";
+        if (s.Host.World.Occupied != 2) return "the host did not seat the joiner that got through";
+        return null;
+    }
+
+    /// <summary>
+    /// One player leaving is the most ordinary thing that happens in a room of five, and it
+    /// used to end the match for everybody: Steam reports a closed connection to both ends, the
+    /// host read its own report as "your session is dead" and tore the whole thing down. The
+    /// other four were evicted because one person alt-F4'd.
+    /// </summary>
+    private static string? AHostOutlivesItsPlayers()
+    {
+        Session3Plus s = OpenRoom(3, new MatchSettings { MaxPlayers = 8, Revives = 2 });
+        for (int i = 0; i < 4; i++) { s.All[i].Room!.PickForTest(PlayerClass.Tank); s.Step(15); }
+        s.Launch();
+        s.Step(120);
+
+        s.Leave(2);
+        s.Step(120);
+
+        if (s.Host.Net.World is null) return "the host tore its own world down when a player left";
+        if (!s.Host.InMatch) return "the host was thrown out of its own match";
+        for (int i = 0; i < 4; i++)
+        {
+            if (i == 2) continue;
+            if (!s.All[i].InMatch) return $"player {i} was evicted when player 2 left";
+            if (s.All[i].World.Players.Count != 4)
+                return $"player {i}'s roster fell apart when player 2 left";
+        }
+        // The one who left is held, frozen, for a reconnection — not deleted.
+        if (!s.Host.World.Players[2].Away) return "the departed craft was not marked away";
+        return null;
+    }
+
+    /// <summary>
+    /// Somebody who walks out of the lobby has nothing worth holding — no history, no salvage,
+    /// no position they earned — so their seat goes back in the pool. Held instead, a room that
+    /// people came and went from opened its match with a row of abandoned craft standing on the
+    /// grid, each one still counting against the host's seat limit.
+    /// </summary>
+    private static string? AbandonedSeatsAreReused()
+    {
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 3, Revives = 2 });
+        if (s.Host.World.Occupied != 3) return "three people did not fill three seats";
+        if (!s.Host.World.Full) return "a three-of-three room did not call itself full";
+
+        s.Leave(1);
+        s.Step(60);
+        if (s.Host.World.Occupied != 2) return "a lobby leaver kept their seat";
+        if (s.Host.World.Full) return "the room was still full after somebody left it";
+        if (s.Host.World.Players[1].Alive)
+            return "the abandoned craft was left standing on the grid";
+        if (s.Host.Room!.Avatars.ContainsKey(1)) return "their figure was left on the lobby floor";
+
+        // The next person through the door gets the seat that came free, not a fourth one.
+        s.Join(1);
+        s.Step(150);
+        if (s.All[1].Net.LocalSeat != 1)
+            return $"the next joiner took seat {s.All[1].Net.LocalSeat} rather than the free one";
+        if (s.Host.World.Players.Count != 3)
+            return $"the roster grew to {s.Host.World.Players.Count} for a three-seat match";
+        if (!s.Host.World.Players[1].Alive) return "the reused seat opened dead";
+        return null;
+    }
+
+    /// <summary>A match with no room in it has to say so. Ignoring the hello — which is what
+    /// used to happen — leaves the joiner watching the CONNECTING banner until they give up,
+    /// with nothing anywhere to tell them why.</summary>
+    private static string? AFullMatchRefusesOutLoud()
+    {
+        // Two seats, three machines: the host and one joiner fill it, the third is turned away.
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 2 }, joinNow: 1);
+        if (!s.Host.World.Full) return "a two-of-two match did not call itself full";
+
+        s.Join(2);
+        s.Step(180);
+        if (s.All[2].Net.Rejected is null)
+            return "a full match ignored the third joiner instead of refusing them";
+        if (s.All[2].Net.LocalSeat >= 0) return "a full match seated a third player anyway";
+        if (s.All[2].Room!.Trouble is null) return "the refused joiner was left with no reason";
+        if (s.Host.World.Players.Count != 2)
+            return $"the refused joiner still cost the host a seat ({s.Host.World.Players.Count})";
+        return null;
+    }
+
+    /// <summary>
+    /// Dialling into a match that is already running. The host seats them and tells them START
+    /// in the same breath, so there is no lobby moment left to choose a craft in — and before
+    /// this they were dropped in permanently as the placeholder tank their hello carried, with
+    /// no way ever to be anything else. Now they stand at the pod until they pick, and the pick
+    /// crosses mid-match like any other.
+    /// </summary>
+    private static string? LateJoinerPicksTheirChassis()
+    {
+        // Host and one player launch; the third machine has not dialled yet.
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 4, Revives = 2 }, joinNow: 1);
+        s.All[0].Room!.PickForTest(PlayerClass.Tank);
+        s.All[1].Room!.PickForTest(PlayerClass.Spider);
+        s.Step(40);
+        s.Launch();
+        s.Step(180);
+
+        // Somebody dials in with the match already running.
+        s.Join(2);
+        s.Step(240);
+
+        if (s.All[2].Net.LocalSeat < 0) return "the mid-match joiner was never seated";
+        if (!s.All[2].Net.MatchStarted) return "the mid-match joiner was never told the match was on";
+        if (s.All[2].InMatch)
+            return "the mid-match joiner was walked into the match before choosing a craft";
+
+        s.All[2].Room!.PickForTest(PlayerClass.Fish);
+        s.Step(300);
+
+        if (!s.All[2].InMatch) return "picking a craft did not bring the joiner in";
+        int seat = s.All[2].Net.LocalSeat;
+        for (int who = 0; who < 3; who++)
+        {
+            if (!s.All[who].InMatch) continue;
+            World.World w = s.All[who].World;
+            if (seat >= w.Players.Count)
+                return $"player {who} cannot see the late joiner's seat at all";
+            if (w.Players[seat].Class != PlayerClass.Fish)
+                return $"player {who} sees the late joiner as {w.Players[seat].Class}, not a FISH";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Names used to reach the match only by being copied off the lobby room at LAUNCH, so
+    /// everyone who arrived after that — every rejoin, every late joiner — was a nameless craft
+    /// on every screen but the host's for the rest of the match.
+    /// </summary>
+    private static string? NamesReachEveryoneAfterLaunch()
+    {
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 4, Revives = 2 });
+        for (int i = 0; i < 3; i++) { s.All[i].Room!.PickForTest(PlayerClass.Tank); s.Step(15); }
+        s.Launch();
+        s.Step(180);
+
+        for (int who = 0; who < 3; who++)
+            for (int seat = 0; seat < 3; seat++)
+            {
+                string expect = seat == 0 ? "HOST" : $"PLAYER{seat}";
+                if (s.All[who].World.NameOf(seat) != expect)
+                    return $"player {who} knows seat {seat} as " +
+                           $"'{s.All[who].World.NameOf(seat)}', not '{expect}'";
+            }
+
+        // Somebody leaves and a stranger takes the seat, all while the match runs.
+        s.Leave(2);
+        s.Step(60);
+        s.All[2].Name = "STRANGER";
+        s.Join(2);
+        s.Step(180);
+        s.All[2].Room?.PickForTest(PlayerClass.Tank);
+        s.Step(180);
+
+        int took = s.All[2].Net.LocalSeat;
+        if (took < 0) return "the replacement was never seated";
+        for (int who = 0; who < 3; who++)
+        {
+            if (!s.All[who].InMatch) continue;
+            if (s.All[who].World.NameOf(took) != "STRANGER")
+                return $"player {who} knows the new arrival as " +
+                       $"'{s.All[who].World.NameOf(took)}', not 'STRANGER'";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// A rules change has to reach the client's <em>world</em>, not just the readout on its
+    /// lobby console. The seat count is the load-bearing one: a client refuses to grow its
+    /// roster past its own MaxPlayers, so a host who widened the room after somebody joined
+    /// left that person unable to see anyone past the old limit — named by every snapshot and
+    /// created by none.
+    /// </summary>
+    private static string? RulesReachTheClientsWorld()
+    {
+        Session3Plus s = OpenRoom(1, new MatchSettings { MaxPlayers = 2, Revives = 2 });
+        if (s.All[1].World.Match.MaxPlayers != 2)
+            return $"the joiner opened on {s.All[1].World.Match.MaxPlayers} seats, not the host's 2";
+
+        // The host widens the room at the console.
+        s.Host.Room!.SetRulesForTest(new MatchSettings { MaxPlayers = 6, Revives = 4 });
+        s.Step(90);
+
+        if (s.All[1].World.Match.MaxPlayers != 6)
+            return $"the widened room never reached the client's world " +
+                   $"({s.All[1].World.Match.MaxPlayers} seats)";
+        if (s.All[1].Room!.Match.Revives != 4)
+            return "the new revive count never reached the client's lobby";
+        return null;
     }
 }
