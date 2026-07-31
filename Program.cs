@@ -20,6 +20,13 @@ if (args.Contains("--steamcheck"))
     return ok ? 0 : 1;
 }
 
+// Did the soundtrack find my files? Opens the audio device but no window, rolls the
+// rotation on a collapsed clock and prints what it picks, so a .wav dropped into
+// Assets/Audio/Music can be confirmed in seconds rather than by playing for an hour and
+// hoping. Each piece is heard for a moment and then skipped to its end.
+if (args.Contains("--musiccheck"))
+    return MusicCheck.Run();
+
 Raylib.SetConfigFlags(ConfigFlags.VSyncHint);
 Raylib.InitWindow(Config.WindowWidth, Config.WindowHeight, "VOID TANKS");
 Raylib.SetExitKey(KeyboardKey.Null); // Escape is handled in the loop, not by Raylib

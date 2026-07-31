@@ -35,6 +35,22 @@ public sealed class Game : IDisposable
     private World.World? _world;
     private GameState _state = GameState.Menu;
 
+    /// <summary>
+    /// Whether the player is out in a match rather than sitting in front of one. The
+    /// soundtrack rides on this: menus, the hangar, the lobby and the bestiary are all
+    /// silent, and a piece that is sounding when the player leaves for one of them
+    /// fades out rather than being cut.
+    ///
+    /// A pause counts as being in the world on purpose. The sim is frozen, but the
+    /// music is not scoring the sim — it is scoring the session, and killing it the
+    /// moment the panel opens makes stepping back from the game feel like quitting it.
+    /// Death and the level-clear screen count for the same reason: both are still the
+    /// match, and both are the last places you would want the sound to fall away.
+    /// </summary>
+    private bool InWorld => _state
+        is GameState.Playing or GameState.Paused or GameState.Dead
+        or GameState.LevelIntro or GameState.LevelClear;
+
     // Reads the keyboard once per frame and rations it out to the fixed steps. Everything
     // the sim knows about the player's hands arrives through this and nothing else, which
     // is what lets the same world be driven by a recording, a test, or a second player.
@@ -177,11 +193,13 @@ public sealed class Game : IDisposable
     {
         while (!Raylib.WindowShouldClose())
         {
-            // Drain any time-scheduled audio (the boss's death cascade). Sits above
-            // every early-out below on purpose: the cascade is queued as absolute
-            // wall-clock times, so if the player pauses or bails to the menu part-way
-            // through it still finishes rather than stranding a half-played death.
-            Audio.Update();
+            // Drain any time-scheduled audio (the boss's death cascade) and service the
+            // soundtrack. Sits above every early-out below on purpose: the cascade is
+            // queued as absolute wall-clock times, so if the player pauses or bails to
+            // the menu part-way through it still finishes rather than stranding a
+            // half-played death — and a music stream has to be fed every single frame
+            // it is open, including the frames a fade or a menu owns.
+            Audio.Update(InWorld);
 
             // Steam's own callbacks — connection state changes arrive through these. Cheap
             // and harmless when Steam never came up.

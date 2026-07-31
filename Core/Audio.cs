@@ -78,6 +78,10 @@ public static class Audio
         _wind.Load(SfxSynth.RenderWav(SfxSynth.WindRush(_sfxRng)));
         _cableStrain.Load(SfxSynth.RenderWav(SfxSynth.CableStrain(_sfxRng)));
 
+        // The soundtrack. Owns its own clip list — it reads the music folder rather than
+        // naming files the way everything above has to — and its own clock.
+        MusicBox.Init();
+
         _enabled = true;
     }
 
@@ -802,10 +806,16 @@ public static class Audio
     /// Call once per frame from the main loop. The death cascade has to be spread
     /// over time and the hum stream needs refilling every frame; everything else in
     /// the bank fires the instant it is asked to and needs no clock.
+    ///
+    /// <paramref name="inWorld"/> is whether the player is actually in a match, which
+    /// is all <see cref="MusicBox"/> needs from the game to know whether a piece may be
+    /// sounding — everything else about the soundtrack is its own business.
     /// </summary>
-    public static void Update()
+    public static void Update(bool inWorld)
     {
         if (!_enabled) return;
+
+        MusicBox.Service(Raylib.GetFrameTime(), inWorld);
 
         double now = Raylib.GetTime();
         for (int i = 0; i < BossBoomCount; i++)
@@ -1377,6 +1387,7 @@ public static class Audio
     public static void Shutdown()
     {
         if (!_enabled) return;
+        MusicBox.Shutdown();
         _hum.Unload();
         _mawHover.Unload();
         _lanceCharge.Unload();
