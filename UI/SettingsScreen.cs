@@ -17,6 +17,13 @@ public sealed class SettingsScreen
         SwapTurn,
         Movement,
         Fire,
+        // The mixer's faders. Separate buses, so the soundtrack and the guns can be set
+        // against each other rather than everything moving together.
+        Master,
+        Sfx,
+        Music,
+        Mono,
+        SoftenLoud,
         Back,
     }
 
@@ -64,8 +71,33 @@ public sealed class SettingsScreen
             case Row.Fire:
                 _settings.Fire = CycleEnum(_settings.Fire, dir);
                 break;
+
+            case Row.Master:
+                _settings.MasterVolume = Settings.StepVolume(_settings.MasterVolume, dir);
+                break;
+            case Row.Sfx:
+                _settings.SfxVolume = Settings.StepVolume(_settings.SfxVolume, dir);
+                break;
+            case Row.Music:
+                _settings.MusicVolume = Settings.StepVolume(_settings.MusicVolume, dir);
+                break;
+            case Row.Mono:
+                _settings.MonoAudio = !_settings.MonoAudio;
+                break;
+            case Row.SoftenLoud:
+                _settings.SoftenLoudSounds = !_settings.SoftenLoudSounds;
+                break;
         }
+
+        // Straight into the mixer, so a fader is heard as it moves rather than on the way
+        // out of the screen. The menu blip that follows this frame's keypress is itself the
+        // audition: nudge the master down and the next one is quieter.
+        if (IsAudio(Selected)) Audio.ApplySettings(_settings);
     }
+
+    /// <summary>Whether a row belongs to the mixer, and so should be applied live.</summary>
+    public static bool IsAudio(Row row)
+        => row is Row.Master or Row.Sfx or Row.Music or Row.Mono or Row.SoftenLoud;
 
     private static T CycleEnum<T>(T value, int dir) where T : struct, System.Enum
     {
@@ -83,6 +115,11 @@ public sealed class SettingsScreen
         Row.SwapTurn => "SWAP TURN L / R",
         Row.Movement => "MOVEMENT",
         Row.Fire => "FIRE KEY",
+        Row.Master => "MASTER",
+        Row.Sfx => "EFFECTS",
+        Row.Music => "MUSIC",
+        Row.Mono => "MONO",
+        Row.SoftenLoud => "SOFTEN LOUD",
         Row.Back => "BACK",
         _ => "",
     };
@@ -92,6 +129,11 @@ public sealed class SettingsScreen
         Row.SwapTurn => _settings.SwapLabel,
         Row.Movement => _settings.MovementLabel,
         Row.Fire => _settings.FireLabel,
+        Row.Master => Settings.VolumeLabel(_settings.MasterVolume),
+        Row.Sfx => Settings.VolumeLabel(_settings.SfxVolume),
+        Row.Music => Settings.VolumeLabel(_settings.MusicVolume),
+        Row.Mono => _settings.MonoAudio ? "ON" : "OFF",
+        Row.SoftenLoud => _settings.SoftenLoudSounds ? "ON" : "OFF",
         _ => "",
     };
 }

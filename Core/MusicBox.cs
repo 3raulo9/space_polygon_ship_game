@@ -94,6 +94,17 @@ public static class MusicBox
     private static string _lastPath = "";   // what we heard last, so it can't come round twice
 
     private static float _volume;
+
+    /// <summary>The music bus's fader, from the settings screen. The soundtrack streams
+    /// through raylib rather than through the mixer — it has no position and would gain
+    /// nothing from having one — so its bus gain has to reach it this way.</summary>
+    public static float Fader = 1f;
+
+    /// <summary>How far the music is currently pushed down under the world. Driven by
+    /// <see cref="Audio.Intensity"/> and by the master limiter, so the soundtrack gets out
+    /// of the way of a boss dying without anybody having to author the moment.</summary>
+    public static float Duck = 1f;
+
     private static double _began;           // wall clock the current piece started
     private static double _nextRoll;        // wall clock the next piece may begin
 
@@ -173,7 +184,10 @@ public static class MusicBox
             // Ease toward this frame's level and keep the stream's buffers fed. The
             // refill has to happen every frame a stream is open, fading or not.
             _volume = Approach(_volume, wanted ? MaxVolume : 0f, FadeRate * dt);
-            Raylib.SetMusicVolume(_music, _volume);
+            // The player's fader and the ducker ride on top of the fade rather than being
+            // folded into it, so a piece that is currently swelling in still ducks under a
+            // boss dying — and comes back to the right level rather than to full.
+            Raylib.SetMusicVolume(_music, _volume * Fader * Duck);
             Raylib.UpdateMusicStream(_music);
 
             // Done when the piece runs out, or when it has finished fading away

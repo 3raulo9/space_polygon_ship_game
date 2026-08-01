@@ -122,6 +122,8 @@ public sealed class Game : IDisposable
         // Load persisted controls and make them the live binding set the sim polls.
         _settings = Settings.Load();
         InputMap.Active = _settings;
+        // ...and the persisted faders into the mixer, before a single cue can be raised.
+        Audio.ApplySettings(_settings);
         _settingsScreen = new SettingsScreen(_settings);
         _classSelect = new ClassSelectScreen(_loadout);
 
@@ -296,6 +298,22 @@ public sealed class Game : IDisposable
             // 'F' toggles the inventory overlay. Escape closes it too if it's open;
             // otherwise Escape opens the pause panel (the world only pauses when the
             // inventory is *not* up — the panel itself never freezes the sim).
+            // Pointing at something, and — once your revives are spent — choosing which
+            // team-mate to watch. Both are multiplayer-only and both are held back while the
+            // inventory panel owns the mouse, since middle-click and the arrows mean something
+            // else in there.
+            if (_session != null && !_inventoryOpen)
+            {
+                if (InputMap.WorldPingPressed && !_world!.Spectating)
+                    _session.Mark(_world.CrosshairTarget());
+
+                if (_world!.Spectating)
+                {
+                    if (InputMap.SpectateNextPressed) _world.CycleSpectator(+1);
+                    else if (InputMap.SpectatePrevPressed) _world.CycleSpectator(-1);
+                }
+            }
+
             if (InputMap.InventoryToggle)
                 SetInventory(!_inventoryOpen);
             else if (InputMap.QuitPressed)

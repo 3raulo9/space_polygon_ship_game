@@ -353,6 +353,13 @@ public sealed class Renderer : IDisposable
         // Floating name + shield bar over each team-mate, so a twenty-player field reads.
         DrawPlayerTags(world);
 
+        // ...and the places people have pointed at.
+        DrawMarkers(world);
+
+        // ...and the whole roster on demand. Only in a match: a solo run's scoreboard is one
+        // row about the only person in it.
+        if (notices != null && Input.InputMap.ScoreboardDown) HudRenderer.DrawScoreboard(world);
+
         Raylib.EndTextureMode();
     }
 
@@ -363,6 +370,70 @@ public sealed class Renderer : IDisposable
     /// behind the camera and past a sensible range, and drawn at each craft's nearest wrap image
     /// so a team-mate just over the seam is tagged where they are actually drawn.
     /// </summary>
+    /// <summary>
+    /// The marks players have put on the world: a bracket at the place, the name of whoever
+    /// pointed, and — when it is behind you — an arrow at the edge of the screen saying which
+    /// way to turn.
+    ///
+    /// <para>That last part is most of the value. A marker you can only see when you are
+    /// already looking at it tells you nothing you did not know; one that says "behind you,
+    /// left" is the whole of what a player without voice chat needs to say.</para>
+    /// </summary>
+    private void DrawMarkers(World.World world)
+    {
+        if (world.Markers.Count == 0) return;
+
+        var camXZ = new Vector2(_camera.Position.X, _camera.Position.Z);
+        Vector3 fwd = Vector3.Normalize(_camera.Target - _camera.Position);
+
+        foreach (var mark in world.Markers)
+        {
+            // Fades over its last two seconds rather than blinking out, so the field never
+            // seems to lose something while you are looking at it.
+            float a = Math.Clamp(mark.Remaining / 2f, 0f, 1f);
+            byte alpha = (byte)(a * 255);
+            Color col = new(Palette.Flag.R, Palette.Flag.G, Palette.Flag.B, alpha);
+
+            Vector2 near = Torus.NearestImage(mark.Position, camXZ);
+            var head = new Vector3(near.X, 3.2f, near.Y);
+            bool ahead = Vector3.Dot(fwd, head - _camera.Position) > 0.2f;
+
+            if (ahead)
+            {
+                Vector2 s = Raylib.GetWorldToScreenEx(head, _camera,
+                    Config.InternalWidth, Config.InternalHeight);
+                if (s.X > -30 && s.X < Config.InternalWidth + 30)
+                {
+                    // A diamond that breathes, so it reads as something somebody put there
+                    // rather than as another piece of the world's own furniture.
+                    float pulse = 3f + 1.4f * MathF.Sin(mark.Remaining * 6f);
+                    int x = (int)s.X, y = (int)s.Y;
+                    Raylib.DrawLine(x, (int)(y - pulse), (int)(x + pulse), y, col);
+                    Raylib.DrawLine((int)(x + pulse), y, x, (int)(y + pulse), col);
+                    Raylib.DrawLine(x, (int)(y + pulse), (int)(x - pulse), y, col);
+                    Raylib.DrawLine((int)(x - pulse), y, x, (int)(y - pulse), col);
+
+                    int range = (int)Torus.Distance(mark.Position, camXZ);
+                    PixelFont.DrawCentered($"{world.NameOrSeat(mark.Seat)} {range}m",
+                        x, y - 12, 1, col);
+                    continue;
+                }
+            }
+
+            // Off screen, or behind. A chevron pinned to the edge on the side it lies, at the
+            // height the eye would find it — the one thing that makes a mark useful to
+            // somebody who is not already facing it.
+            Vector2 to = Torus.Delta(camXZ, mark.Position);
+            Vector2 right = new(MathF.Cos(world.Eye.Heading), -MathF.Sin(world.Eye.Heading));
+            bool onRight = Vector2.Dot(to, right) >= 0f;
+            int ex = onRight ? Config.InternalWidth - 10 : 10;
+            int ey = Config.InternalHeight / 2;
+            int dir = onRight ? 1 : -1;
+            Raylib.DrawLine(ex, ey - 4, ex + 4 * dir, ey, col);
+            Raylib.DrawLine(ex + 4 * dir, ey, ex, ey + 4, col);
+        }
+    }
+
     private void DrawPlayerTags(World.World world)
     {
         var camXZ = new Vector2(_camera.Position.X, _camera.Position.Z);

@@ -11,7 +11,7 @@ namespace VoidTanks.Core;
 /// the player can destroy an enemy, and an enemy can damage the player. Run with
 /// `dotnet run -- --selftest`. Exits non-zero on failure so it can gate a build.
 /// </summary>
-public static class SelfTest
+public static partial class SelfTest
 {
     public static int Run()
     {
@@ -191,6 +191,30 @@ public static class SelfTest
         failures += Check("somebody who joins a running match still picks their craft", LateJoinerPicksTheirChassis);
         failures += Check("a player who arrives after LAUNCH is still named on every screen", NamesReachEveryoneAfterLaunch);
         failures += Check("a rules change reaches the seat count clients grow by", RulesReachTheClientsWorld);
+
+        // --- The room ---------------------------------------------------------------
+        // Twenty players is a room, not twenty simultaneous single-player games. These are
+        // the things that make it one, and every last one of them is about whether something
+        // done on one machine reached another.
+        failures += Check("a kill is credited and announced to the whole room", KillsAreCreditedAndAnnounced);
+        failures += Check("the scoreboard and the ping column cross the wire", TheScoreboardCrossesTheWire);
+        failures += Check("a mark one player drops is seen by the others", MarksReachTheWholeRoom);
+        failures += Check("a spectator can choose who they watch", ASpectatorCanChangeWhoTheyWatch);
+
+        // --- The sound engine ------------------------------------------------------
+        // Pure float arithmetic, so all of it runs with no audio device at all. This is
+        // how the mix is checked without two machines and a pair of ears.
+        failures += Check("a sound gets quieter and duller the further off it is", DistanceDullsAndQuietens);
+        failures += Check("a sound to the right comes out of the right speaker", PanFollowsTheView);
+        failures += Check("a tower between you and a shot muffles it", TheCityMufflesWhatIsBehindIt);
+        failures += Check("a distant blast arrives after the flash", SoundTakesTimeToArrive);
+        failures += Check("twenty rifles do not become forty voices", InstanceCapsHoldTheLine);
+        failures += Check("a loud close sound displaces a quiet far one", LoudNearbyBeatsQuietFarOff);
+        failures += Check("a boss death is never dropped for a footstep", PriorityProtectsTheBigMoments);
+        failures += Check("the mix never leaves the rails", TheLimiterHoldsTheCeiling);
+        failures += Check("a blast in your face muffles the whole world", ConcussionDucksAndDulls);
+        failures += Check("a spectator hears from the craft they are riding", EarsRideTheCamera);
+        failures += Check("a sound over the seam is heard beside you", TheTorusDoesNotBreakTheEars);
 
         // --- The monsters can reach anybody, not just seat 0 ----------------------
         failures += Check("the crab's beam burns whoever is standing in it", BeamBurnsEverySeat);

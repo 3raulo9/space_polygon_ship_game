@@ -313,6 +313,10 @@ public static class Snapshot
     /// </summary>
     private const int MaxStructures = 20;
 
+    /// <summary>How many buildings one packet can carry — the step the writer's start index
+    /// walks by, so consecutive snapshots describe consecutive slices rather than the same one.</summary>
+    public const int MaxStructuresPerPacket = MaxStructures;
+
     /// <summary>Bytes per building: index, flags, and the standing-cell mask.</summary>
     private const int StructureBytes = 2 + 1 + World.Fracture.MaskBytes;
 
@@ -347,7 +351,15 @@ public static class Snapshot
     /// </summary>
     /// <returns>Bytes written, or 0 when there is nothing damaged near this client at all —
     /// which is most of a match, and is not worth a packet.</returns>
-    public static int WriteStructures(World.World world, int forSeat, uint tick, Span<byte> dst)
+    /// <param name="rotation">Where in the list to start. The packet holds
+    /// <see cref="MaxStructures"/> buildings and a fought-over district can easily hold more,
+    /// and a writer that always began at index zero would send the same twenty for ever while
+    /// number twenty-one was never mentioned to anybody. Walking the list from a moving start
+    /// costs nothing and guarantees every ruin is eventually described — which matters most to
+    /// the player it matters most to: somebody who has just joined, or who has just walked
+    /// into a part of the city they have never been told anything about.</param>
+    public static int WriteStructures(World.World world, int forSeat, uint tick, Span<byte> dst,
+        int rotation = 0)
     {
         Vector2 eye = world.Players[Math.Clamp(forSeat, 0, world.Players.Count - 1)].Position;
         int at = 0;
@@ -358,19 +370,22 @@ public static class Snapshot
         // The damaged buildings still standing, then the lots already cleared. Two lists
         // rather than one iterator: this runs per client per snapshot, and a walk of seventy
         // structures should not also be an allocation.
-        WriteSome(world.Structures, ref at, ref n, eye, dst);
-        WriteSome(world.RazedStructures, ref at, ref n, eye, dst);
+        WriteSome(world.Structures, ref at, ref n, eye, dst, rotation);
+        WriteSome(world.RazedStructures, ref at, ref n, eye, dst, rotation);
 
         dst[countAt] = (byte)n;
         return n == 0 ? 0 : at;
     }
 
     private static void WriteSome(IReadOnlyList<World.Structure> from, ref int at, ref int n,
-        Vector2 eye, Span<byte> dst)
+        Vector2 eye, Span<byte> dst, int rotation)
     {
-        for (int i = 0; i < from.Count; i++)
+        if (from.Count == 0) return;
+        int start = from.Count == 0 ? 0 : ((rotation % from.Count) + from.Count) % from.Count;
+        for (int k = 0; k < from.Count; k++)
         {
             if (n >= MaxStructures) return;
+            int i = (start + k) % from.Count;
             World.Structure s = from[i];
             if (!s.Damaged) continue;
             if (Torus.DistanceSquared(s.Position, eye) > InterestRadius * InterestRadius) continue;

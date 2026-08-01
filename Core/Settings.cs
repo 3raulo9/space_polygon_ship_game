@@ -37,6 +37,38 @@ public sealed class Settings
     /// has a name over their head without having to type one.</summary>
     public string Nickname { get; set; } = "";
 
+    // --- Audio --------------------------------------------------------------------
+    // Faders, 0..1. Separate rather than one knob because the soundtrack and the guns are
+    // wanted at different levels by nearly everybody, and because the mixer has real buses
+    // to hang them on now.
+
+    public float MasterVolume { get; set; } = 1f;
+    public float SfxVolume { get; set; } = 1f;
+    public float MusicVolume { get; set; } = 0.8f;
+
+    /// <summary>Folds the two channels together. For anyone playing on one speaker, or
+    /// deaf in one ear — without it, half of a game that now puts sounds hard left and
+    /// hard right is simply lost.</summary>
+    public bool MonoAudio { get; set; }
+
+    /// <summary>Squashes the loud end of the mix toward the quiet end. The engine has real
+    /// dynamics now — a boss dying is genuinely far louder than a footstep — and that is not
+    /// something everyone wants at three in the morning.</summary>
+    public bool SoftenLoudSounds { get; set; }
+
+    /// <summary>Steps a fader by one notch and keeps it in range. Tenths: fine enough to
+    /// find a level, coarse enough to reach either end without holding a key.</summary>
+    public static float StepVolume(float v, int dir)
+        => MathF.Round(Math.Clamp(v + dir * 0.1f, 0f, 1f) * 10f) / 10f;
+
+    /// <summary>A fader as the settings screen shows it — a bar, not a number, because a
+    /// number tells you nothing about how loud it will be.</summary>
+    public static string VolumeLabel(float v)
+    {
+        int filled = (int)MathF.Round(Math.Clamp(v, 0f, 1f) * 10f);
+        return filled == 0 ? "OFF" : new string('|', filled).PadRight(10, '.');
+    }
+
     // Config file lives beside the executable so it's found regardless of CWD.
     private static string FilePath =>
         Path.Combine(AppContext.BaseDirectory, "controls.cfg");
@@ -73,6 +105,21 @@ public sealed class Settings
                     case "nickname":
                         s.Nickname = val;
                         break;
+                    case "master":
+                        if (float.TryParse(val, out float mv)) s.MasterVolume = Math.Clamp(mv, 0f, 1f);
+                        break;
+                    case "sfx":
+                        if (float.TryParse(val, out float sv)) s.SfxVolume = Math.Clamp(sv, 0f, 1f);
+                        break;
+                    case "music":
+                        if (float.TryParse(val, out float muv)) s.MusicVolume = Math.Clamp(muv, 0f, 1f);
+                        break;
+                    case "mono":
+                        s.MonoAudio = val is "1" or "true";
+                        break;
+                    case "softenloud":
+                        s.SoftenLoudSounds = val is "1" or "true";
+                        break;
                 }
             }
         }
@@ -94,7 +141,12 @@ public sealed class Settings
                 $"swapTurn={(SwapTurn ? 1 : 0)}\n" +
                 $"movement={Movement}\n" +
                 $"fire={Fire}\n" +
-                $"nickname={Nickname}\n");
+                $"nickname={Nickname}\n" +
+                $"master={MasterVolume:0.0}\n" +
+                $"sfx={SfxVolume:0.0}\n" +
+                $"music={MusicVolume:0.0}\n" +
+                $"mono={(MonoAudio ? 1 : 0)}\n" +
+                $"softenLoud={(SoftenLoudSounds ? 1 : 0)}\n");
         }
         catch
         {

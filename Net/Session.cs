@@ -91,6 +91,27 @@ public enum Msg : byte
     /// the packet that keeps the roster honest once the lobby is gone.
     /// </summary>
     SeatName = 21,
+
+    /// <summary>
+    /// Host → all, unreliable, about once a second: every seat's kills, deaths and round trip.
+    ///
+    /// Its own packet and its own slow clock because a scoreboard is not the world: nobody
+    /// reads it sixty times a second, nothing about it has to be smooth, and a lost one is
+    /// corrected a second later. The ping it carries is the same measurement the rewind buffer
+    /// already makes from each client's acknowledgement, rather than a second timing channel
+    /// that could only ever disagree with the first.
+    /// </summary>
+    Scores = 22,
+
+    /// <summary>
+    /// A mark on the world. Client → host it is a request ("I pointed here"); host → all it is
+    /// the fact ("seat N pointed here"), which is why one id serves both directions — the
+    /// payload differs by exactly the seat byte the host is the only one entitled to write.
+    ///
+    /// Reliable. It is a person trying to say something to nineteen other people, it happens
+    /// perhaps once every few seconds, and there is no next packet to correct a lost one.
+    /// </summary>
+    Mark = 23,
 }
 
 /// <summary>
@@ -416,6 +437,10 @@ public sealed class Session
         World.CollectSoundCues = true;   // the host gathers cues to broadcast; solo runs do not
         LocalSeat = 0;
         Rename(0, LocalName);             // the host's own name, for the roster and the tags
+        // The combat feed. The sim raises a line; the feed is already mirrored to every
+        // client, so a kill announced on the host is a kill everybody reads — no new packet
+        // and no second formatting of the same sentence.
+        World.Announce = Announce;
     }
 
     /// <summary>Every seat's name the host knows, for the loop to copy onto the world at launch
@@ -514,7 +539,7 @@ public sealed class Session
     /// left everyone who arrived after that — every rejoin, every late joiner — a nameless
     /// craft on every screen but this one, for the rest of the match.
     /// </summary>
-    private void Rename(int seat, string name)
+    public void Rename(int seat, string name)
     {
         if (seat < 0) return;
         if (_nameOfSeat.TryGetValue(seat, out var was) && was == name) return;
@@ -535,6 +560,78 @@ public sealed class Session
         p[2] = (byte)text.Length;
         text.CopyTo(p.Slice(3, text.Length));
         return 3 + text.Length;
+    }
+
+    /// <summary>How many snapshots pass between scoreboards. About a second: nobody reads a
+    /// tally sixty times a second, and it is the one packet in the game that can be late
+    /// without anybody noticing.</summary>
+    private const int SnapshotsPerScoreboard = Session.SnapshotHz;
+
+    private int _sinceScores;
+
+    /// <summary>
+    /// Host → all: every seat's kills, deaths and round trip, on its own slow clock.
+    ///
+    /// Four bytes a seat, so twenty players is under a hundred bytes once a second — small
+    /// enough that it never has to be interest-culled or fitted around anything.
+    /// </summary>
+    private void BroadcastScores()
+    {
+        if (World == null) return;
+        if (++_sinceScores < SnapshotsPerScoreboard) return;
+        _sinceScores = 0;
+
+        int seats = World.Players.Count;
+        Span<byte> p = stackalloc byte[2 + MatchSettings.MaxSeats * 4];
+        p[0] = (byte)Msg.Scores;
+        p[1] = (byte)seats;
+        int at = 2;
+        for (int seat = 0; seat < seats; seat++)
+        {
+            p[at++] = (byte)Math.Clamp(World.KillsOf(seat), 0, 255);
+            p[at++] = (byte)Math.Clamp(World.DeathsOf(seat), 0, 255);
+            // Ping in tens of milliseconds. One byte reaches 2.5 seconds, which is far past
+            // the point at which the number stops being a number and becomes a diagnosis.
+            BitConverter.TryWriteBytes(p.Slice(at, 2),
+                (ushort)Math.Clamp(World.PingOf(seat), 0, ushort.MaxValue)); at += 2;
+        }
+        _net.Broadcast(p.Slice(0, at), reliable: false);
+    }
+
+    /// <summary>
+    /// This machine's player pointed at a place. On the host it plants at once and tells the
+    /// room; on a client it plants at once <em>and</em> asks — the mark is this player's own
+    /// statement about their own screen, so making them wait a round trip to see it would be
+    /// the one thing that stops a coordination tool feeling like one.
+    /// </summary>
+    public void Mark(System.Numerics.Vector2 at)
+    {
+        if (World == null) return;
+        World.PlaceMarker(LocalSeat, at);
+        if (IsHost) { BroadcastMark(LocalSeat, at); return; }
+
+        Span<byte> p = stackalloc byte[9];
+        p[0] = (byte)Msg.Mark;
+        BitConverter.TryWriteBytes(p.Slice(1, 4), at.X);
+        BitConverter.TryWriteBytes(p.Slice(5, 4), at.Y);
+        _net.Send(0, p, reliable: true);   // peer 0 is the host, on a client
+    }
+
+    /// <summary>Host-side: plants a client's mark and passes it on to everybody.</summary>
+    private void PlantMark(int seat, System.Numerics.Vector2 at)
+    {
+        World?.PlaceMarker(seat, at);
+        BroadcastMark(seat, at);
+    }
+
+    private void BroadcastMark(int seat, System.Numerics.Vector2 at)
+    {
+        Span<byte> p = stackalloc byte[10];
+        p[0] = (byte)Msg.Mark;
+        p[1] = (byte)seat;
+        BitConverter.TryWriteBytes(p.Slice(2, 4), at.X);
+        BitConverter.TryWriteBytes(p.Slice(6, 4), at.Y);
+        _net.Broadcast(p, reliable: true);
     }
 
     /// <summary>Host-side: the whole roster, by name, to one peer. What a late arrival needs —
@@ -670,6 +767,8 @@ public sealed class Session
     /// </summary>
     private void Broadcast()
     {
+        BroadcastScores();
+
         // The players packet is the same for everyone, so it is written once.
         _out[0] = (byte)Msg.State;
         int np = Snapshot.WritePlayers(World!, _tick, _out.AsSpan(1));
@@ -714,7 +813,11 @@ public sealed class Session
             // taking cover behind is no longer there. Both of the next two write nothing at
             // all when there is nothing to say, which is most of a match.
             _structures[0] = (byte)Msg.Structures;
-            int nst = Snapshot.WriteStructures(World!, seat, _tick, _structures.AsSpan(1));
+            // The start index walks with the tick, so a district holding more ruins than one
+            // packet can carry is described in full over a few snapshots instead of the first
+            // twenty being repeated for ever while the rest are never mentioned at all.
+            int nst = Snapshot.WriteStructures(World!, seat, _tick, _structures.AsSpan(1),
+                rotation: (int)(_tick * (uint)Snapshot.MaxStructuresPerPacket));
             if (nst > 0) _net.Send(peer, _structures.AsSpan(0, nst + 1), reliable: false);
 
             // The cables and beams around this client — the light a fight throws off.
@@ -1133,6 +1236,48 @@ public sealed class Session
                 Rejected = "THAT MATCH IS FULL";
                 _helloWanted = false;
                 break;
+
+            // Client → host: somebody pointed at something. The host is the only thing that
+            // may say which seat did it — a payload naming its own seat is a payload that
+            // could name somebody else's.
+            case Msg.Mark when IsHost:
+            {
+                if (World == null || payload.Length < 9) break;
+                if (!_seatOfPeer.TryGetValue(from, out int seat)) break;
+                float mx = BitConverter.ToSingle(payload.AsSpan(1, 4));
+                float mz = BitConverter.ToSingle(payload.AsSpan(5, 4));
+                PlantMark(seat, new System.Numerics.Vector2(mx, mz));
+                break;
+            }
+
+            // Host → all: seat N pointed here. Our own comes back to us and is dropped — we
+            // planted it the instant we pressed the key.
+            case Msg.Mark when !IsHost:
+            {
+                if (World == null || payload.Length < 10) break;
+                int seat = payload[1];
+                if (seat == LocalSeat) break;
+                float mx = BitConverter.ToSingle(payload.AsSpan(2, 4));
+                float mz = BitConverter.ToSingle(payload.AsSpan(6, 4));
+                World.PlaceMarker(seat, new System.Numerics.Vector2(mx, mz));
+                break;
+            }
+
+            case Msg.Scores when !IsHost:
+            {
+                if (World == null || payload.Length < 2) break;
+                int seats = payload[1];
+                if (payload.Length < 2 + seats * 4) break;
+                int at = 2;
+                for (int seat = 0; seat < seats; seat++)
+                {
+                    int kills = payload[at++];
+                    int deaths = payload[at++];
+                    int ping = BitConverter.ToUInt16(payload.AsSpan(at, 2)); at += 2;
+                    World.SetScore(seat, kills, deaths, ping);
+                }
+                break;
+            }
 
             case Msg.SeatName when !IsHost:
             {

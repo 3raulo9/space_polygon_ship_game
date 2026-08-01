@@ -198,6 +198,25 @@ public sealed class CrabSeizure : ICinematicView
     private const float ThrowLift = 17f;       // initial vertical kick
     private const float FlightGravity = 22f;
 
+    /// <summary>
+    /// One-shot sounds this cinematic raised, each with the place it happened — the claw
+    /// closing at the machine, the landing at the craft. Drained and cleared by the world.
+    ///
+    /// <para>These used to be played straight at the audio device from in here, which meant
+    /// a seizure happening to a team-mate was completely silent to everyone watching it:
+    /// the grip, the scream and the blow existed only on the host's speakers. Named rather
+    /// than played, they go out as world cues and cross the wire like everything else.</para>
+    ///
+    /// <para>Not cleared in <see cref="Update"/>, deliberately: the claw's first snap is
+    /// raised by the constructor and the blow by an event, neither of which is inside a
+    /// step, and a buffer that emptied itself at the top of one would swallow both.</para>
+    /// </summary>
+    public IReadOnlyList<EntityCue> Cues => _cues;
+    private readonly List<EntityCue> _cues = new();
+
+    /// <summary>Called by the world once it has emitted them.</summary>
+    public void ClearCues() => _cues.Clear();
+
     private readonly CrabCore _boss;
     private readonly PlayerTank _player;
 
@@ -246,7 +265,7 @@ public sealed class CrabSeizure : ICinematicView
 
         // The claw closing is the same brutal mechanical snap its clamp display makes
         // — the sound the player has been taught to dread, now with them in it.
-        Audio.PlayClamp();
+        _cues.Add(new EntityCue(Cue.Clamp, boss.Position));
     }
 
     /// <summary>The beat currently playing.</summary>
@@ -383,7 +402,7 @@ public sealed class CrabSeizure : ICinematicView
     {
         if (!_screamed)
         {
-            Audio.PlayCrabScream();
+            _cues.Add(new EntityCue(Cue.CrabScream, _boss.Position));
             _screamed = true;
         }
 
@@ -444,7 +463,7 @@ public sealed class CrabSeizure : ICinematicView
             if (!_struck)
             {
                 _struck = true;
-                Audio.PlayClawSlam();
+                _cues.Add(new EntityCue(Cue.ClawSlam, _player.Position));
                 ev = Event.Struck;
             }
 
@@ -513,7 +532,7 @@ public sealed class CrabSeizure : ICinematicView
         _flightHeading0 = FacingBoss();
         _flightHeading1 = MathF.Atan2(away.X, away.Y);
 
-        Audio.PlayThrowWhoosh();
+        _cues.Add(new EntityCue(Cue.ThrowWhoosh, _player.Position));
         Enter(Stage.Fly);
     }
 
@@ -542,7 +561,7 @@ public sealed class CrabSeizure : ICinematicView
         if (_player.Height <= 0f)
         {
             _player.Height = 0f;
-            Audio.PlayCrashLanding();
+            _cues.Add(new EntityCue(Cue.CrashLanding, _player.Position));
             Enter(Stage.Recover);
             return Event.Landed;
         }

@@ -36,13 +36,22 @@ internal static class MenuRenderer
         DrawHeading("SETTINGS", elapsed);
 
         Font font = Raylib.GetFontDefault();
-        int y = 108;
-        const int step = 24;
+        // Tighter and higher than it was: the mixer's faders took the page from three rows
+        // to eight, and the whole list plus BACK still has to sit above the footer on a
+        // 240-line target without anything scrolling.
+        const int y = 74;
+        const int step = 15;
 
-        DrawValueRow(font, screen, SettingsScreen.Row.SwapTurn, y);
-        DrawValueRow(font, screen, SettingsScreen.Row.Movement, y + step);
-        DrawValueRow(font, screen, SettingsScreen.Row.Fire, y + step * 2);
-        DrawBackRow(font, screen, y + step * 3 + 8);
+        // Walked rather than listed, so adding a row to the screen adds it here too.
+        var rows = System.Enum.GetValues<SettingsScreen.Row>();
+        int at = 0;
+        foreach (var row in rows)
+        {
+            if (row == SettingsScreen.Row.Back) continue;
+            DrawValueRow(font, screen, row, y + step * at);
+            at++;
+        }
+        DrawBackRow(font, screen, y + step * at + 4);
 
         DrawFooterHint("< > CHANGE · UP DN MOVE · ESC BACK");
     }

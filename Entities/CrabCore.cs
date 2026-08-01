@@ -435,7 +435,7 @@ public sealed class CrabCore
         // It calls while it runs. Fired every tick on purpose — Audio owns the
         // cadence and the irregular gaps between groans, so the sim stays
         // deterministic and this stays a plain "I am hunting, at this range".
-        Audio.PlayHuntCall(dist);
+        Audio.PlayHuntCall(Position);
 
         if (dist < 0.0001f) return;
         Vector2 dir = to / dist;

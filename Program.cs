@@ -27,6 +27,17 @@ if (args.Contains("--steamcheck"))
 if (args.Contains("--musiccheck"))
     return MusicCheck.Run();
 
+// Does the world SOUND right? Drives the mixer offline against the real city and writes a
+// scripted scene to a .wav you can just play: a shot walking past, a firefight receding,
+// stepping behind a tower, a rotor circling, a blast in your face, being swallowed. The
+// self-test proves the numbers; this is how the numbers get judged. No device, no window.
+if (args.Contains("--audioscene"))
+{
+    int at = Array.IndexOf(args, "--audioscene");
+    string path = at + 1 < args.Length && !args[at + 1].StartsWith("--") ? args[at + 1] : "scene.wav";
+    return SelfTest.RenderScene(path);
+}
+
 Raylib.SetConfigFlags(ConfigFlags.VSyncHint);
 Raylib.InitWindow(Config.WindowWidth, Config.WindowHeight, "VOID TANKS");
 Raylib.SetExitKey(KeyboardKey.Null); // Escape is handled in the loop, not by Raylib
