@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Acoustics;
-using VoidTanks.Input;
+using Unrendered.Acoustics;
+using Unrendered.Input;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// The controls layout and the mixer's category faders.

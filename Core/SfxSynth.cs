@@ -1,4 +1,4 @@
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// A small BFXR/sfxr-style sound engine. It builds a retro sound effect from

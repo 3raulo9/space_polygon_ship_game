@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// The SPIDER chassis's armament — the salvaged Crab-Core's own two weapons, cut down

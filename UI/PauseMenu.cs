@@ -1,7 +1,7 @@
-using VoidTanks.Core;
-using VoidTanks.Input;
+using Unrendered.Core;
+using Unrendered.Input;
 
-namespace VoidTanks.UI;
+namespace Unrendered.UI;
 
 /// <summary>
 /// The panel that drops over a run when Escape is pressed in-world. Spare, like the title

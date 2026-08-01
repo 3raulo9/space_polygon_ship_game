@@ -1,7 +1,7 @@
-﻿using VoidTanks.Core;
-using VoidTanks.Entities;
+﻿using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Net;
+namespace Unrendered.Net;
 
 /// <summary>What kind of packet this is. One byte, first in every payload.</summary>
 public enum Msg : byte

@@ -1,4 +1,4 @@
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>What a carried item is. Salvage the craft scoops off the grid, plus the
 /// CRAB CORE fragment harvested from a slain boss and the weapon crafted from three
@@ -79,7 +79,7 @@ public struct ItemStack
 /// One player's carried goods: a 20-slot grid, the crafting triangle's three corner
 /// inputs, and the four equip slots wired to R/T/Y/U. Pure data + placement rules;
 /// the world reads it to spend items and the UI drives drag/drop and crafting against
-/// it. Lives on <see cref="VoidTanks.World.World"/> so it survives a paused/opened
+/// it. Lives on <see cref="Unrendered.World.World"/> so it survives a paused/opened
 /// inventory the same way the rest of the run does.
 ///
 /// <para>There is one of these <em>per seat</em>, not one per world: salvage is personal, so

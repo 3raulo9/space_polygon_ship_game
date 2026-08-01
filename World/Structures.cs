@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.World;
+namespace Unrendered.World;
 
 /// <summary>What a piece of the skyline is. The kind picks which family of meshes the
 /// renderer pulls from; <see cref="Structure.Variant"/> picks one inside it.</summary>
@@ -374,11 +374,11 @@ public static class StructureField
     public static IReadOnlyList<Structure> Backdrop => _backdrop ??= Create();
 
     /// <summary>
-    /// Set VOIDTANKS_STRUCTURES=0 to raze the city. The capture harness and anything
+    /// Set UNRENDERED_STRUCTURES=0 to raze the city. The capture harness and anything
     /// wanting a bare grid to photograph a single entity against use this.
     /// </summary>
     private static bool Enabled
-        => Environment.GetEnvironmentVariable("VOIDTANKS_STRUCTURES") != "0";
+        => Environment.GetEnvironmentVariable("UNRENDERED_STRUCTURES") != "0";
 
     /// <summary>
     /// Builds a fresh set of structures on the fixed layout — same buildings in the same

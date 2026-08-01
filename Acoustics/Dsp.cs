@@ -1,4 +1,4 @@
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>
 /// A one-pole low-pass. Cheap enough to run one per voice per channel, which is what

@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// A hunter. Cold and impersonal — no personality, no sound of its own beyond

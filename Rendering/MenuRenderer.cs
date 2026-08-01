@@ -1,10 +1,10 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Input;
-using VoidTanks.UI;
+using Unrendered.Core;
+using Unrendered.Input;
+using Unrendered.UI;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Draws the menu as flat 2D over the low-res target. Everything is measured in

@@ -1,5 +1,5 @@
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
 // Entry point: bootstrap the window + loop. Everything 3D renders to a small
 // internal target and is upscaled nearest-neighbor inside the Renderer.
@@ -12,11 +12,11 @@ if (args.Contains("--selftest"))
 // can be run on a friend's PC before working out why the game won't connect.
 if (args.Contains("--steamcheck"))
 {
-    bool ok = VoidTanks.Net.SteamNet.Start();
+    bool ok = Unrendered.Net.SteamNet.Start();
     Console.WriteLine(ok
-        ? $"STEAM OK — your join code is {VoidTanks.Net.SteamNet.LocalCode}"
-        : $"STEAM UNAVAILABLE — {VoidTanks.Net.SteamNet.Trouble}");
-    if (ok) VoidTanks.Net.SteamNet.Stop();
+        ? $"STEAM OK — your join code is {Unrendered.Net.SteamNet.LocalCode}"
+        : $"STEAM UNAVAILABLE — {Unrendered.Net.SteamNet.Trouble}");
+    if (ok) Unrendered.Net.SteamNet.Stop();
     return ok ? 0 : 1;
 }
 
@@ -39,7 +39,7 @@ if (args.Contains("--audioscene"))
 }
 
 Raylib.SetConfigFlags(ConfigFlags.VSyncHint);
-Raylib.InitWindow(Config.WindowWidth, Config.WindowHeight, "VOID TANKS");
+Raylib.InitWindow(Config.WindowWidth, Config.WindowHeight, "UNRENDERED");
 Raylib.SetExitKey(KeyboardKey.Null); // Escape is handled in the loop, not by Raylib
 Raylib.SetTargetFPS(60);
 

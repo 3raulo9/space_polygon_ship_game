@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// The world is a torus: drive far enough in any direction and you come back to

@@ -1,7 +1,7 @@
-using VoidTanks.Acoustics;
-using VoidTanks.Input;
+using Unrendered.Acoustics;
+using Unrendered.Input;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// Everything the player can change about how the game reads them and how it sounds,
@@ -30,7 +30,7 @@ public sealed class Settings
     // One fader per bus the mixer actually has. Split this way — rather than one SFX knob —
     // because the four things below are what people ask for separately: the soundtrack under
     // the guns, the guns under the monsters, and the whole loud end down at two in the
-    // morning. See VoidTanks.Acoustics.Bus for which cue lands where.
+    // morning. See Unrendered.Acoustics.Bus for which cue lands where.
 
     public float MasterVolume { get; set; } = 1f;
     public float MusicVolume { get; set; } = 1.4f;
@@ -171,7 +171,7 @@ public sealed class Settings
         try
         {
             var sb = new System.Text.StringBuilder();
-            sb.Append("# VOID TANKS controls\n");
+            sb.Append("# UNRENDERED controls\n");
             sb.Append($"nickname={Nickname}\n");
             sb.Append($"master={MasterVolume:0.0}\n");
             sb.Append($"music={MusicVolume:0.0}\n");

@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Input;
+namespace Unrendered.Input;
 
 /// <summary>
 /// Turns the keyboard in front of the machine into <see cref="InputFrame"/>s.

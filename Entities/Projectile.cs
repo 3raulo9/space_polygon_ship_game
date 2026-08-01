@@ -1,6 +1,6 @@
 ﻿using System.Numerics;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// A bolt travelling across the grid. Pooled and reused (Doc 05: keep per-frame

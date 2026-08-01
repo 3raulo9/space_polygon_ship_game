@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>
 /// Where the ears are and which way they point. One per machine — this is the seat whose

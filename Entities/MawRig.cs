@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// The shared physical layout of the Maw-Core — how big it is, how high it hangs,

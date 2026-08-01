@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Raylib_cs;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// The soundtrack: whatever is sitting in Assets/Audio/Music, played one piece at a
@@ -111,7 +111,7 @@ public static class MusicBox
     private static bool _ready;
 
     /// <summary>
-    /// Collapses every wait to almost nothing. Set by VOIDTANKS_MUSIC_RUSH=1 and by
+    /// Collapses every wait to almost nothing. Set by UNRENDERED_MUSIC_RUSH=1 and by
     /// <c>--musiccheck</c>: the honest schedule is minutes long, which makes "did the
     /// track I just dropped in get picked up?" an unanswerable question otherwise.
     /// </summary>
@@ -134,7 +134,7 @@ public static class MusicBox
         }
 
         Rescan();
-        _rush |= Environment.GetEnvironmentVariable("VOIDTANKS_MUSIC_RUSH") == "1";
+        _rush |= Environment.GetEnvironmentVariable("UNRENDERED_MUSIC_RUSH") == "1";
         _nextRoll = _rush
             ? Now + RushGap
             : Now + FirstMinGap + _rng.NextDouble() * (FirstMaxGap - FirstMinGap);

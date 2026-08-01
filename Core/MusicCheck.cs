@@ -1,6 +1,6 @@
 using Raylib_cs;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// <c>--musiccheck</c>: proves the soundtrack out without a window and without the

@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Everything the FISH puts on screen: the parts of its own body that hang permanently in

@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Acoustics;
+using Unrendered.Acoustics;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// A one-shot sound the simulation asks for, named rather than played directly. Every combat

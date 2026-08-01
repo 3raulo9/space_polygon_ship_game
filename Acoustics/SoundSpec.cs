@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>
 /// Where a voice is routed before it reaches the master. Buses exist so the player can turn
@@ -9,7 +9,7 @@ namespace VoidTanks.Acoustics;
 ///
 /// <para>The engine attaches no meaning to any of these beyond "sum here, then apply this
 /// gain". Which cue belongs on which bus is the <em>game's</em> statement, made once in
-/// <see cref="VoidTanks.Core.CueBank.BuildTable"/>; the only bus the mixer treats specially
+/// <see cref="Unrendered.Core.CueBank.BuildTable"/>; the only bus the mixer treats specially
 /// is <see cref="Ui"/>, and that is a signal-path decision rather than a taxonomic one.</para>
 /// </summary>
 public enum Bus : byte

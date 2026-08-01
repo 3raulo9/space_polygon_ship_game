@@ -1,7 +1,7 @@
 ﻿using System.Runtime.InteropServices;
 using Steamworks;
 
-namespace VoidTanks.Net;
+namespace Unrendered.Net;
 
 /// <summary>
 /// The real wire: Steam's peer-to-peer sockets behind the same interface the loopback rig

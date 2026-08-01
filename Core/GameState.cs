@@ -1,4 +1,4 @@
-﻿namespace VoidTanks.Core;
+﻿namespace Unrendered.Core;
 
 /// <summary>
 /// Top-level state machine (Doc 05). Milestone 1 only needs Playing, but the

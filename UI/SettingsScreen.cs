@@ -1,8 +1,8 @@
-using VoidTanks.Acoustics;
-using VoidTanks.Core;
-using VoidTanks.Input;
+using Unrendered.Acoustics;
+using Unrendered.Core;
+using Unrendered.Input;
 
-namespace VoidTanks.UI;
+namespace Unrendered.UI;
 
 /// <summary>
 /// Settings. One screen, three pages: a two-item front door, a scrolling list of every

@@ -1,4 +1,4 @@
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// Global tunables. The resolution numbers here are load-bearing for the look

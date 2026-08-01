@@ -1,7 +1,7 @@
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Input;
+namespace Unrendered.Input;
 
 /// <summary>
 /// What is left of the old read-point once the simulation started taking its input as

@@ -1,11 +1,11 @@
 ﻿using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Entities;
-using VoidTanks.Input;
-using VoidTanks.Rendering;
-using VoidTanks.UI;
+using Unrendered.Entities;
+using Unrendered.Input;
+using Unrendered.Rendering;
+using Unrendered.UI;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// The loop. Simulation runs on a fixed timestep (deterministic movement and,
@@ -98,16 +98,16 @@ public sealed class Game : IDisposable
 
     private double _accumulator;
 
-    // Verification harness: when VOIDTANKS_CAPTURE is set, run a scripted number
+    // Verification harness: when UNRENDERED_CAPTURE is set, run a scripted number
     // of frames, save a screenshot, and exit. Lets the render be checked without
     // a human at the window. No effect on normal play.
-    private readonly string? _capturePath = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE");
+    private readonly string? _capturePath = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE");
     // When set, capture grabs a UI screen instead of the world: "menu" or "settings".
     // "controls" and "sound" are the settings screen's two sub-pages, which are worth their
     // own names — they are the densest layouts in the game and the only ones a human would
     // otherwise have to reach by hand to look at.
     private readonly string? _captureScreen =
-        Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU");
+        Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_MENU");
     private bool _captureMenu =>
         _captureScreen is "1" or "menu" or "settings" or "controls" or "sound"
                        or "test" or "class" or "lobby" or "room";
@@ -117,7 +117,7 @@ public sealed class Game : IDisposable
     /// step of the sim may read the trigger as released. See RunCaptureFrame.</summary>
     private bool _lanceHold;
 
-    /// <summary>Capture-only: the building VOIDTANKS_CAPTURE_FELL picked to cut down, so
+    /// <summary>Capture-only: the building UNRENDERED_CAPTURE_FELL picked to cut down, so
     /// every later frame can re-park the camera on it while it comes apart.</summary>
     private World.Structure? _fellTarget;
 
@@ -164,11 +164,11 @@ public sealed class Game : IDisposable
                 _world.Player.Heading = MathF.Atan2(to.X, to.Y);
             }
 
-            // VOIDTANKS_MP_PEER=<class index> seats a second player in front of the first, as
+            // UNRENDERED_MP_PEER=<class index> seats a second player in front of the first, as
             // that chassis, so the third-person craft render can be photographed without two
             // machines and a wire. It reuses the seat placement the real match uses, so what
             // this shows is what a host actually sees when a friend joins.
-            string? peer = Environment.GetEnvironmentVariable("VOIDTANKS_MP_PEER");
+            string? peer = Environment.GetEnvironmentVariable("UNRENDERED_MP_PEER");
             if (peer != null && int.TryParse(peer, out int pc)
                 && Enum.IsDefined((PlayerClass)pc))
             {
@@ -183,10 +183,10 @@ public sealed class Game : IDisposable
                     _world.Player.Heading = MathF.Atan2(to.X, to.Y);
                     if (mate.Class is PlayerClass.Fish or PlayerClass.Virus) mate.Height = 6f;
 
-                    // VOIDTANKS_MP_COMPARE=1 drops the matching enemy a few metres beside the
+                    // UNRENDERED_MP_COMPARE=1 drops the matching enemy a few metres beside the
                     // peer, so a capture shows player craft and hunter side by side and the
                     // world-scale can be tuned until they read the same size. Tuning only.
-                    if (Environment.GetEnvironmentVariable("VOIDTANKS_MP_COMPARE") == "1")
+                    if (Environment.GetEnvironmentVariable("UNRENDERED_MP_COMPARE") == "1")
                     {
                         var beside = Torus.Wrap(mate.Position + new Vector2(9f, 0f));
                         if (mate.Class == PlayerClass.Soldier) _world.SpawnSoldierSquad(beside);
@@ -1000,11 +1000,11 @@ public sealed class Game : IDisposable
         {
             _menuTime += (float)Config.FixedDt;
             int menuAt = int.TryParse(
-                Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FRAME"), out int mf) ? mf : 30;
+                Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_FRAME"), out int mf) ? mf : 30;
             if (_frame < menuAt) return false;
-            // Optional dissolve overlay: VOIDTANKS_CAPTURE_FADE=<0..1> grabs the UI
+            // Optional dissolve overlay: UNRENDERED_CAPTURE_FADE=<0..1> grabs the UI
             // screen mid pixel-fade, to verify the menu-side of a transition.
-            string? fade = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FADE");
+            string? fade = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_FADE");
             float fa = fade != null && float.TryParse(fade, out float pf) ? Math.Clamp(pf, 0f, 1f) : 0f;
             // Draw twice so both the front and back buffers hold the same image;
             // TakeScreenshot reads after the swap, so a single draw would grab the
@@ -1015,11 +1015,11 @@ public sealed class Game : IDisposable
                 else if (_captureScreen == "room") _renderer.DrawLobbyRoom(CaptureRoom(), _menuTime);
                 else if (_captureScreen is "settings" or "controls" or "sound")
                 {
-                    // VOIDTANKS_CAPTURE_ROW=<n> scrolls the controls list to a given row
+                    // UNRENDERED_CAPTURE_ROW=<n> scrolls the controls list to a given row
                     // before the grab, so the chassis sections further down the page can be
                     // photographed and not just the first screenful.
                     _settingsScreen.OpenForCapture(_captureScreen,
-                        int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_ROW"),
+                        int.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_ROW"),
                             out int row) ? row : 0);
                     _renderer.DrawSettings(_settingsScreen, _menuTime);
                 }
@@ -1036,7 +1036,7 @@ public sealed class Game : IDisposable
         // Inventory variant: seed a representative pack (a bit of every item, three
         // fragments loaded in the triangle so the CRAB CORE preview shows, one equipped)
         // and grab the crafting panel — lets the layout and font be verified headlessly.
-        if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_INV") != null)
+        if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_INV") != null)
         {
             var inv = _world!.Inventory;
             inv.Add(ItemKind.Battery, 4);
@@ -1054,13 +1054,13 @@ public sealed class Game : IDisposable
         // SOLDIER capture. Photographing this chassis is a scripting problem the others
         // don't have: what is worth looking at — two cables out, the horizon banked over,
         // the wind streaking past — only exists several seconds into a swing that a human
-        // has to fly. So the hatch flies it. VOIDTANKS_CAPTURE_HOOK picks the beat:
+        // has to fly. So the hatch flies it. UNRENDERED_CAPTURE_HOOK picks the beat:
         //   fire   the first hook leaving the launcher, cable mid-flight
         //   swing  jumped, anchored, hanging and reeling on one cable
         //   both   the signature state — both hooks bitten, the body suspended between
-        // Pair with VOIDTANKS_CLASS_INDEX=4 (which is what puts a soldier in the seat)
+        // Pair with UNRENDERED_CLASS_INDEX=4 (which is what puts a soldier in the seat)
         // and a CAPTURE_FRAME late enough for the beat to have arrived.
-        string? hook = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_HOOK");
+        string? hook = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_HOOK");
         if (hook != null && _world!.Player.Soldier is { } soldierRig)
         {
             if (_frame == 1 && hook != "fire") soldierRig.Jump(_world.Player);
@@ -1099,15 +1099,15 @@ public sealed class Game : IDisposable
         // what is worth photographing on this chassis — a body carving hard between two
         // towers, a strike mid-flight, the bloom staining the top of the frame — only
         // exists several seconds into a swim a human has to fly. So the hatch swims it.
-        // VOIDTANKS_CAPTURE_SWIM picks the beat:
+        // UNRENDERED_CAPTURE_SWIM picks the beat:
         //   cruise  a level sprint, murk and bubbles up, the lantern trailing
         //   carve   the same, rolled hard over, the horizon on its side
         //   strike  the lunge, mid-flight, everything pinned flat
         //   bloom   nosed up into the ceiling, alarmed and stained
         //   beach   down on the deck, flopping, the drained wash over everything
-        // Pair with VOIDTANKS_CLASS_INDEX=3 (which is what puts a fish in the seat) and a
+        // Pair with UNRENDERED_CLASS_INDEX=3 (which is what puts a fish in the seat) and a
         // CAPTURE_FRAME late enough for the beat to have arrived.
-        string? swim = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_SWIM");
+        string? swim = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_SWIM");
         if (swim != null && _world!.Player.Fish is { } fishBody)
         {
             // Beat on the tail's own cadence for the whole run-up: it is an impulse, so
@@ -1142,7 +1142,7 @@ public sealed class Game : IDisposable
 
         // VIRUS capture. The exposed mote needs no staging — the naked frame is the picture
         // — but every hosted state only exists after a possession, which in play means
-        // flying into a body. VOIDTANKS_CAPTURE_VIRUS picks the beat:
+        // flying into a body. UNRENDERED_CAPTURE_VIRUS picks the beat:
         //   host   a hunter parked on the player on the first frame, worn by the second —
         //          the decay meter full and the veins just starting in
         //   rot    the same, with the meter drained low so the failing-host tear and the
@@ -1153,8 +1153,8 @@ public sealed class Game : IDisposable
         //          shafts, which burn for half a second
         //   maw    a Maw-Core raised and the mote flown into its crystal — the hovering
         //          host, photographed at its own height
-        // Pair with VOIDTANKS_CLASS_INDEX=2 (which is what puts a virus in the seat).
-        string? virusBeat = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_VIRUS");
+        // Pair with UNRENDERED_CLASS_INDEX=2 (which is what puts a virus in the seat).
+        string? virusBeat = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_VIRUS");
         if (virusBeat != null && _world!.Player.Virus is { } virusRig)
         {
             if (virusBeat is "host" or "rot")
@@ -1238,28 +1238,28 @@ public sealed class Game : IDisposable
         // photographs the city they have already left.
         // =track follows one of them through their arcs; =pose holds one crossing the frame
         // at knife range so the figure itself can be looked at.
-        switch (Environment.GetEnvironmentVariable("VOIDTANKS_SQUAD_NEAR"))
+        switch (Environment.GetEnvironmentVariable("UNRENDERED_SQUAD_NEAR"))
         {
             case "track": _world!.FaceTheSquad(); break;
             case "pose": _world!.PoseSoldierForCapture(); break;
         }
 
         // Blast cinematic capture: stage a CRAB CORE detonation dead ahead on the first
-        // frame, then grab it mid-swell (pair with VOIDTANKS_CAPTURE_FRAME≈40).
-        if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_BLAST") != null && _frame == 1)
+        // frame, then grab it mid-swell (pair with UNRENDERED_CAPTURE_FRAME≈40).
+        if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_BLAST") != null && _frame == 1)
             _world!.StageCrabBlastAheadForTest();
 
         // HUD capture: equip a CRAB CORE so the R/T/Y/U slots show their 3D icon.
-        if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_HUD") != null && _frame == 1)
+        if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_HUD") != null && _frame == 1)
             _world!.GiveCrabCore();
 
         // Let the world run so the enemy advances out of the fog toward the
         // player before we grab the frame.
-        // SPIDER capture: VOIDTANKS_CAPTURE_LANCE=hold parks the chassis mid-charge (so
+        // SPIDER capture: UNRENDERED_CAPTURE_LANCE=hold parks the chassis mid-charge (so
         // the meter and the gathering flare can be photographed), and =fire looses it on
         // the first frame so the shaft is burning by the time the grab lands. Paired
-        // with VOIDTANKS_CLASS_INDEX=1, which is what put a spider in the seat.
-        string? lance = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_LANCE");
+        // with UNRENDERED_CLASS_INDEX=1, which is what put a spider in the seat.
+        string? lance = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_LANCE");
 
         // A held charge has to have the sim's combat input muted, because that input is
         // what decides a charge has been let go: the harness holds no button, so an
@@ -1293,11 +1293,11 @@ public sealed class Game : IDisposable
             }
         }
 
-        // VOIDTANKS_CAPTURE_FELL=1 walks the craft up to the nearest tower, aims at it
+        // UNRENDERED_CAPTURE_FELL=1 walks the craft up to the nearest tower, aims at it
         // and cuts it down with a full lance on the first frame — the only way to
         // photograph a collapse, which otherwise needs a human to find a building, stand
         // still for two seconds and let go at the right moment. Pair it with
-        // VOIDTANKS_CLASS_INDEX=1 (a spider in the seat, so there is a lance at all) and a
+        // UNRENDERED_CLASS_INDEX=1 (a spider in the seat, so there is a lance at all) and a
         // CAPTURE_FRAME somewhere in the first two seconds, which is how long the topple
         // takes; later than that and the picture is of empty grid and settling dust.
         //
@@ -1305,7 +1305,7 @@ public sealed class Game : IDisposable
         // the craft forward the whole time it runs, and a collapse takes nearly two
         // seconds — quite long enough for the building being photographed to leave the
         // side of the frame while it falls.
-        if (Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FELL") != null
+        if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_FELL") != null
             && _world!.Player.Spider is { } emitter)
         {
             if (_frame == 1)
@@ -1337,13 +1337,13 @@ public sealed class Game : IDisposable
 
         // Grab late enough that the enemy has closed to inside the fog boundary.
         int captureAt = int.TryParse(
-            Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_FRAME"), out int cf) ? cf : 180;
+            Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_FRAME"), out int cf) ? cf : 180;
 
-        // VOIDTANKS_CAPTURE_STAGE=<CrabSeizure.Stage> waits for a named beat of the
+        // UNRENDERED_CAPTURE_STAGE=<CrabSeizure.Stage> waits for a named beat of the
         // seizure instead of counting frames. The cinematic's beats are short and the
         // protocol that leads into one is not frame-exact, so hunting for the scream by
         // guessing frame numbers mostly produces pictures of the empty grid.
-        string? stage = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_STAGE");
+        string? stage = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_STAGE");
         if (stage != null)
         {
             if (_world.Seizure is not { } s
@@ -1359,7 +1359,7 @@ public sealed class Game : IDisposable
         // hit by frame number than the seizure's, because getting eaten depends on the
         // thing finishing a wind-up over a player who has to be standing still — so
         // waiting on the named stage is the only reliable way to photograph it.
-        string? mawStage = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MAW_STAGE");
+        string? mawStage = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_MAW_STAGE");
         if (mawStage != null)
         {
             if (_world.Digestion is not { } d
@@ -1375,13 +1375,13 @@ public sealed class Game : IDisposable
         {
             // Optional pause capture, so the panel and its dim can be verified without a
             // human pressing Escape:
-            //   VOIDTANKS_CAPTURE_PAUSE=<0..1>   the panel, dimmed by that amount
-            //   VOIDTANKS_CAPTURE_PAUSE=controls the bindings page over a live world
-            //   VOIDTANKS_CAPTURE_PAUSE=sound    the mixer over a live world
+            //   UNRENDERED_CAPTURE_PAUSE=<0..1>   the panel, dimmed by that amount
+            //   UNRENDERED_CAPTURE_PAUSE=controls the bindings page over a live world
+            //   UNRENDERED_CAPTURE_PAUSE=sound    the mixer over a live world
             // The last two are the only way to see the settings screen as it actually looks
             // in a match, which is a different picture from the same page over the menu's
             // drifting grid — and the one this pass most needed to be able to look at.
-            string? pause = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_PAUSE");
+            string? pause = Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_PAUSE");
             if (pause != null)
             {
                 if (float.TryParse(pause, out float pb)) _pauseBlur = Math.Clamp(pb, 0f, 1f);
@@ -1390,7 +1390,7 @@ public sealed class Game : IDisposable
                     _pauseBlur = 1f;
                     _pauseSettings = true;
                     _settingsScreen.OpenForCapture(pause,
-                        int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_ROW"),
+                        int.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_ROW"),
                             out int prow) ? prow : 0);
                 }
 
@@ -1411,14 +1411,14 @@ public sealed class Game : IDisposable
     }
 
     /// <summary>Capture-only: builds a representative lobby room so the dome, the planet, the
-    /// stations and a few avatars can be photographed headlessly. VOIDTANKS_ROOM=antechamber
+    /// stations and a few avatars can be photographed headlessly. UNRENDERED_ROOM=antechamber
     /// grabs the entry face instead; otherwise it is the room proper with the local player
     /// seated as host and two others milling about.</summary>
     private World.LobbyRoom CaptureRoom()
     {
         if (_room != null) return _room;
         var room = new World.LobbyRoom { IsHost = true };
-        if (Environment.GetEnvironmentVariable("VOIDTANKS_ROOM") == "antechamber")
+        if (Environment.GetEnvironmentVariable("UNRENDERED_ROOM") == "antechamber")
             return _room = room;
 
         room.Seat(0, "HOST");

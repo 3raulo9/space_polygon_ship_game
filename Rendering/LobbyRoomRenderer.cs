@@ -1,11 +1,11 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
-using VoidTanks.Net;
-using VoidTanks.World;
+using Unrendered.Core;
+using Unrendered.Entities;
+using Unrendered.Net;
+using Unrendered.World;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Draws the walkable multiplayer lobby: a glass dome hanging over a planet, with the people

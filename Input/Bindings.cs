@@ -1,6 +1,6 @@
 using Raylib_cs;
 
-namespace VoidTanks.Input;
+namespace Unrendered.Input;
 
 /// <summary>
 /// The whole control layout: one <see cref="InputBind"/> per <see cref="InputAction"/>.

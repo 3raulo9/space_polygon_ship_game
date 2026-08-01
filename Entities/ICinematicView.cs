@@ -1,4 +1,4 @@
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// What a cinematic does to the camera while it owns the player.

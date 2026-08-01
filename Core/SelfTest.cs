@@ -1,9 +1,9 @@
 ﻿using System.Numerics;
-using VoidTanks.Entities;
-using VoidTanks.Net;
-using VoidTanks.World;
+using Unrendered.Entities;
+using Unrendered.Net;
+using Unrendered.World;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// Headless behaviour check for the combat sim — no window, no graphics. Drives
@@ -242,6 +242,26 @@ public static partial class SelfTest
             EveryCueIsOnACategoryBus);
         failures += Check("a category fader turns down its own cues and nobody else's",
             CategoryFadersAreIndependent);
+
+        // The figure. Everything here is true over time rather than in any one frame, which
+        // is exactly why none of it can be checked by looking at the game.
+        failures += Check("a body in the air folds harder the faster it goes", FlightFoldsWithSpeed);
+        failures += Check("an arrival buckles the knees and springs back up",
+            LandingCompressesThenRecovers);
+        failures += Check("a limb arrives after the body it hangs from",
+            LimbsLagTheBodyTheyHangFrom);
+        failures += Check("a planted boot stays put while the body walks over it",
+            PlantedBootsDoNotSkate);
+        failures += Check("the boots stay on their own sides of the body",
+            BootsStayOnTheirOwnSides);
+        failures += Check("the shoulders turn against the hips through a stride",
+            HipsAndShouldersTurnAgainstEachOther);
+        failures += Check("a hand goes to the cable that is carrying it",
+            AHeldCablePutsTheHandOnItsLauncher);
+        failures += Check("a hit throws the head away from whatever caused it",
+            FlinchThrowsTheHeadAwayFromTheHit);
+        failures += Check("no run of nonsense can put a NaN in a joint",
+            NothingProducesANonNumber);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"

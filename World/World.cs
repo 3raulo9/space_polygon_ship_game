@@ -1,11 +1,11 @@
 ﻿using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Acoustics;
-using VoidTanks.Core;
-using VoidTanks.Entities;
-using VoidTanks.Input;
+using Unrendered.Acoustics;
+using Unrendered.Core;
+using Unrendered.Entities;
+using Unrendered.Input;
 
-namespace VoidTanks.World;
+namespace Unrendered.World;
 
 /// <summary>
 /// Holds the live entities and runs the combat simulation: player + enemies +
@@ -324,12 +324,12 @@ public sealed class World : IAnchorField
     //
     // Every one of these is a guess until it has been driven on two machines with real
     // latency between them, so they are read from the environment rather than compiled in:
-    // set VOIDTANKS_NET_DEADZONE / _SNAP / _RATE / _REMOTERATE to retune a running build
+    // set UNRENDERED_NET_DEADZONE / _SNAP / _RATE / _REMOTERATE to retune a running build
     // without a rebuild, which is the only way a two-machine session can converge on numbers
     // in one sitting. The defaults are the shipped values.
-    private static readonly float ReconcileDeadzone = Tune("VOIDTANKS_NET_DEADZONE", 0.5f);
-    private static readonly float ReconcileSnap = Tune("VOIDTANKS_NET_SNAP", 22f);
-    private static readonly float ReconcileRate = Tune("VOIDTANKS_NET_RATE", 12f);
+    private static readonly float ReconcileDeadzone = Tune("UNRENDERED_NET_DEADZONE", 0.5f);
+    private static readonly float ReconcileSnap = Tune("UNRENDERED_NET_SNAP", 22f);
+    private static readonly float ReconcileRate = Tune("UNRENDERED_NET_RATE", 12f);
 
     // --- The prediction history the error is measured against ----------------------
     //
@@ -499,7 +499,7 @@ public sealed class World : IAnchorField
     /// <summary>How fast a remote puppet is eased onto the host's latest report of it, per
     /// second. Fast enough to keep up with real motion, soft enough to turn 20 Hz steps into a
     /// glide rather than a series of catches.</summary>
-    private static readonly float RemoteSmoothRate = Tune("VOIDTANKS_NET_REMOTERATE", 18f);
+    private static readonly float RemoteSmoothRate = Tune("UNRENDERED_NET_REMOTERATE", 18f);
 
     /// <summary>
     /// Client-side: eases every remote puppet — team-mates, hunters, the squad — one frame
@@ -868,10 +868,10 @@ public sealed class World : IAnchorField
 
         // Capture overrides freeze a controlled scene for the verification harness:
         // exact point-blank placements and no drifting-in spawns.
-        string? nearPickup = Environment.GetEnvironmentVariable("VOIDTANKS_PICKUP_NEAR");
-        string? nearEnemy = Environment.GetEnvironmentVariable("VOIDTANKS_ENEMY_NEAR");
-        string? nearBoss = Environment.GetEnvironmentVariable("VOIDTANKS_BOSS_NEAR");
-        string? nearMaw = Environment.GetEnvironmentVariable("VOIDTANKS_MAW_NEAR");
+        string? nearPickup = Environment.GetEnvironmentVariable("UNRENDERED_PICKUP_NEAR");
+        string? nearEnemy = Environment.GetEnvironmentVariable("UNRENDERED_ENEMY_NEAR");
+        string? nearBoss = Environment.GetEnvironmentVariable("UNRENDERED_BOSS_NEAR");
+        string? nearMaw = Environment.GetEnvironmentVariable("UNRENDERED_MAW_NEAR");
         bool capture = nearPickup == "1" || nearEnemy is "1" or "elite"
                     || nearBoss is "1" or "seize" || nearMaw is "1" or "swallow";
         if (capture) DynamicSpawning = false;
@@ -943,7 +943,7 @@ public sealed class World : IAnchorField
         // in front of the craft and hangs them off that instead, then turns the view onto
         // it. Which is exactly the picture the enemy is for: you look up at a spire and
         // there are four of them on it.
-        if (Environment.GetEnvironmentVariable("VOIDTANKS_SQUAD_NEAR") is "1" or "track" or "pose")
+        if (Environment.GetEnvironmentVariable("UNRENDERED_SQUAD_NEAR") is "1" or "track" or "pose")
         {
             DynamicSpawning = false;
             Vector2 ahead = Torus.Wrap(Player.Position + Player.Forward * 70f);
@@ -3385,7 +3385,7 @@ public sealed class World : IAnchorField
         {
             if (!s.Alive || s.Height > EnemySoldier.BodyHeight) continue;
             if (!WithinHit(who.Position, s.Position, personReach)) continue;
-            DamageSoldier(s, RamDamage * (0.6f + over) * 2f);
+            DamageSoldier(s, RamDamage * (0.6f + over) * 2f, who.Position);
             who.Jolt(0.2f);
             Emit(Cue.Detonation, who.Position, owner: seat);
         }
@@ -3975,7 +3975,7 @@ public sealed class World : IAnchorField
             float body = s.Height + EnemySoldier.AimHeight;
             if (MathF.Abs(beamY - body) > radius + EnemySoldier.BodyHeight * 0.5f) continue;
 
-            DamageSoldier(s, damage);
+            DamageSoldier(s, damage, new Vector2(origin.X, origin.Z));
         }
 
         // Step down the shaft looking for the two crystals. A one-unit stride is well
@@ -4025,7 +4025,7 @@ public sealed class World : IAnchorField
             float d = s.Position.LengthSquared();
             if (d < best) { best = d; nearest = s; }
         }
-        if (nearest == null) return;   // a razed city (VOIDTANKS_STRUCTURES=0) — stay put
+        if (nearest == null) return;   // a razed city (UNRENDERED_STRUCTURES=0) — stay put
 
         // Stand off it on the origin's side, so the walk back out to open grid is behind
         // the player rather than through the building they are looking at.
@@ -4953,7 +4953,7 @@ public sealed class World : IAnchorField
         {
             if (!other.Alive || other.Carrier || other.Allied || ReferenceEquals(other, s)) continue;
             if (!WithinHit(mark, other.Position, EnemySoldier.Radius)) continue;
-            DamageSoldier(other, CarrierBladeDamage);
+            DamageSoldier(other, CarrierBladeDamage, s.Position);
             return;
         }
     }
@@ -5000,7 +5000,7 @@ public sealed class World : IAnchorField
             || mine > s.Height + EnemySoldier.BodyHeight + BladeVertical) return;
 
         s.RegisterSlash();
-        DamagePlayer(SoldierBladeDamage, target);
+        DamagePlayer(SoldierBladeDamage, target, s.Position);
         Emit(Cue.ClawSlam, s.Position);
         JoltPlayerView(target, 0.65f);
         Debris.Burst(new Vector3(target.Position.X, mine, target.Position.Y),
@@ -5286,7 +5286,7 @@ public sealed class World : IAnchorField
     /// underneath — a kill you earned out of the air is worth doubling back for, and where it
     /// falls is where they were when you hit them.
     /// </summary>
-    private void DamageSoldier(EnemySoldier s, float amount)
+    private void DamageSoldier(EnemySoldier s, float amount, Vector2? from = null)
     {
         // Hurting somebody who was flying cover for you ends that, however it happened � a
         // round, a rocket's splash, a beam, a building dropped on them. There is no version
@@ -5295,7 +5295,7 @@ public sealed class World : IAnchorField
         if (s.Allied) BreakEscort();
 
         bool wasAlive = s.Alive;
-        s.TakeDamage(amount);
+        s.TakeDamage(amount, from);
         if (!wasAlive || s.Alive) return;
 
         Emit(Cue.ExplosionAt, s.Position);
@@ -5341,7 +5341,7 @@ public sealed class World : IAnchorField
                 // The AP slug bulls on through. It carries no memory of a person the way it
                 // does of a hunter, and does not need one: a slug deals three and a soldier
                 // has two, so the body it just crossed is dead and skipped on the next tick.
-                DamageSoldier(s, SlugDamage);
+                DamageSoldier(s, SlugDamage, p.Position);
                 continue;
             }
 
@@ -5357,7 +5357,7 @@ public sealed class World : IAnchorField
                 // it. Which is the decision the whole weapon is built around: one shot buys
                 // you a body you can wear or set loose, and a second one only buys a corpse.
                 if (p.Seeds) SeedSoldier(s);
-                DamageSoldier(s, PlayerShotDamage);
+                DamageSoldier(s, PlayerShotDamage, p.Position);
             }
 
             p.Active = false;
@@ -6693,7 +6693,7 @@ public sealed class World : IAnchorField
                         break;
                     }
 
-                    DamagePlayer(bite * mark.ArmorMultiplierFromShot(p.Velocity), mark);
+                    DamagePlayer(bite * mark.ArmorMultiplierFromShot(p.Velocity), mark, p.Position);
 
                     // And a round that found the core while the lance was winding takes
                     // the wind with it. The charge is gone, the emitter is dead for a
@@ -6758,14 +6758,14 @@ public sealed class World : IAnchorField
 
             // Billed as a player's round, because it is one — the same damage a hunter
             // would have taken from it, turned by the victim's own plating.
-            DamagePlayer(PlayerShotDamage * mark.ArmorMultiplierFromShot(p.Velocity), mark);
+            DamagePlayer(PlayerShotDamage * mark.ArmorMultiplierFromShot(p.Velocity), mark, p.Position);
             mark.Jolt(0.2f);
             p.Active = false;
             return;
         }
     }
 
-    private void DamagePlayer(float amount, PlayerTank? to = null)
+    private void DamagePlayer(float amount, PlayerTank? to = null, Vector2? from = null)
     {
         // Null is the craft this machine is driving. Every caller that predates seats meant
         // exactly that, and in a solo run there is nothing else it could mean.
@@ -6802,7 +6802,7 @@ public sealed class World : IAnchorField
             }
         }
 
-        victim.TakeDamage(amount);
+        victim.TakeDamage(amount, from);
 
         // A craft blowing up and a hull absorbing a round are world sounds: anyone near the
         // fight hears them, on the host and every client, positioned to their own craft. That

@@ -1,4 +1,4 @@
-namespace VoidTanks.Net;
+namespace Unrendered.Net;
 
 /// <summary>
 /// A way to get bytes to the other machines in a session, and nothing else.

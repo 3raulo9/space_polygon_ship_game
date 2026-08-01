@@ -1,8 +1,8 @@
 using System.Numerics;
-using VoidTanks.Acoustics;
-using VoidTanks.World;
+using Unrendered.Acoustics;
+using Unrendered.World;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// The sound engine's half of the self-test.

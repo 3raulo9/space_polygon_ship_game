@@ -1,4 +1,4 @@
-namespace VoidTanks.Net;
+namespace Unrendered.Net;
 
 /// <summary>
 /// The short-lived lines that appear bottom-right under the HUD in a match — "<name> JOINED",

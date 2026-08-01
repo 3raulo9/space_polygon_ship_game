@@ -1,4 +1,4 @@
-namespace VoidTanks.Input;
+namespace Unrendered.Input;
 
 /// <summary>
 /// Every control a player is allowed to move. One entry per <em>thing you can do</em>,

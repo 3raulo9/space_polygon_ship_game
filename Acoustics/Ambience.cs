@@ -1,4 +1,4 @@
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>Special places that override the ordinary room entirely. Everything else — the
 /// open grid, an alley, a plaza — is derived continuously and needs no name.</summary>

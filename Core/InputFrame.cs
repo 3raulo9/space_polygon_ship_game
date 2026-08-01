@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// Every control the simulation can read, as one bit each.

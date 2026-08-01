@@ -1,8 +1,8 @@
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// The VIRUS's instruments, laid <em>over</em> the standard dashboard the way the fish's and

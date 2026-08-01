@@ -1,6 +1,6 @@
 using Raylib_cs;
 
-namespace VoidTanks.Input;
+namespace Unrendered.Input;
 
 /// <summary>
 /// One physical button — a key or a mouse button — as a single number, so a binding table

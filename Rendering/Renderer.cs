@@ -1,10 +1,10 @@
 ﻿using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
-using VoidTanks.UI;
+using Unrendered.Core;
+using Unrendered.Entities;
+using Unrendered.UI;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Owns the low-res render target and the nearest-neighbor upscale (Doc 05).

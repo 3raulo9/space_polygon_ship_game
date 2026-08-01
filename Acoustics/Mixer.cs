@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>
 /// The mix. Everything below this line is arithmetic on float arrays — no Raylib, no

@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Rendering;
+using Unrendered.Core;
+using Unrendered.Rendering;
 
-namespace VoidTanks.UI;
+namespace Unrendered.UI;
 
 // The regions a point can land in — None, Slots, Craft, Weapons, Output — used to be
 // declared here. They now live beside the data in Core.Inventory, because they are part of
