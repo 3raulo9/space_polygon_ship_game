@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// A flat-shaded convex-face mesh (Doc 02): each face is a single flat colour

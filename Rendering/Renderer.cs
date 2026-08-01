@@ -1,10 +1,10 @@
 ﻿using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
-using VoidTanks.UI;
+using Unrendered.Core;
+using Unrendered.Entities;
+using Unrendered.UI;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Owns the low-res render target and the nearest-neighbor upscale (Doc 05).
@@ -15,7 +15,7 @@ namespace VoidTanks.Rendering;
 public sealed class Renderer : IDisposable
 {
     private RenderTexture2D _target;
-    // A tiny buffer used only by the pause pixel-blur: the frozen frame is
+    // A tiny buffer used only by the screen-to-screen pixel fade: the frame is
     // downsampled into this at a fraction of the resolution, then blown back up
     // over the sharp frame. Sized to the low res so every blit is a full-texture
     // read — partial-rect reads of a flipped render texture misbehave.
@@ -564,6 +564,7 @@ public sealed class Renderer : IDisposable
         Raylib.EndTextureMode();
     }
 
+
     /// <summary>
     /// Renders the hangar: the chosen chassis turning slowly on the spot over the same
     /// drifting grid as the menu, with the roster / budget / paint panels laid flat on
@@ -773,23 +774,58 @@ public sealed class Renderer : IDisposable
     }
 
     /// <summary>
-    /// Draws a paused run: the frozen world with a pixel-blur closing over it and
-    /// the pause panel on top. <paramref name="t"/> (0..1) is how far the blur has
-    /// set in — 0 is the clean frame, 1 is the fully coarsened, dimmed hold. The
-    /// blur is a genuine downsample: the frame is squeezed to a fraction of its
-    /// size and blown back up nearest-neighbor, so it dissolves into fat blocks
-    /// rather than a soft smear — the same chunky logic as the world upscale.
+    /// Draws a paused run: the world dimmed under a cold wash with the pause panel over it.
+    /// <paramref name="t"/> (0..1) is how far the panel has come in.
+    ///
+    /// <para>This used to close a pixel-blur over the frame, which was a good effect and is
+    /// gone. It was affordable because the world underneath had stopped — the dissolve is two
+    /// full-target blits and it was redrawing a frame that could not change. Multiplayer does
+    /// not stop, and a panel you cannot see the fight through is a panel nobody dares open in
+    /// a match. Blurring one mode and not the other would have made them two different
+    /// screens, so both are a dim.</para>
     /// </summary>
     public void DrawPaused(World.World world, UI.PauseMenu menu, float elapsed, float t)
     {
-        // The sim is frozen, so this redraws the same held frame into _target.
         DrawWorld(world);
-        // Coarsen it, but only dim to a mid wash (not full void) so the world still
-        // reads behind the panel.
-        ApplyPixelDissolve(t, 150);
+        DimWorld(t);
 
         Raylib.BeginTextureMode(_target);
         MenuRenderer.DrawPause(menu, elapsed, t);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The settings screen over a live run, reached from the pause panel. Same page, same
+    /// layout and same dim as the panel it replaced — settings opened mid-match are not a
+    /// different screen from settings opened off the title, they are just further in.
+    /// </summary>
+    public void DrawPausedSettings(World.World world, UI.SettingsScreen screen, float elapsed,
+        float t)
+    {
+        DrawWorld(world);
+        DimWorld(t);
+
+        Raylib.BeginTextureMode(_target);
+        // Darker than the pause panel asks for: this page is dense, and a firefight showing
+        // through a column of key names makes both unreadable.
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(5, 7, 10, (int)(110 * Math.Clamp(t, 0f, 1f))));
+        MenuRenderer.DrawSettings(screen, elapsed, (byte)(255 * Math.Clamp(t, 0f, 1f)));
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>Lays a cold wash over whatever is in the target, by <paramref name="amount"/>
+    /// (0 untouched … 1 fully dimmed). Stops short of the void so the world still reads —
+    /// in multiplayer it is still happening, and the player is entitled to watch it.</summary>
+    private void DimWorld(float amount)
+    {
+        amount = Math.Clamp(amount, 0f, 1f);
+        if (amount <= 0f) return;
+
+        float ease = amount * amount * (3f - 2f * amount);
+        Raylib.BeginTextureMode(_target);
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(5, 7, 10, (int)(165 * ease)));
         Raylib.EndTextureMode();
     }
 

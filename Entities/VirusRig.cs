@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>What a mote is currently wearing. The whole class is which of these the
 /// player is, so nearly everything downstream branches on it.</summary>

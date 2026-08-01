@@ -1,4 +1,4 @@
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// Every enemy form the game can put on screen, as a flat identifier. The live

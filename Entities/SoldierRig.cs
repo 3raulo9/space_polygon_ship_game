@@ -1,8 +1,8 @@
 using System.Numerics;
-using VoidTanks.Core;
-using VoidTanks.World;
+using Unrendered.Core;
+using Unrendered.World;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>Where one hook is in its cycle.</summary>
 public enum HookState

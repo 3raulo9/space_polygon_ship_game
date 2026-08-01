@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// The sky above the horizon: a cold bluish glow that is brightest right at the

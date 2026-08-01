@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.UI;
+using Unrendered.Core;
+using Unrendered.UI;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Draws the hangar flat over the low-res target, after the 3D pass has already put

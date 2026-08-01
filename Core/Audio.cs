@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Acoustics;
-using VoidTanks.Entities;   // CrabRig, for the boss's leg count
+using Unrendered.Acoustics;
+using Unrendered.Entities;   // CrabRig, for the boss's leg count
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// The sound bank: what each cue in the game is <em>made of</em>. Which clip, which synth
@@ -11,7 +11,7 @@ namespace VoidTanks.Core;
 ///
 /// <para>What it deliberately no longer decides is how loud anything is, or where it sits,
 /// or how it is coloured by the distance and the city between it and the player. All of
-/// that now belongs to <see cref="VoidTanks.Acoustics.AudioEngine"/>, which is handed a
+/// that now belongs to <see cref="Unrendered.Acoustics.AudioEngine"/>, which is handed a
 /// world position and looks the rest up in the cue table. That split is the whole point:
 /// before it, forty of the fifty cues in the game were played at full volume dead centre
 /// whatever was happening, which is why a firefight on the far side of the map sounded
@@ -125,11 +125,17 @@ public static class Audio
     public static void ApplySettings(Settings s)
     {
         _engine.Env.MasterVolume = s.MasterVolume;
-        _engine.SetBusGain(Bus.Sfx, s.SfxVolume);
-        _engine.SetBusGain(Bus.Ui, s.SfxVolume);
-        _engine.SetBusGain(Bus.Music, s.MusicVolume);
+
+        // Walked rather than listed. A bus with no fader of its own answers 1 from
+        // VolumeOf, so adding a category to the mixer and a row to the settings page is two
+        // edits and never a third one here that somebody forgets.
+        foreach (var bus in Enum.GetValues<Bus>()) _engine.SetBusGain(bus, s.VolumeOf(bus));
+
         _engine.Mix.MonoDownmix = s.MonoAudio;
         _engine.Mix.SoftenLoud = s.SoftenLoudSounds;
+
+        // The soundtrack streams through raylib rather than the mixer, so its bus gain has
+        // to reach it by hand — see MusicBox.Fader.
         MusicBox.Fader = s.MusicVolume;
     }
 

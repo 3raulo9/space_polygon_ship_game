@@ -1,4 +1,4 @@
-namespace VoidTanks.Net;
+namespace Unrendered.Net;
 
 /// <summary>
 /// A way to get bytes to the other machines in a session, and nothing else.
@@ -31,6 +31,21 @@ public interface INetTransport
 
     /// <summary>The same, to everyone.</summary>
     void Broadcast(ReadOnlySpan<byte> payload, bool reliable);
+
+    /// <summary>
+    /// Pushes whatever is queued for one peer onto the wire now.
+    ///
+    /// A transport is entitled to hold a small send back for a few milliseconds hoping another
+    /// will follow, so the two can share a datagram — and for the run of packets a snapshot
+    /// writes back to back that is exactly the right thing to do. What it cannot know is when
+    /// the run has ended, so the last one of a batch sits there waiting for company that will
+    /// not arrive until the next snapshot. This says: that was the last one.
+    ///
+    /// Doing nothing is a correct implementation — a transport with no such buffer (the
+    /// loopback) has nothing to push — which is why it is defaulted here rather than forced on
+    /// everything that implements the interface.
+    /// </summary>
+    void Flush(int peer) { }
 
     /// <summary>
     /// Takes the next payload that has arrived, or returns false when there are none

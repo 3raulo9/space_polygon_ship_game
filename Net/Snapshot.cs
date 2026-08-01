@@ -1,8 +1,8 @@
 using System.Numerics;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Net;
+namespace Unrendered.Net;
 
 /// <summary>
 /// The host's account of the world, written for one recipient and applied on their machine.
@@ -128,6 +128,20 @@ public static class Snapshot
             // an exposed mote (HostKind.None), which the reader treats as "draw the mote".
             dst[at++] = (byte)(p.Virus?.HostKind ?? VirusHost.None);
             dst[at++] = (byte)Math.Clamp((p.Virus?.Integrity ?? 0f) * 255f, 0f, 255f);
+
+            // The last hit, so a team-mate's body flinches away from the thing that hit them
+            // rather than merely flinching. Two bytes: which way it came from, and a counter
+            // that ticks once per hit.
+            //
+            // The counter is what makes this safe at two bytes. Neither machine has to agree
+            // about *when* — a client that misses three snapshots sees the number jump and
+            // plays one flinch, and one that reads the same snapshot twice plays none. Sent
+            // for every class rather than only the two that are bodies, because the packet is
+            // a fixed layout and branching it per chassis to save forty bytes a second would
+            // be the worst trade in this file.
+            dst[at++] = (byte)Math.Clamp(
+                (p.FlinchAngle + MathF.PI) / MathF.Tau * 255f, 0f, 255f);
+            dst[at++] = (byte)(p.FlinchSeq & 0xFF);
         }
         return at;
     }
@@ -139,7 +153,13 @@ public static class Snapshot
     /// snapping it back to a position from a hundred milliseconds ago would judder in the
     /// player's hands.
     /// </summary>
-    public static uint ApplyPlayers(World.World world, ReadOnlySpan<byte> src)
+    /// <param name="ackedInputTick">Which of this client's own input ticks the host had
+    /// consumed when it wrote the packet. Carried per recipient on the packet header and handed
+    /// to <see cref="World.World.ReconcileLocal"/>, which is what lets the local craft's error
+    /// be measured against its own prediction for that same tick instead of against a position
+    /// a round trip out of date.</param>
+    public static uint ApplyPlayers(World.World world, ReadOnlySpan<byte> src,
+                                    uint ackedInputTick = 0)
     {
         try
         {
@@ -163,6 +183,8 @@ public static class Snapshot
                 int ammo = src[at++];
                 var hostKind = (VirusHost)src[at++];
                 float hostDecay = src[at++] / 255f;
+                float flinchAngle = src[at++] / 255f * MathF.Tau - MathF.PI;
+                int flinchSeq = src[at++];
 
                 if (seat < 0) continue;
                 // Grow the roster to cover any seat the host names. A client only builds seats
@@ -191,7 +213,7 @@ public static class Snapshot
                     me.Captured = held;
                     me.Away = (mark & Mark.Away) != 0;
                     world.ReconcileLocal(Torus.Wrap(new Vector2(x, y)), h, head, pitch,
-                        follow: held || me.Away);
+                        follow: held || me.Away, ackedInputTick: ackedInputTick);
                     continue;
                 }
 
@@ -219,6 +241,13 @@ public static class Snapshot
                 // bogus host. Null on any non-virus seat, where the two bytes are just zeroes.
                 if (p.Virus is { } mote && Enum.IsDefined(hostKind))
                     mote.NetSet(hostKind, hostDecay);
+
+                // The last hit they took. Only the direction and the counter travel; how hard
+                // it was is not worth a third byte, since a flinch at this range reads as a
+                // flinch whatever amplitude it is played at. Held on the craft for whatever
+                // draws it to notice the counter change.
+                p.FlinchAngle = flinchAngle;
+                if ((p.FlinchSeq & 0xFF) != flinchSeq) p.FlinchSeq = flinchSeq;
             }
             return tick;
         }
@@ -726,6 +755,20 @@ public static class Snapshot
         }
         dst[soldierCountAt] = (byte)ns;
         return at;
+    }
+
+    /// <summary>
+    /// Whether a freshly written bosses packet actually describes anything — either boss in
+    /// range, or a squad member. An empty one is six bytes that say "drop the puppets", which
+    /// matters exactly once per boss and is worth sending at a slow couple of hertz rather than
+    /// at the full snapshot rate. See the tiering in <c>Session.Broadcast</c>.
+    /// </summary>
+    public static bool BossesCarryAnything(ReadOnlySpan<byte> written)
+    {
+        // tick(4), flags(1), ...bodies..., soldierCount(1). Flags non-zero means a boss is in
+        // range; the squad count is the last byte, whatever the bosses took up before it.
+        if (written.Length < 6) return false;
+        return written[4] != 0 || written[^1] != 0;
     }
 
     /// <summary>Lays a bosses packet over this client's world, installing or dropping the

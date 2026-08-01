@@ -1,14 +1,17 @@
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Input;
+namespace Unrendered.Input;
 
 /// <summary>
-/// Deliberately limited controls (Doc 03): drive, turn, jump. No strafe.
-/// Having to turn your whole body to face or flee a threat is the point. The
-/// concrete key bindings live in <see cref="Settings"/> (so they can be swapped
-/// or reschemed from the menu); this stays the single read-point the sim polls.
-/// Menu navigation is fixed and never rebindable.
+/// What is left of the old read-point once the simulation started taking its input as
+/// <see cref="InputFrame"/>s.
+///
+/// <para>Everything a craft does now arrives through <see cref="InputSampler"/>, resolved
+/// from <see cref="Bindings"/> — see <see cref="Btn"/> for why that moved. What stays here
+/// are the reads that happen <em>outside</em> a simulation step and so have no frame to ride
+/// in: the overlays the loop opens and closes, the scoreboard the renderer consults, the
+/// spectator's steering, and the fixed keys that were never anybody's to rebind.</para>
 /// </summary>
 public static class InputMap
 {
@@ -19,60 +22,13 @@ public static class InputMap
     /// </summary>
     public static Settings Active { get; set; } = new();
 
-    public static bool Forward => Active.ForwardDown();
-    public static bool Back => Active.BackDown();
-    public static bool TurnLeft => Active.TurnLeftDown();
-    public static bool TurnRight => Active.TurnRightDown();
+    private static Bindings Binds => Active.Bindings;
 
-    // Jump is the primary dodge — a single press, slightly awkward, which is correct.
-    public static bool JumpPressed => Active.JumpPressed();
-
-    // Fire. Held is fine — the tank's own cooldown paces it, and ammo is finite.
-    public static bool Fire => Active.FireDown();
-
-    // Heavy grenade (Button B): a burst that spends ten rounds at once. Held is
-    // fine; the longer grenade cooldown keeps it costly.
-    public static bool Grenade => Active.GrenadeDown();
-
-    // Hyperspace warp (Button X): one press panic-teleports across the map, if
-    // the Hyper reserve can pay for it.
-    public static bool HyperspacePressed => Active.HyperspacePressed();
-
-    // --- The TANK's siege kit ---------------------------------------------------
-    // The heavy chassis gained a kit the day it gave up the jump. The plant rides the freed
-    // jump binding — Space, or Shift when Space is the fire key (see Settings.JumpPressed) —
-    // which is exactly the key that used to leave the ground and now digs in instead. The
-    // other three are fixed keys under the left hand; they share physical keys with the
-    // SOLDIER's hooks and the VIRUS's slots, but only ever one chassis reads them at a time,
-    // the same way WASD already means a different thing on every craft.
-
-    /// <summary>Dig in / stand up: the freed jump key. The treads never leave the grid now.</summary>
-    public static bool TankPlantPressed => Active.JumpPressed();
-
-    /// <summary>Q: the lurch — a track-boost dodge, paid out of the Hyper reserve.</summary>
-    public static bool TankLurchPressed => Raylib.IsKeyPressed(KeyboardKey.Q);
-
-    /// <summary>E: vent the smoke dischargers to blind the field.</summary>
-    public static bool TankSmokePressed => Raylib.IsKeyPressed(KeyboardKey.E);
-
-    /// <summary>R: the AP slug — a heavy round that punches through a line and through cover.</summary>
-    public static bool TankSlugPressed => Raylib.IsKeyPressed(KeyboardKey.R);
-
-    // --- The SPIDER --------------------------------------------------------------
-    // Two triggers and one key. The mouse buttons are read in the world (hold-and-release
-    // on both: the claw crushes then throws, the emitter winds then fires), so the only
-    // thing the map has to name is the legs.
-
-    /// <summary>Q: the pounce — a kick off a wall, on the same key the heavy chassis
-    /// dodges with. Both are "the thing this craft does with its legs", and no run ever
-    /// reads both.</summary>
-    public static bool SpiderPouncePressed => Raylib.IsKeyPressed(KeyboardKey.Q);
-
-    public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
+    // --- Rebindable, but read outside the fixed step -----------------------------------
 
     /// <summary>
-    /// 'F' opens and closes the inventory / crafting panel, on every chassis. A
-    /// just-pressed edge, so a held key doesn't flap the panel open and shut every frame.
+    /// Opens and closes the inventory / crafting panel, on every chassis. A just-pressed
+    /// edge, so a held key doesn't flap the panel open and shut every frame.
     ///
     /// It used to be E, and moved because the SOLDIER's right hook is bound to E and its
     /// left to Q — a player chaining swings would have opened the pack a dozen times a
@@ -81,155 +37,36 @@ public static class InputMap
     /// things" on one chassis and "throw a grappling hook" on another is a key nobody can
     /// build a habit around. F is one along from the hand already resting on WASD.
     /// </summary>
-    public static bool InventoryToggle => Raylib.IsKeyPressed(KeyboardKey.F);
+    public static bool InventoryToggle => Binds.Pressed(InputAction.Inventory);
 
     /// <summary>Held, not pressed: the scoreboard is a thing you look at while the match
-    /// carries on around you, not a screen you enter and leave. Tab, because every player
-    /// who has been near a multiplayer game already knows that.</summary>
-    public static bool ScoreboardDown => Raylib.IsKeyDown(KeyboardKey.Tab);
+    /// carries on around you, not a screen you enter and leave.</summary>
+    public static bool ScoreboardDown => Binds.Down(InputAction.Scoreboard);
 
-    /// <summary>Drops a marker on the world at the crosshair. Middle mouse, with G as the
-    /// alternative for anyone whose hand is nowhere near the wheel — this is a coordination
-    /// tool and it has to be reachable from whatever the chassis has the player doing.</summary>
-    public static bool WorldPingPressed
-        => Raylib.IsMouseButtonPressed(MouseButton.Middle) || Raylib.IsKeyPressed(KeyboardKey.G);
+    /// <summary>Drops a marker on the world at the crosshair. A coordination tool, so it has
+    /// to be reachable from whatever the chassis has the player doing.</summary>
+    public static bool WorldPingPressed => Binds.Pressed(InputAction.Mark);
 
     /// <summary>While spectating: step to the previous / next living team-mate. Sitting on
-    /// one player until they die is not watching a match, it is waiting.</summary>
-    public static bool SpectatePrevPressed => Raylib.IsKeyPressed(KeyboardKey.Left)
-                                           || Raylib.IsMouseButtonPressed(MouseButton.Left);
-    public static bool SpectateNextPressed => Raylib.IsKeyPressed(KeyboardKey.Right)
-                                           || Raylib.IsMouseButtonPressed(MouseButton.Right);
+    /// one player until they die is not watching a match, it is waiting. These may sit on
+    /// buttons that mean something else to a living player — the loop only reads them once
+    /// the player's own craft is gone.</summary>
+    public static bool SpectatePrevPressed => Binds.Pressed(InputAction.SpectatePrev);
+    public static bool SpectateNextPressed => Binds.Pressed(InputAction.SpectateNext);
 
-    // --- The SOLDIER ---------------------------------------------------------
-    // A separate scheme, not a re-skin of the tank's. This chassis is a person in first
-    // person: the mouse is the aim, WASD is a body rather than a throttle, and the two
-    // hooks are the whole game. Fixed bindings — the settings screen's schemes are all
-    // about which key turns a vehicle, and none of them mean anything here.
+    // --- Fixed: never rebindable --------------------------------------------------------
+    // Escape and the menu keys are the way out of every screen including the one that would
+    // rebind them, so they are the two things a player must not be able to lose.
+
+    public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
+
+    /// <summary>F11 toggles borderless fullscreen. Read from every screen, so it works on
+    /// the menu just as well as mid-run.</summary>
+    public static bool FullscreenPressed => Raylib.IsKeyPressed(KeyboardKey.F11);
 
     /// <summary>Frame's mouse movement in pixels. Only meaningful while the cursor is
-    /// captured, which the loop does for exactly as long as a soldier is driving.</summary>
+    /// captured, which the loop does for exactly as long as a craft is driving.</summary>
     public static System.Numerics.Vector2 LookDelta => Raylib.GetMouseDelta();
-
-    /// <summary>E: throw the right hook, or let it go if it is already out.</summary>
-    public static bool RightHookPressed => Raylib.IsKeyPressed(KeyboardKey.E);
-
-    /// <summary>Q: the same, on the left.</summary>
-    public static bool LeftHookPressed => Raylib.IsKeyPressed(KeyboardKey.Q);
-
-    /// <summary>
-    /// The gas burst that gets a soldier off the ground. ENTER, as the spec binds it —
-    /// and SPACE alongside it, because every hand that has ever played a first-person
-    /// game reaches for SPACE to jump, and a class whose whole opener is "leave the
-    /// ground immediately" cannot afford the one second a player spends discovering that
-    /// SPACE does nothing.
-    /// </summary>
-    public static bool HighJumpPressed
-        => Raylib.IsKeyPressed(KeyboardKey.Enter) || Raylib.IsKeyPressed(KeyboardKey.Space);
-
-    /// <summary>Left mouse: the rifle. Held is fine — the cadence paces it.</summary>
-    public static bool RifleDown => Raylib.IsMouseButtonDown(MouseButton.Left);
-
-    /// <summary>Right mouse: a rocket. A press, not a hold: six are carried and every
-    /// one of them is a decision.</summary>
-    public static bool RocketPressed => Raylib.IsMouseButtonPressed(MouseButton.Right);
-
-    /// <summary>Raw WASD as (strafe, forward), each -1..1. A body, not a vehicle: A and
-    /// D step sideways rather than turning, since the mouse is already doing the
-    /// turning. Reads the physical keys and ignores the turn-swap setting, which is a
-    /// preference about steering a craft.</summary>
-    public static System.Numerics.Vector2 SoldierMove
-    {
-        get
-        {
-            float x = 0f, y = 0f;
-            if (Raylib.IsKeyDown(KeyboardKey.D)) x += 1f;
-            if (Raylib.IsKeyDown(KeyboardKey.A)) x -= 1f;
-            if (Raylib.IsKeyDown(KeyboardKey.W)) y += 1f;
-            if (Raylib.IsKeyDown(KeyboardKey.S)) y -= 1f;
-            return new System.Numerics.Vector2(x, y);
-        }
-    }
-
-    // --- The FISH ------------------------------------------------------------
-    // Another scheme again, and the one difference from the soldier's that matters is
-    // that this chassis has no held movement key at all. W is an <em>event</em>: one
-    // press is one beat of the tail. Holding it does nothing, which is deliberate and is
-    // the first thing a player discovers about the class.
-
-    /// <summary>
-    /// One beat of the tail. W is the key the hand is already on; SPACE is here for the
-    /// same reason it is on the soldier — every hand that has played a first-person game
-    /// reaches for it to leave the ground, and this is the chassis that most needs the
-    /// player to succeed at that on their first try.
-    /// </summary>
-    public static bool BeatPressed
-        => Raylib.IsKeyPressed(KeyboardKey.W) || Raylib.IsKeyPressed(KeyboardKey.Space);
-
-    /// <summary>
-    /// A and D as a roll, -1..1. Not a strafe and not a turn: it puts the body on its
-    /// side, and the turn is what being on your side <em>earns</em> — see
-    /// <see cref="Entities.FishRig"/>.
-    /// </summary>
-    public static float RollInput
-    {
-        get
-        {
-            float x = 0f;
-            if (Raylib.IsKeyDown(KeyboardKey.D)) x += 1f;
-            if (Raylib.IsKeyDown(KeyboardKey.A)) x -= 1f;
-            return x;
-        }
-    }
-
-    /// <summary>S folds the fins: a brake, held. There is no reverse on this chassis —
-    /// turning round to leave is the same discipline the tank has always imposed.</summary>
-    public static bool BrakeDown => Raylib.IsKeyDown(KeyboardKey.S);
-
-    /// <summary>Left mouse: the spit. Held is fine — its own cadence paces it.</summary>
-    public static bool SpitDown => Raylib.IsMouseButtonDown(MouseButton.Left);
-
-    /// <summary>Right mouse: the strike. A press, not a hold — it commits the next second
-    /// and a half of the player's life, and that is not something to hold a button
-    /// through.</summary>
-    public static bool StrikePressed => Raylib.IsMouseButtonPressed(MouseButton.Right);
-
-    // --- The VIRUS -----------------------------------------------------------
-    // The same first-person body scheme as the soldier and the fish, because it is the same
-    // hand: the mouse aims, WASD moves. What differs is that this chassis never throws a hook
-    // or beats a tail — it just flies and it just fires — so it needs only three reads.
-
-    /// <summary>Raw WASD as (strafe, forward), each -1..1 — the mote's flight and the worn
-    /// host's drive both take it. A body, not a vehicle: A and D step sideways, since the
-    /// mouse already owns the turn. Shares the soldier's reading, physical keys only.</summary>
-    public static System.Numerics.Vector2 VirusMove => SoldierMove;
-
-    /// <summary>Left mouse: fire. The mote spits a weak round; a worn host fires its cannon.
-    /// Held is fine — the cadence paces it.</summary>
-    public static bool VirusFireDown => Raylib.IsMouseButtonDown(MouseButton.Left);
-
-    /// <summary>Right mouse: overload the host into a bomb. A press, not a hold — it spends
-    /// the whole body at once, which is not a thing to hold a button through. Dead while a
-    /// mote, which has no host to spend.</summary>
-    public static bool VirusOverloadPressed => Raylib.IsMouseButtonPressed(MouseButton.Right);
-
-    /// <summary>
-    /// The four equip slots, wired to the physical R / T / Y / U row above the
-    /// movement keys. Returns which one was just pressed (0..3) or -1 for none — the
-    /// world throws whatever that slot holds. Just-pressed so a held key throws once.
-    /// </summary>
-    public static int WeaponSlotPressed()
-    {
-        if (Raylib.IsKeyPressed(KeyboardKey.R)) return 0;
-        if (Raylib.IsKeyPressed(KeyboardKey.T)) return 1;
-        if (Raylib.IsKeyPressed(KeyboardKey.Y)) return 2;
-        if (Raylib.IsKeyPressed(KeyboardKey.U)) return 3;
-        return -1;
-    }
-
-    // F11 toggles borderless fullscreen. Fixed (never rebindable) and read from
-    // every screen, so it works on the menu just as well as mid-run.
-    public static bool FullscreenPressed => Raylib.IsKeyPressed(KeyboardKey.F11);
 
     // --- Menu navigation (fixed; only meaningful while a menu screen is up) ---
     public static bool MenuUp => Raylib.IsKeyPressed(KeyboardKey.W) || Raylib.IsKeyPressed(KeyboardKey.Up);
@@ -238,6 +75,11 @@ public static class InputMap
     public static bool MenuRight => Raylib.IsKeyPressed(KeyboardKey.D) || Raylib.IsKeyPressed(KeyboardKey.Right);
     public static bool MenuConfirm => Raylib.IsKeyPressed(KeyboardKey.Enter)
                                       || Raylib.IsKeyPressed(KeyboardKey.Space);
+
+    /// <summary>Clears a row's binding from the controls page. Delete, which is what it is
+    /// called on every keyboard and means nothing else on a menu.</summary>
+    public static bool MenuDelete => Raylib.IsKeyPressed(KeyboardKey.Delete)
+                                     || Raylib.IsKeyPressed(KeyboardKey.Backspace);
 
     // Tab walks between the panes of a multi-column screen (the class-select hangar
     // is the only one so far); Shift-Tab walks back. Fixed, like the rest of menu nav.

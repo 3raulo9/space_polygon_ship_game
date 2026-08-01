@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// The Crab-Core's execution: what happens when it finally closes the distance and

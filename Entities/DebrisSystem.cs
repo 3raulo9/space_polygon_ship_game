@@ -1,7 +1,7 @@
 using System.Numerics;
 using Raylib_cs;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// One flying piece of a destroyed enemy: either a chunky broken-off shard in the

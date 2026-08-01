@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// The shared physical layout of the Crab-Core boss — the one source of truth for

@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// VECTOR.MAW-CORE — the Hanging Mouth. A Crab-Core with its middle torn out: the

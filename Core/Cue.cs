@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Acoustics;
+using Unrendered.Acoustics;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// A one-shot sound the simulation asks for, named rather than played directly. Every combat
@@ -155,118 +155,157 @@ public static class CueBank
 
         // A world sound, with the knobs most cues want. Everything below is this with
         // reasons attached.
-        static SoundSpec S(float gain, float max, float rolloff, byte priority, byte cap,
+        //
+        // The bus comes first because it is the one field a reader of this table most often
+        // wants to check: it is what the settings screen's sliders actually address, and a
+        // cue on the wrong one is a cue the player cannot turn down.
+        static SoundSpec S(Bus bus, float gain, float max, float rolloff, byte priority, byte cap,
             float reverb = 0.30f, float air = 0.7f, float jitter = 0.03f,
             bool occludes = true, bool delay = false, float min = 5f)
-            => new(Bus.Sfx, gain, min, max, rolloff, priority, cap, Spatial: true,
+            => new(bus, gain, min, max, rolloff, priority, cap, Spatial: true,
                    Occludes: occludes, ReverbSend: reverb, AirAbsorb: air,
                    PitchJitter: jitter, TravelDelay: delay);
 
         // A bed: quiet, long-ranged, dry, one instance, never stolen.
-        static SoundSpec Bed(float gain, float max, float rolloff, float reverb = 0.10f,
+        static SoundSpec Bed(Bus bus, float gain, float max, float rolloff, float reverb = 0.10f,
             float air = 0.5f)
-            => new(Bus.Sfx, gain, MinDistance: 4f, MaxDistance: max, Rolloff: rolloff,
+            => new(bus, gain, MinDistance: 4f, MaxDistance: max, Rolloff: rolloff,
                    Priority: 240, MaxInstances: 1, Spatial: true, Occludes: true,
                    ReverbSend: reverb, AirAbsorb: air, PitchJitter: 0f, TravelDelay: false);
 
-        // Something on your own panel: centred, dry, unmissable.
+        // Something on your own panel: centred, dry, unmissable. Always the player's bus —
+        // a panel by definition belongs to whoever is looking at it.
         static SoundSpec Panel(float gain, byte priority = 220)
-            => SoundSpec.Flat with { Gain = gain, Priority = priority, MaxInstances = 2 };
+            => SoundSpec.Flat with
+            {
+                Bus = Bus.Ui, Gain = gain, Priority = priority, MaxInstances = 2,
+            };
 
         // --- Guns -------------------------------------------------------------------
         // Caps matter more here than anywhere. Twenty players on full auto is the case
         // that decides whether a firefight is legible or a wall of noise.
-        t.Set((int)Cue.Detonation, "Detonation", S(0.85f, 150f, 1.5f, 120, 6, air: 0.75f, jitter: 0.05f));
-        t.Set((int)Cue.Laser, "Laser", S(0.55f, 110f, 1.8f, 90, 5, reverb: 0.22f, air: 0.85f, jitter: 0.07f));
-        t.Set((int)Cue.RifleShot, "RifleShot", S(0.62f, 130f, 1.9f, 95, 4, reverb: 0.38f, air: 0.9f, jitter: 0.06f));
-        t.Set((int)Cue.RocketLaunch, "RocketLaunch", S(0.85f, 155f, 1.4f, 130, 3, air: 0.6f));
-        t.Set((int)Cue.RocketBlast, "RocketBlast", S(1.0f, 175f, 1.2f, 170, 4, reverb: 0.45f, air: 0.5f));
-        t.Set((int)Cue.LanceFire, "LanceFire", S(0.9f, 160f, 1.3f, 140, 3, reverb: 0.35f, air: 0.6f));
-        t.Set((int)Cue.UnstableLance, "UnstableLance", S(0.95f, 165f, 1.3f, 145, 3, reverb: 0.4f, air: 0.6f));
-        t.Set((int)Cue.CrabCoreBlast, "CrabCoreBlast", S(1.0f, 190f, 1.1f, 180, 2, reverb: 0.5f, air: 0.5f));
-        t.Set((int)Cue.ThrowWhoosh, "ThrowWhoosh", S(0.6f, 90f, 1.7f, 70, 4, reverb: 0.2f, air: 0.8f));
-        t.Set((int)Cue.FishSpit, "FishSpit", S(0.5f, 100f, 1.9f, 80, 5, reverb: 0.25f, air: 0.85f, jitter: 0.08f));
-        t.Set((int)Cue.FishStrike, "FishStrike", S(1.0f, 150f, 1.2f, 160, 2, reverb: 0.35f, air: 0.55f));
-        t.Set((int)Cue.FishImpact, "FishImpact", S(0.9f, 130f, 1.4f, 150, 3, reverb: 0.4f, air: 0.6f));
-        t.Set((int)Cue.FishBeach, "FishBeach", S(0.8f, 120f, 1.5f, 120, 2, reverb: 0.35f));
-        t.Set((int)Cue.FishCoil, "FishCoil", S(0.5f, 70f, 1.8f, 70, 2, reverb: 0.15f, air: 0.9f));
-        t.Set((int)Cue.TailBeat, "TailBeat", S(0.45f, 80f, 1.8f, 60, 4, reverb: 0.2f, air: 0.85f, jitter: 0.06f));
-        t.Set((int)Cue.TailFlop, "TailFlop", S(0.55f, 85f, 1.7f, 65, 3, reverb: 0.3f));
-        t.Set((int)Cue.MawSpit, "MawSpit", S(0.6f, 110f, 1.6f, 100, 5, reverb: 0.25f, air: 0.8f));
+        //
+        // All of it is Bus.Shooting whoever pulled the trigger, and it could not be
+        // otherwise: Detonation is a barrel firing, and the cue does not carry — cannot
+        // carry, since it crosses the wire as one byte — whether the hull under that barrel
+        // belonged to a player or a hunter. Which turns out to be the right answer anyway.
+        // Gunfire is a single texture in a mix, and a player who reaches for that slider is
+        // asking for less of the texture, not for a side to be silenced.
+        const Bus Gun = Bus.Shooting;
+        t.Set((int)Cue.Detonation, "Detonation", S(Gun, 0.85f, 150f, 1.5f, 120, 6, air: 0.75f, jitter: 0.05f));
+        t.Set((int)Cue.Laser, "Laser", S(Gun, 0.55f, 110f, 1.8f, 90, 5, reverb: 0.22f, air: 0.85f, jitter: 0.07f));
+        t.Set((int)Cue.RifleShot, "RifleShot", S(Gun, 0.62f, 130f, 1.9f, 95, 4, reverb: 0.38f, air: 0.9f, jitter: 0.06f));
+        t.Set((int)Cue.RocketLaunch, "RocketLaunch", S(Gun, 0.85f, 155f, 1.4f, 130, 3, air: 0.6f));
+        t.Set((int)Cue.LanceFire, "LanceFire", S(Gun, 0.9f, 160f, 1.3f, 140, 3, reverb: 0.35f, air: 0.6f));
+        t.Set((int)Cue.UnstableLance, "UnstableLance", S(Gun, 0.95f, 165f, 1.3f, 145, 3, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.FishSpit, "FishSpit", S(Gun, 0.5f, 100f, 1.9f, 80, 5, reverb: 0.25f, air: 0.85f, jitter: 0.08f));
+        t.Set((int)Cue.MawSpit, "MawSpit", S(Gun, 0.6f, 110f, 1.6f, 100, 5, reverb: 0.25f, air: 0.8f));
+        // A throw is the delivery of a weapon, so it belongs with the guns rather than with
+        // the blast it precedes — you hear it in time to move, which is what it is for.
+        t.Set((int)Cue.ThrowWhoosh, "ThrowWhoosh", S(Gun, 0.6f, 90f, 1.7f, 70, 4, reverb: 0.2f, air: 0.8f));
+
+        // Ordnance arriving rather than leaving.
+        t.Set((int)Cue.RocketBlast, "RocketBlast", S(Bus.Explosions, 1.0f, 175f, 1.2f, 170, 4, reverb: 0.45f, air: 0.5f));
+        t.Set((int)Cue.CrabCoreBlast, "CrabCoreBlast", S(Bus.Explosions, 1.0f, 190f, 1.1f, 180, 2, reverb: 0.5f, air: 0.5f));
+
+        // --- The FISH's body --------------------------------------------------------
+        // A player chassis, so all of it is on the player's fader — including the strike,
+        // which is a body hitting something rather than a weapon going off.
+        t.Set((int)Cue.FishStrike, "FishStrike", S(Bus.Player, 1.0f, 150f, 1.2f, 160, 2, reverb: 0.35f, air: 0.55f));
+        t.Set((int)Cue.FishImpact, "FishImpact", S(Bus.Player, 0.9f, 130f, 1.4f, 150, 3, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.FishBeach, "FishBeach", S(Bus.Player, 0.8f, 120f, 1.5f, 120, 2, reverb: 0.35f));
+        t.Set((int)Cue.FishCoil, "FishCoil", S(Bus.Player, 0.5f, 70f, 1.8f, 70, 2, reverb: 0.15f, air: 0.9f));
+        t.Set((int)Cue.TailBeat, "TailBeat", S(Bus.Player, 0.45f, 80f, 1.8f, 60, 4, reverb: 0.2f, air: 0.85f, jitter: 0.06f));
+        t.Set((int)Cue.TailFlop, "TailFlop", S(Bus.Player, 0.55f, 85f, 1.7f, 65, 3, reverb: 0.3f));
 
         // --- Impacts and deaths -----------------------------------------------------
-        t.Set((int)Cue.Explosion, "Explosion", S(1.0f, 200f, 1.1f, 190, 4, reverb: 0.45f, air: 0.5f));
+        t.Set((int)Cue.Explosion, "Explosion", S(Bus.Explosions, 1.0f, 200f, 1.1f, 190, 4, reverb: 0.45f, air: 0.5f));
         // The one cue that travels. Long reach, slow rolloff, heavy absorption — a blast
         // across the map should be a dull roll that arrives after the flash.
         t.Set((int)Cue.ExplosionAt, "ExplosionAt",
-            S(0.9f, 260f, 0.85f, 175, 4, reverb: 0.55f, air: 1f, delay: true, min: 30f));
-        t.Set((int)Cue.Hit, "Hit", S(0.75f, 90f, 1.7f, 110, 5, reverb: 0.2f, air: 0.8f));
-        t.Set((int)Cue.Warning, "Warning", Panel(0.75f, 235));
-        t.Set((int)Cue.CoreHit, "CoreHit", S(0.9f, 140f, 1.4f, 165, 3, reverb: 0.35f, air: 0.7f));
-        t.Set((int)Cue.MawHurt, "MawHurt", S(0.9f, 140f, 1.4f, 165, 3, reverb: 0.4f, air: 0.7f));
+            S(Bus.Explosions, 0.9f, 260f, 0.85f, 175, 4, reverb: 0.55f, air: 1f, delay: true, min: 30f));
         // Never culled, never stolen. A boss dying is the loudest event in the game and
         // the player must hear all of it wherever they are standing.
         t.Set((int)Cue.BossDeath, "BossDeath",
-            S(1.0f, 300f, 0.8f, 250, 8, reverb: 0.6f, air: 0.55f, min: 20f));
-        t.Set((int)Cue.CrashLanding, "CrashLanding", S(0.8f, 110f, 1.6f, 120, 3, reverb: 0.35f));
+            S(Bus.Explosions, 1.0f, 300f, 0.8f, 250, 8, reverb: 0.6f, air: 0.55f, min: 20f));
+
+        // A craft absorbing a hit and a craft coming down hard are both things happening to
+        // a hull, which is what the player fader is for.
+        t.Set((int)Cue.Hit, "Hit", S(Bus.Player, 0.75f, 90f, 1.7f, 110, 5, reverb: 0.2f, air: 0.8f));
+        t.Set((int)Cue.CrashLanding, "CrashLanding", S(Bus.Player, 0.8f, 110f, 1.6f, 120, 3, reverb: 0.35f));
+        t.Set((int)Cue.Warning, "Warning", Panel(0.75f, 235));
         t.Set((int)Cue.Pickup, "Pickup", Panel(0.55f, 200));
 
+        // A shot landing on a monster is the monster's noise, not the gun's: it is how the
+        // player learns they are hurting the thing.
+        t.Set((int)Cue.CoreHit, "CoreHit", S(Bus.Enemies, 0.9f, 140f, 1.4f, 165, 3, reverb: 0.35f, air: 0.7f));
+        t.Set((int)Cue.MawHurt, "MawHurt", S(Bus.Enemies, 0.9f, 140f, 1.4f, 165, 3, reverb: 0.4f, air: 0.7f));
+
         // --- The Crab-Core ----------------------------------------------------------
-        t.Set((int)Cue.Clamp, "Clamp", S(0.7f, 120f, 1.5f, 110, 4, reverb: 0.35f, air: 0.75f));
-        t.Set((int)Cue.Alarm, "Alarm", S(0.9f, 180f, 1.1f, 200, 2, reverb: 0.5f, air: 0.6f));
+        const Bus Foe = Bus.Enemies;
+        t.Set((int)Cue.Clamp, "Clamp", S(Foe, 0.7f, 120f, 1.5f, 110, 4, reverb: 0.35f, air: 0.75f));
+        t.Set((int)Cue.Alarm, "Alarm", S(Foe, 0.9f, 180f, 1.1f, 200, 2, reverb: 0.5f, air: 0.6f));
         // Six legs on a tripod gait: three land on the same tick, so the cap is generous
         // and the level is not.
-        t.Set((int)Cue.Footstep, "Footstep", S(0.85f, 100f, 1.5f, 85, 8, reverb: 0.4f, air: 0.7f, jitter: 0f));
+        t.Set((int)Cue.Footstep, "Footstep", S(Foe, 0.85f, 100f, 1.5f, 85, 8, reverb: 0.4f, air: 0.7f, jitter: 0f));
         // Carries a long way and stays present in the middle distance — it should feel
         // like it is following you, not switching off.
-        t.Set((int)Cue.HuntCall, "HuntCall", S(0.75f, 145f, 0.75f, 150, 2, reverb: 0.45f, air: 0.85f, min: 10f));
-        t.Set((int)Cue.CrabScream, "CrabScream", S(1.0f, 120f, 1.3f, 245, 2, reverb: 0.3f, air: 0.5f));
-        t.Set((int)Cue.ClawSlam, "ClawSlam", S(1.0f, 140f, 1.3f, 210, 2, reverb: 0.4f, air: 0.6f));
-        t.Set((int)Cue.BeamCharge, "BeamCharge", S(0.9f, 200f, 1.0f, 215, 2, reverb: 0.4f, air: 0.6f));
-        t.Set((int)Cue.BeamWarning, "BeamWarning", S(0.9f, 210f, 0.9f, 225, 3, reverb: 0.35f, air: 0.6f, jitter: 0f));
-        t.Set((int)Cue.BeamFire, "BeamFire", S(1.0f, 240f, 0.85f, 240, 2, reverb: 0.5f, air: 0.55f));
+        t.Set((int)Cue.HuntCall, "HuntCall", S(Foe, 0.75f, 145f, 0.75f, 150, 2, reverb: 0.45f, air: 0.85f, min: 10f));
+        t.Set((int)Cue.CrabScream, "CrabScream", S(Foe, 1.0f, 120f, 1.3f, 245, 2, reverb: 0.3f, air: 0.5f));
+        t.Set((int)Cue.ClawSlam, "ClawSlam", S(Foe, 1.0f, 140f, 1.3f, 210, 2, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.BeamCharge, "BeamCharge", S(Foe, 0.9f, 200f, 1.0f, 215, 2, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.BeamWarning, "BeamWarning", S(Foe, 0.9f, 210f, 0.9f, 225, 3, reverb: 0.35f, air: 0.6f, jitter: 0f));
+        // The beam is the boss, not an artillery piece: it stays with the thing that fired
+        // it so turning the monsters down turns down all of it and not most of it.
+        t.Set((int)Cue.BeamFire, "BeamFire", S(Foe, 1.0f, 240f, 0.85f, 240, 2, reverb: 0.5f, air: 0.55f));
 
         // --- The Maw-Core -----------------------------------------------------------
-        t.Set((int)Cue.MawSwallow, "MawSwallow", S(1.0f, 130f, 1.3f, 235, 2, reverb: 0.4f, air: 0.6f));
-        t.Set((int)Cue.MawDive, "MawDive", S(0.95f, 150f, 1.2f, 200, 2, reverb: 0.45f, air: 0.6f));
-        t.Set((int)Cue.MawRelease, "MawRelease", S(0.9f, 130f, 1.3f, 195, 2, reverb: 0.4f));
-        t.Set((int)Cue.MawTeeth, "MawTeeth", S(0.6f, 95f, 1.6f, 75, 4, reverb: 0.5f, air: 0.85f, jitter: 0.06f));
-        t.Set((int)Cue.MawCrystal, "MawCrystal", S(0.55f, 105f, 1.5f, 80, 2, reverb: 0.5f, air: 0.8f));
+        t.Set((int)Cue.MawSwallow, "MawSwallow", S(Foe, 1.0f, 130f, 1.3f, 235, 2, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.MawDive, "MawDive", S(Foe, 0.95f, 150f, 1.2f, 200, 2, reverb: 0.45f, air: 0.6f));
+        t.Set((int)Cue.MawRelease, "MawRelease", S(Foe, 0.9f, 130f, 1.3f, 195, 2, reverb: 0.4f));
+        t.Set((int)Cue.MawTeeth, "MawTeeth", S(Foe, 0.6f, 95f, 1.6f, 75, 4, reverb: 0.5f, air: 0.85f, jitter: 0.06f));
+        t.Set((int)Cue.MawCrystal, "MawCrystal", S(Foe, 0.55f, 105f, 1.5f, 80, 2, reverb: 0.5f, air: 0.8f));
         // A bite lands on somebody, so it carries; a drip is a detail of the weather under
         // the mouth and is not meant to be heard from anywhere but under it.
-        t.Set((int)Cue.MawDigest, "MawDigest", S(0.85f, 120f, 1.4f, 190, 2, reverb: 0.45f, air: 0.7f));
-        t.Set((int)Cue.MawDrip, "MawDrip", S(0.5f, 45f, 1.6f, 40, 3, reverb: 0.45f, air: 0.9f, jitter: 0.1f));
+        t.Set((int)Cue.MawDigest, "MawDigest", S(Foe, 0.85f, 120f, 1.4f, 190, 2, reverb: 0.45f, air: 0.7f));
+        t.Set((int)Cue.MawDrip, "MawDrip", S(Foe, 0.5f, 45f, 1.6f, 40, 3, reverb: 0.45f, air: 0.9f, jitter: 0.1f));
 
         // A mark is information, so it carries a very long way and is barely attenuated by
-        // anything: the whole point is that a player anywhere in the match hears WHERE.
-        t.Set((int)Cue.Marker, "Marker", S(0.7f, 300f, 0.5f, 245, 3, reverb: 0.1f, air: 0.25f, jitter: 0f, occludes: false, min: 20f));
+        // anything: the whole point is that a player anywhere in the match hears WHERE. On
+        // the player bus — it is a team-mate talking to you, and the one slider it must
+        // never hide behind is the one named for the things trying to kill you.
+        t.Set((int)Cue.Marker, "Marker", S(Bus.Player, 0.7f, 300f, 0.5f, 245, 3, reverb: 0.1f, air: 0.25f, jitter: 0f, occludes: false, min: 20f));
 
         // --- The SOLDIER's rig ------------------------------------------------------
         // These are things happening to a person. Generous ranges — a team-mate's grapple
-        // firing somewhere behind you is information — and light absorption.
-        t.Set((int)Cue.GasJump, "GasJump", S(0.8f, 120f, 1.5f, 115, 4, reverb: 0.25f, air: 0.8f));
-        t.Set((int)Cue.CableFire, "CableFire", S(0.7f, 105f, 1.6f, 100, 4, reverb: 0.25f, air: 0.8f));
-        t.Set((int)Cue.CableZip, "CableZip", S(0.6f, 95f, 1.7f, 85, 4, reverb: 0.25f, air: 0.85f));
-        t.Set((int)Cue.AnchorBite, "AnchorBite", S(0.85f, 125f, 1.3f, 145, 4, reverb: 0.45f, air: 0.7f));
-        t.Set((int)Cue.AnchorTear, "AnchorTear", S(0.85f, 115f, 1.4f, 150, 3, reverb: 0.4f, air: 0.7f));
+        // firing somewhere behind you is information — and light absorption. All on the
+        // player's bus: a cable is not a gun, whoever is on the end of it.
+        const Bus Rig = Bus.Player;
+        t.Set((int)Cue.GasJump, "GasJump", S(Rig, 0.8f, 120f, 1.5f, 115, 4, reverb: 0.25f, air: 0.8f));
+        t.Set((int)Cue.CableFire, "CableFire", S(Rig, 0.7f, 105f, 1.6f, 100, 4, reverb: 0.25f, air: 0.8f));
+        t.Set((int)Cue.CableZip, "CableZip", S(Rig, 0.6f, 95f, 1.7f, 85, 4, reverb: 0.25f, air: 0.85f));
+        t.Set((int)Cue.AnchorBite, "AnchorBite", S(Rig, 0.85f, 125f, 1.3f, 145, 4, reverb: 0.45f, air: 0.7f));
+        t.Set((int)Cue.AnchorTear, "AnchorTear", S(Rig, 0.85f, 115f, 1.4f, 150, 3, reverb: 0.4f, air: 0.7f));
 
         // --- Structures -------------------------------------------------------------
         // A tower failing is heard through the city, so occlusion is left ON but the reach
-        // is long: it is the loudest warning the world gives.
-        t.Set((int)Cue.StructureGroan, "StructureGroan", S(0.85f, 200f, 1.0f, 185, 3, reverb: 0.55f, air: 0.6f));
-        t.Set((int)Cue.StructureCrack, "StructureCrack", S(0.55f, 140f, 1.7f, 90, 5, reverb: 0.5f, air: 0.85f, jitter: 0.08f));
+        // is long: it is the loudest warning the world gives. Filed under explosions — a
+        // building coming down is the same event to a listener as ordnance landing, and it
+        // is nearly always ordnance that brought it down.
+        t.Set((int)Cue.StructureGroan, "StructureGroan", S(Bus.Explosions, 0.85f, 200f, 1.0f, 185, 3, reverb: 0.55f, air: 0.6f));
+        t.Set((int)Cue.StructureCrack, "StructureCrack", S(Bus.Explosions, 0.55f, 140f, 1.7f, 90, 5, reverb: 0.5f, air: 0.85f, jitter: 0.08f));
 
         // --- Beds -------------------------------------------------------------------
         // Long, slow rolloffs so a monster is a presence in the middle distance rather
         // than an on/off switch, and low sends so the room does not turn to soup.
-        t.Set((int)Cue.BossHum, "BossHum", Bed(0.42f, 130f, 0.9f, reverb: 0.15f));
-        t.Set((int)Cue.MawHover, "MawHover", Bed(0.38f, 150f, 0.85f, reverb: 0.12f));
+        t.Set((int)Cue.BossHum, "BossHum", Bed(Bus.Enemies, 0.42f, 130f, 0.9f, reverb: 0.15f));
+        t.Set((int)Cue.MawHover, "MawHover", Bed(Bus.Enemies, 0.38f, 150f, 0.85f, reverb: 0.12f));
         // The four on your own hull. Flat, dry, unoccluded — a bed cannot be muffled by a
-        // wall it is standing inside with you.
-        t.Set((int)Cue.LanceCharge, "LanceCharge", SoundSpec.Flat with { Bus = Bus.Sfx, Gain = 0.5f, MaxInstances = 1, Priority = 240 });
-        t.Set((int)Cue.ReelJet, "ReelJet", SoundSpec.Flat with { Bus = Bus.Sfx, Gain = 0.45f, MaxInstances = 1, Priority = 240 });
-        t.Set((int)Cue.Wind, "Wind", SoundSpec.Flat with { Bus = Bus.Sfx, Gain = 0.55f, MaxInstances = 1, Priority = 240 });
-        t.Set((int)Cue.CableStrain, "CableStrain", SoundSpec.Flat with { Bus = Bus.Sfx, Gain = 0.3f, MaxInstances = 1, Priority = 240 });
+        // wall it is standing inside with you — and squarely the player's own noise.
+        t.Set((int)Cue.LanceCharge, "LanceCharge", SoundSpec.Flat with { Bus = Bus.Player, Gain = 0.5f, MaxInstances = 1, Priority = 240 });
+        t.Set((int)Cue.ReelJet, "ReelJet", SoundSpec.Flat with { Bus = Bus.Player, Gain = 0.45f, MaxInstances = 1, Priority = 240 });
+        t.Set((int)Cue.Wind, "Wind", SoundSpec.Flat with { Bus = Bus.Player, Gain = 0.55f, MaxInstances = 1, Priority = 240 });
+        t.Set((int)Cue.CableStrain, "CableStrain", SoundSpec.Flat with { Bus = Bus.Player, Gain = 0.3f, MaxInstances = 1, Priority = 240 });
 
         return t;
     }

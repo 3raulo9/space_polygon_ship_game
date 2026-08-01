@@ -1,6 +1,6 @@
 using Raylib_cs;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// The whole game lives in a small, dark, slightly-sick palette (Doc 02).

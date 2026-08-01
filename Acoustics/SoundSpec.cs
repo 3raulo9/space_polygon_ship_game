@@ -1,16 +1,27 @@
 using System.Globalization;
 
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
-/// <summary>Where a voice is routed before it reaches the master. Buses exist so the
-/// player can turn the music down without turning the guns down, and so one category can
-/// be ducked under another without touching individual voices.</summary>
+/// <summary>
+/// Where a voice is routed before it reaches the master. Buses exist so the player can turn
+/// the music down without turning the guns down, and so one category can be ducked under
+/// another without touching individual voices.
+///
+/// <para>The engine attaches no meaning to any of these beyond "sum here, then apply this
+/// gain". Which cue belongs on which bus is the <em>game's</em> statement, made once in
+/// <see cref="Unrendered.Core.CueBank.BuildTable"/>; the only bus the mixer treats specially
+/// is <see cref="Ui"/>, and that is a signal-path decision rather than a taxonomic one.</para>
+/// </summary>
 public enum Bus : byte
 {
-    /// <summary>Everything the world makes.</summary>
+    /// <summary>Anything the world makes that no category below has claimed. Governed by the
+    /// master fader alone. Every cue the game ships is routed explicitly, so in practice this
+    /// carries only cues added since the last time somebody looked at the table — audible and
+    /// slightly ungoverned, which is the right way for an oversight to present itself.</summary>
     Sfx = 0,
     /// <summary>Menus, the inventory, the cursor. Never spatial, never occluded, never
-    /// ducked — a click that goes quiet because a boss is roaring feels broken.</summary>
+    /// ducked — a click that goes quiet because a boss is roaring feels broken. Follows the
+    /// player fader: a menu blip is a sound your own machine makes at you.</summary>
     Ui = 1,
     /// <summary>The soundtrack. Not mixed here (it streams through raylib), but it owns a
     /// bus gain so the same fader and the same ducking reach it.</summary>
@@ -18,6 +29,27 @@ public enum Bus : byte
     /// <summary>Reserved for player voice. Nothing routes here yet — the bus and the
     /// spatialisation path exist so proximity chat drops in without a rewrite.</summary>
     Voice = 3,
+
+    // --- The four the settings screen's sliders name ---------------------------------
+    // Split by what a player would point at and say "that, less of that", which is not the
+    // same axis as who made the noise. Gunfire is one texture whoever is holding the gun;
+    // a monster is a presence whether or not it is shooting.
+
+    /// <summary>Every gun in the game leaving its barrel, on any side. One texture, one
+    /// fader — and it has to be, since the cue for a cannon firing does not know whether the
+    /// hull under it is a player's.</summary>
+    Shooting = 4,
+    /// <summary>Ordnance arriving, craft coming apart, the city failing. The loud end of the
+    /// mix, and the one people most often want less of.</summary>
+    Explosions = 5,
+    /// <summary>What the monsters are and do, short of firing and dying: footsteps, calls,
+    /// jaws, the beds they hum on. Turn this down and the field goes quiet without the
+    /// firefight losing its shape.</summary>
+    Enemies = 6,
+    /// <summary>Your own craft and your own panel — the wind past it, the cables, the hits it
+    /// takes, the chime when you collect something. Everything whose reference point is the
+    /// player rather than a place.</summary>
+    Player = 7,
 }
 
 /// <summary>

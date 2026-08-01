@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>What a floating pickup is when the craft drives over it — now stowed into
 /// the inventory rather than applied on the spot.</summary>

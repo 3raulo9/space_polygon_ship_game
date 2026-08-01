@@ -1,7 +1,7 @@
 ﻿using System.Runtime.InteropServices;
 using Steamworks;
 
-namespace VoidTanks.Net;
+namespace Unrendered.Net;
 
 /// <summary>
 /// The real wire: Steam's peer-to-peer sockets behind the same interface the loopback rig
@@ -292,7 +292,15 @@ public sealed class SteamNet : INetTransport, IDisposable
             _sendCap = Math.Max(payload.Length, 2048);
             _send = Marshal.AllocHGlobal(_sendCap);
         }
-        Marshal.Copy(payload.ToArray(), 0, _send, payload.Length);
+        // Straight into the unmanaged buffer. This used to go through payload.ToArray(), which
+        // allocated a fresh managed array for every single packet — roughly eleven hundred a
+        // second on an eight-player host — and so handed the collector a steady stream of
+        // garbage to do exactly the thing the buffer above exists to avoid.
+        unsafe
+        {
+            fixed (byte* src = payload)
+                Buffer.MemoryCopy(src, (void*)_send, _sendCap, payload.Length);
+        }
 
         int flags = reliable
             ? Constants.k_nSteamNetworkingSend_Reliable
@@ -300,26 +308,56 @@ public sealed class SteamNet : INetTransport, IDisposable
         SteamNetworkingSockets.SendMessageToConnection(conn, _send, (uint)payload.Length, flags, out _);
     }
 
+    /// <summary>
+    /// Sends whatever Steam is still holding for this peer.
+    ///
+    /// Steam applies a Nagle timer to small messages — a few milliseconds spent hoping another
+    /// will come along so the two can share a datagram. For the run of seven packets a snapshot
+    /// writes for one client that is a real saving and should be kept. What Steam cannot know
+    /// is that the run has ended, so without this the last packet of every snapshot sits in the
+    /// buffer waiting for company that is fifty milliseconds away. The session calls this at the
+    /// end of each client's batch: coalescing kept, delay dropped.
+    /// </summary>
+    public void Flush(int peer)
+    {
+        if (_conns.TryGetValue(peer, out HSteamNetConnection conn))
+            SteamNetworkingSockets.FlushMessagesOnConnection(conn);
+    }
+
     public void Broadcast(ReadOnlySpan<byte> payload, bool reliable)
     {
         foreach (int p in _peers) Send(p, payload, reliable);
     }
 
+    /// <summary>Scratch for the receive batch, kept rather than allocated per pump — this runs
+    /// sixty times a second for the life of a session.</summary>
+    private readonly IntPtr[] _msgs = new IntPtr[64];
+
     public void Pump()
     {
         if (!Available) return;
 
-        var msgs = new IntPtr[32];
-        int got = SteamNetworkingSockets.ReceiveMessagesOnPollGroup(_poll, msgs, msgs.Length);
-        for (int i = 0; i < got; i++)
+        // Until the queue is actually empty, not one batch of it. A single fixed batch was a
+        // silent ceiling: a host with nineteen clients takes nineteen input packets per tick,
+        // and any frame that ran long — or any moment the clients' packets arrived in a clump —
+        // pushed the arrivals past the batch size and left the remainder to sit there. The
+        // backlog then grew, because the next pump was capped too, and every client's input
+        // reached the simulation later and later with nothing on any screen to explain why.
+        int got;
+        do
         {
-            var m = Marshal.PtrToStructure<SteamNetworkingMessage_t>(msgs[i]);
-            var bytes = new byte[m.m_cbSize];
-            Marshal.Copy(m.m_pData, bytes, 0, m.m_cbSize);
-            int from = _peerOf.TryGetValue(m.m_conn, out int p) ? p : 0;
-            _inbox.Enqueue((from, bytes));
-            SteamNetworkingMessage_t.Release(msgs[i]);
+            got = SteamNetworkingSockets.ReceiveMessagesOnPollGroup(_poll, _msgs, _msgs.Length);
+            for (int i = 0; i < got; i++)
+            {
+                var m = Marshal.PtrToStructure<SteamNetworkingMessage_t>(_msgs[i]);
+                var bytes = new byte[m.m_cbSize];
+                Marshal.Copy(m.m_pData, bytes, 0, m.m_cbSize);
+                int from = _peerOf.TryGetValue(m.m_conn, out int p) ? p : 0;
+                _inbox.Enqueue((from, bytes));
+                SteamNetworkingMessage_t.Release(_msgs[i]);
+            }
         }
+        while (got == _msgs.Length);
     }
 
     public bool TryReceive(out int from, out byte[] payload)

@@ -1,4 +1,4 @@
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>
 /// One decoded sound, ready to be mixed: mono 32-bit float at the engine's rate.

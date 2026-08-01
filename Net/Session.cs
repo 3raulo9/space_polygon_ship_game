@@ -1,7 +1,7 @@
-﻿using VoidTanks.Core;
-using VoidTanks.Entities;
+﻿using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Net;
+namespace Unrendered.Net;
 
 /// <summary>What kind of packet this is. One byte, first in every payload.</summary>
 public enum Msg : byte
@@ -151,6 +151,82 @@ public sealed class Session
     private readonly Dictionary<int, int> _invSent = new();
     private uint _tick;
     private int _sinceSnapshot;
+
+    /// <summary>Which snapshot this is, counted since the session opened. What the packets that
+    /// do not need the full rate are tiered against — see <see cref="Broadcast"/>.</summary>
+    private uint _snapshotSeq;
+
+    // --- Input, in both directions -------------------------------------------------
+    //
+    // A tick of intent is twelve bytes and it is gone in a sixtieth of a second, so it goes
+    // out unreliable — retransmitting one would land long after the tick it belonged to. That
+    // reasoning is sound and it is not what was wrong. What was wrong is what it left behind:
+    // a frame carries EDGES (the tick a grenade key went down and no other), and an edge that
+    // is dropped is an action the player took that simply never happened. Worse, the host held
+    // the last frame it received and re-ran it when nothing arrived — edges and all — so a
+    // single lost packet could just as easily fire the grenade twice.
+    //
+    // The fix is the standard one and it is nearly free: every packet carries the last dozen
+    // frames, not just the newest. One hundred and sixty bytes at sixty hertz, on the one link
+    // in this game that has bandwidth to spare (a client sends to exactly one machine), and a
+    // burst of eleven consecutive lost packets is now needed before a single tick of input is
+    // actually gone.
+
+    /// <summary>How many past frames ride on every input packet. Twelve ticks is a fifth of a
+    /// second of history — far past any loss burst a playable link produces.</summary>
+    private const int RedundantInputs = 12;
+
+    /// <summary>Client-side: the frames this machine has sent, by tick, so each packet can
+    /// repeat the recent ones behind the new one.</summary>
+    private readonly InputFrame[] _sentInputs = new InputFrame[RedundantInputs];
+
+    /// <summary>The buffer of one seat's input as it arrives, host-side.</summary>
+    private sealed class SeatInput
+    {
+        /// <summary>The highest client tick ever taken in. Everything at or below it has
+        /// already been queued, which is what makes the redundant copies free to ignore and
+        /// what stops a packet that overtook a newer one from winding the seat backwards.</summary>
+        public uint Newest;
+
+        /// <summary>The highest client tick actually fed to the simulation. Echoed back to that
+        /// client on every players packet, and the anchor its reconciliation measures against.</summary>
+        public uint Consumed;
+
+        /// <summary>Frames taken in but not yet stepped, oldest first. Shallow by construction
+        /// — the client produces sixty a second and the host eats sixty a second — so this is a
+        /// jitter absorber rather than a delay: it only holds anything when the wire has just
+        /// delivered late, which is exactly when holding something is the point.</summary>
+        public readonly Queue<(uint Tick, InputFrame Frame)> Pending = new();
+
+        /// <summary>The last frame stepped, held so a tick with nothing to eat can repeat the
+        /// held keys without repeating the edges.</summary>
+        public InputFrame Last;
+    }
+
+    /// <summary>How deep the pending queue may get before the host eats two frames in a tick to
+    /// catch up. Three ticks is fifty milliseconds of slack — enough to ride out ordinary
+    /// jitter, short enough that a client whose packets arrive in clumps does not accumulate a
+    /// permanent delay nobody asked for.</summary>
+    private const int JitterSlack = 3;
+
+    private readonly Dictionary<int, SeatInput> _seatInput = new();
+
+    private SeatInput InputOf(int seat)
+    {
+        if (!_seatInput.TryGetValue(seat, out var si)) _seatInput[seat] = si = new SeatInput();
+        return si;
+    }
+
+    /// <summary>
+    /// Forgets everything buffered for a seat, and everything known about how far its client's
+    /// clock had got. Called whenever a seat is bound to a peer for real — a fresh join or a
+    /// rejoin — and it is not optional: the buffer discards any frame at or below the highest
+    /// tick it has already seen, and a machine coming back is a NEW session whose tick counter
+    /// starts at one again. Carried over, the old high-water mark would silently reject every
+    /// frame that player sent for the next several minutes, and their craft would sit there
+    /// with its controls apparently dead.
+    /// </summary>
+    private void ResetSeatInput(int seat) => _seatInput.Remove(seat);
 
     /// <summary>The world this session is driving. Set once the match starts.</summary>
     public World.World? World { get; private set; }
@@ -692,6 +768,7 @@ public sealed class Session
                 _nameOfSeat.Remove(seat);
                 World.SeatNames.Remove(seat);
                 _invSent.Remove(seat);
+                ResetSeatInput(seat);
             }
 
             _pickOfSeat.Remove(seat);
@@ -710,6 +787,12 @@ public sealed class Session
         _net.Pump();
         _tick++;
 
+        // Where this machine thinks its own craft ended up at the end of the previous tick,
+        // filed before anything the host has said is folded in. This is the record the host's
+        // account is later checked against — see World.RecordPrediction.
+        if (!IsHost && World is not null && LocalSeat >= 0 && _tick > 1)
+            World.RecordPrediction(_tick - 1);
+
         // Everything waiting, whatever it is. Drained fully every tick so a stall never
         // leaves a backlog to work through later.
         while (_net.TryReceive(out int from, out byte[] payload))
@@ -720,8 +803,10 @@ public sealed class Session
 
         if (IsHost)
         {
-            // The host's own hands go straight into the world; everyone else's arrived above.
+            // The host's own hands go straight into the world; everyone else's are fed one
+            // tick at a time out of the buffers the packets above filled.
             World.SetInput(0, localInput);
+            DriveSeatInputs();
 
             if (++_sinceSnapshot >= TicksPerSnapshot)
             {
@@ -731,22 +816,48 @@ public sealed class Session
         }
         else if (LocalSeat >= 0)
         {
-            // Unreliable, every tick. A dropped input frame is a sixtieth of a second of
-            // one player's intent and the next one supersedes it — retransmitting would
-            // arrive too late to matter and block everything behind it.
+            // The craft's own aim goes on the frame as an absolute angle. It is read off the
+            // craft rather than out of the sampler because the sampler only has a mouse delta,
+            // and a delta is precisely what must not cross the wire: the host integrated it, so
+            // every lost packet took a permanent bite out of where the host thought this player
+            // was looking, and the only thing that ever put the two back in agreement was this
+            // client's reconciliation dragging its own camera round.
+            // Guarded rather than indexed outright: a seat is assigned by Welcome and the
+            // roster is grown in the same breath, so this always holds — but a client that
+            // somehow sent input before its craft existed would take the whole game down, and
+            // an unstamped frame is a far better outcome than that.
+            InputFrame framed = (uint)LocalSeat < (uint)World.Players.Count
+                ? localInput.WithAim(World.Players[LocalSeat].Heading,
+                                     World.Players[LocalSeat].Pitch)
+                : localInput;
+            _sentInputs[_tick % RedundantInputs] = framed;
+
+            // Unreliable, every tick, carrying the last dozen frames rather than only this
+            // one. A dropped packet is a sixtieth of a second of intent and retransmitting it
+            // would arrive long after the tick it belonged to — but the frames it held are
+            // still in the next packet, so nothing is actually lost until a dozen in a row are.
             //
-            // The frame also carries the last snapshot tick this client applied. That one
+            // The packet also carries the last snapshot tick this client applied. That one
             // number is the whole of the host's ping measurement: the gap between it and the
             // host's own tick when this packet lands is a full round trip, and it is what
             // lets the host rewind the world to what this player could actually see when
             // deciding whether their shot connected (see World.Rewound). Piggybacked rather
             // than pinged separately because it costs four bytes on a packet already going.
-            Span<byte> p = stackalloc byte[1 + 4 + InputFrame.Size + 4];
-            p[0] = (byte)Msg.Input;
-            BitConverter.TryWriteBytes(p.Slice(1, 4), _tick);
-            localInput.Write(p.Slice(5, InputFrame.Size));
-            BitConverter.TryWriteBytes(p.Slice(5 + InputFrame.Size, 4), LastAppliedTick);
-            _net.Send(0, p, reliable: false);
+            int carry = (int)Math.Min(RedundantInputs, _tick);
+            Span<byte> p = stackalloc byte[10 + RedundantInputs * InputFrame.Size];
+            int at = 0;
+            p[at++] = (byte)Msg.Input;
+            BitConverter.TryWriteBytes(p.Slice(at, 4), _tick); at += 4;          // newest tick
+            BitConverter.TryWriteBytes(p.Slice(at, 4), LastAppliedTick); at += 4;
+            p[at++] = (byte)carry;
+            // Newest first, so a reader that trusts the count can walk them without knowing
+            // the tick each one belongs to: frame i is tick (newest - i).
+            for (int i = 0; i < carry; i++)
+            {
+                _sentInputs[(_tick - (uint)i) % RedundantInputs].Write(p.Slice(at, InputFrame.Size));
+                at += InputFrame.Size;
+            }
+            _net.Send(0, p[..at], reliable: false);
 
             // A client still drives its own craft locally so the controls feel attached to
             // something; the host's next packet is what settles where it actually is.
@@ -760,6 +871,47 @@ public sealed class Session
     }
 
     /// <summary>
+    /// Host-side: feeds every seated client exactly one tick of its own input into the world.
+    ///
+    /// This is where a lost packet stops being a lost action. A seat with something buffered
+    /// eats the oldest frame it has — in order, once each, edges intact. A seat with nothing
+    /// gets its last frame <em>repeated</em>, which carries the held keys forward (a player
+    /// leaning on the throttle is still leaning on it) but drops the edges, because a grenade
+    /// key that went down on one tick did not go down again on the next. Repeating the frame
+    /// whole, which is what this did before, is how a hiccup used to throw two grenades.
+    ///
+    /// A seat that has fallen behind eats two frames rather than one, absorbing the edges of
+    /// the one it skips, so a clump of late packets is caught up within a few ticks instead of
+    /// becoming a delay that seat never gets back.
+    /// </summary>
+    private void DriveSeatInputs()
+    {
+        foreach (var kv in _seatOfPeer)
+        {
+            SeatInput si = InputOf(kv.Value);
+            bool ate = false;
+            int take = si.Pending.Count > JitterSlack ? 2 : 1;
+            while (take-- > 0 && si.Pending.Count > 0)
+            {
+                var (t, f) = si.Pending.Dequeue();
+                si.Last = ate ? f.Absorbing(si.Last) : f;
+                si.Consumed = t;
+                ate = true;
+            }
+            World!.SetInput(kv.Value, ate ? si.Last : si.Last.Repeat());
+        }
+    }
+
+    /// <summary>
+    /// Host-side: the input tick last fed to the sim for a seat, which is what its own players
+    /// packet carries back so that client can measure its prediction error against the right
+    /// moment. Zero before a seat has ever been stepped, which the client reads as "no anchor
+    /// yet" and falls back on.
+    /// </summary>
+    private uint AckFor(int seat)
+        => _seatInput.TryGetValue(seat, out var si) ? si.Consumed : 0u;
+
+    /// <summary>
     /// Host-side: two packets per client — the players, then the field near that client. Both
     /// unreliable. The split is the fix for craft vanishing under load: the players packet is
     /// small and always fits a single datagram, so it arrives even when a busy field's packet
@@ -768,15 +920,41 @@ public sealed class Session
     private void Broadcast()
     {
         BroadcastScores();
+        _snapshotSeq++;
 
-        // The players packet is the same for everyone, so it is written once.
+        // Not everything in here needs describing twenty times a second, and until now
+        // everything was. The host's uplink is the one link in this game that carries the whole
+        // room — every packet below goes out once PER CLIENT, so a byte here is twenty bytes on
+        // the wire in a full match — and at the full rate a busy nineteen-client session asks
+        // for something like ten megabits a second upstream. It does not get it; the congestion
+        // control backs off, the queue grows, and every client but the host plays a game that
+        // arrives late. That is the whole of "laggy for everyone except the host".
+        //
+        // So the two packets the game is actually made of — where the players are, and what is
+        // shooting at them — keep the full rate, and the three that are scenery drop to half of
+        // it. None of them is anything a player can perceive at 20 Hz and not at 10: a boss's
+        // walk and a cable's arc are already eased between packets by the client, and a
+        // building that has come down has come down.
+        bool scenery = (_snapshotSeq & 1) == 0;
+
+        // The players packet is the same for everyone but four bytes of it, so the body is
+        // written once and only the header is restamped per recipient.
         _out[0] = (byte)Msg.State;
-        int np = Snapshot.WritePlayers(World!, _tick, _out.AsSpan(1));
+        int np = Snapshot.WritePlayers(World!, _tick, _out.AsSpan(5));
 
         foreach (int peer in _net.Peers)
         {
             if (!_seatOfPeer.TryGetValue(peer, out int seat)) continue;
-            _net.Send(peer, _out.AsSpan(0, np + 1), reliable: false);
+
+            // The four bytes that differ per client: which of THEIR input ticks this account of
+            // the world was computed from. It is what lets them measure their own prediction
+            // error against the right moment instead of against a position a round trip stale —
+            // the difference between a craft that is corrected when it is wrong and one that is
+            // dragged backwards the entire time it drives. It has to ride on this packet rather
+            // than any other: paired with a different packet, a loss would marry a fresh
+            // position to a stale anchor and invent an error that was never there.
+            BitConverter.TryWriteBytes(_out.AsSpan(1, 4), AckFor(seat));
+            _net.Send(peer, _out.AsSpan(0, np + 5), reliable: false);
 
             _field[0] = (byte)Msg.Field;
             int nf = Snapshot.WriteField(World!, seat, _tick, _field.AsSpan(1));
@@ -785,9 +963,17 @@ public sealed class Session
             // The bosses near this client, so their fight is seen and not only heard. Its own
             // small packet for the same reason the field is split out — a busy field must never
             // cost the boss its update.
+            //
+            // An empty one still has to go sometimes: it is also how a client is told to DROP
+            // the puppets when a boss dies or walks out of range, and on an unreliable channel
+            // a transition sent once can simply not arrive, leaving a dead Crab-Core standing on
+            // somebody's screen for the rest of the match. So an empty packet goes at a slow
+            // couple of hertz rather than never — six bytes, and the drop always lands.
             _bosses[0] = (byte)Msg.Bosses;
             int nb = Snapshot.WriteBosses(World!, seat, _tick, _bosses.AsSpan(1));
-            _net.Send(peer, _bosses.AsSpan(0, nb + 1), reliable: false);
+            bool anyBoss = Snapshot.BossesCarryAnything(_bosses.AsSpan(1, nb));
+            if (anyBoss ? scenery : _snapshotSeq % 10 == 0)
+                _net.Send(peer, _bosses.AsSpan(0, nb + 1), reliable: false);
 
             // The sounds raised near this client since the last snapshot, so it hears the
             // fights around it. Its own cues rode local for the instant feel and are skipped on
@@ -812,22 +998,32 @@ public sealed class Session
             // bosses are: a busy field must never cost a client the fact that the tower it is
             // taking cover behind is no longer there. Both of the next two write nothing at
             // all when there is nothing to say, which is most of a match.
-            _structures[0] = (byte)Msg.Structures;
-            // The start index walks with the tick, so a district holding more ruins than one
-            // packet can carry is described in full over a few snapshots instead of the first
-            // twenty being repeated for ever while the rest are never mentioned at all.
-            int nst = Snapshot.WriteStructures(World!, seat, _tick, _structures.AsSpan(1),
-                rotation: (int)(_tick * (uint)Snapshot.MaxStructuresPerPacket));
-            if (nst > 0) _net.Send(peer, _structures.AsSpan(0, nst + 1), reliable: false);
+            if (scenery)
+            {
+                _structures[0] = (byte)Msg.Structures;
+                // The start index walks with the tick, so a district holding more ruins than one
+                // packet can carry is described in full over a few snapshots instead of the first
+                // twenty being repeated for ever while the rest are never mentioned at all.
+                int nst = Snapshot.WriteStructures(World!, seat, _tick, _structures.AsSpan(1),
+                    rotation: (int)(_tick * (uint)Snapshot.MaxStructuresPerPacket));
+                if (nst > 0) _net.Send(peer, _structures.AsSpan(0, nst + 1), reliable: false);
 
-            // The cables and beams around this client — the light a fight throws off.
-            _rigs[0] = (byte)Msg.Rigs;
-            int nrg = Snapshot.WriteRigs(World!, seat, _tick, _rigs.AsSpan(1));
-            if (nrg > 0) _net.Send(peer, _rigs.AsSpan(0, nrg + 1), reliable: false);
+                // The cables and beams around this client — the light a fight throws off.
+                _rigs[0] = (byte)Msg.Rigs;
+                int nrg = Snapshot.WriteRigs(World!, seat, _tick, _rigs.AsSpan(1));
+                if (nrg > 0) _net.Send(peer, _rigs.AsSpan(0, nrg + 1), reliable: false);
+            }
 
             // And this seat's own pack, when and only when it has changed. Reliable: salvage
             // that fell off the wire would simply never arrive, since nothing re-sends it.
             SendInventoryIfChanged(peer, seat);
+
+            // Everything this client is getting has now been queued. Push it: the transport
+            // coalesces small sends into one datagram, which is exactly what should happen to
+            // seven packets written back to back — but it does so by WAITING a few milliseconds
+            // for more, and there is no more coming until the next snapshot. Flushing here buys
+            // the coalescing without buying the delay.
+            _net.Flush(peer);
         }
 
         // The cues are spent once described to everyone — clear them whether or not anyone was
@@ -957,6 +1153,10 @@ public sealed class Session
                     && kept < World.Players.Count)
                 {
                     bool wasHere = _seatOfPeer.ContainsValue(kept);
+                    // A binding this peer did not already have is a machine that has genuinely
+                    // just arrived on this seat, and its input clock starts from scratch.
+                    if (!_seatOfPeer.TryGetValue(from, out int had) || had != kept)
+                        ResetSeatInput(kept);
                     _seatOfPeer[from] = kept;
                     Rename(kept, name);
                     World.Players[kept].Away = false;
@@ -999,6 +1199,7 @@ public sealed class Session
                 _seatOfPeer[from] = seat;
                 if (identity != 0) _seatOfIdentity[identity] = seat;
                 _invSent.Remove(seat);
+                ResetSeatInput(seat);
                 Rename(seat, name);
                 Announce($"{name} JOINED");
                 SendWelcome(from, seat);
@@ -1074,16 +1275,33 @@ public sealed class Session
 
             case Msg.Input when IsHost:
             {
-                if (payload.Length < 5 + InputFrame.Size) return;
+                if (payload.Length < 10) return;
                 if (!_seatOfPeer.TryGetValue(from, out int seat)) return;
-                World.SetInput(seat, InputFrame.Read(payload.AsSpan(5, InputFrame.Size)));
 
-                // The acknowledgement riding on the back of the frame: how far behind this
-                // client's view of the world runs, in ticks. A frame from a build that does
+                uint newest = BitConverter.ToUInt32(payload.AsSpan(1, 4));
+                uint ack = BitConverter.ToUInt32(payload.AsSpan(5, 4));
+                int carry = payload[9];
+                if (payload.Length < 10 + carry * InputFrame.Size) return;
+
+                // Oldest first, so the queue comes out in the order the player's hands went
+                // through it. Frame i is tick (newest - i); anything at or below what has
+                // already been taken in is a redundant copy or a packet that overtook a newer
+                // one, and either way it is a tick this seat has already accounted for.
+                SeatInput si = InputOf(seat);
+                for (int i = carry - 1; i >= 0; i--)
+                {
+                    if (newest <= (uint)i) continue;      // before the session's first tick
+                    uint t = newest - (uint)i;
+                    if (t <= si.Newest) continue;
+                    si.Pending.Enqueue((t,
+                        InputFrame.Read(payload.AsSpan(10 + i * InputFrame.Size, InputFrame.Size))));
+                    si.Newest = t;
+                }
+
+                // The acknowledgement riding on the back of the packet: how far behind this
+                // client's view of the world runs, in ticks. A packet from a build that does
                 // not carry one simply leaves the seat's lag as it was — worst case zero,
                 // which is the uncompensated behaviour this replaces.
-                if (payload.Length < 9 + InputFrame.Size) break;
-                uint ack = BitConverter.ToUInt32(payload.AsSpan(5 + InputFrame.Size, 4));
                 if (ack == 0 || ack > _tick) break;   // not seen a snapshot yet, or nonsense
                 World.SetSeatLag(seat, (int)(_tick - ack));
                 break;
@@ -1095,7 +1313,12 @@ public sealed class Session
 
             case Msg.State when !IsHost:
             {
-                uint tick = Snapshot.ApplyPlayers(World, payload.AsSpan(1));
+                if (payload.Length < 5) break;
+                // The four bytes ahead of the body: which of our own input ticks the host had
+                // stepped when it wrote this. The anchor the local craft's prediction error is
+                // measured against.
+                uint acked = BitConverter.ToUInt32(payload.AsSpan(1, 4));
+                uint tick = Snapshot.ApplyPlayers(World, payload.AsSpan(5), acked);
                 // An older packet that overtook a newer one is worse than no packet at all.
                 if (tick != 0 && tick > LastAppliedTick) LastAppliedTick = tick;
                 break;

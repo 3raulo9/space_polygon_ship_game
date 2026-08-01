@@ -1,8 +1,8 @@
 using System.Numerics;
-using VoidTanks.Core;
-using VoidTanks.Input;
+using Unrendered.Core;
+using Unrendered.Input;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// The player's craft. Movement is heavy and a half-second behind intent
@@ -505,26 +505,30 @@ public sealed class PlayerTank
     // instead the host's latest transform is stored here and the drawn craft is eased toward
     // it every frame (see World.InterpolateRemotes), which is the difference between watching
     // a team-mate glide and watching them strobe.
-    public Vector2 NetPos;
+    private NetGlide _glide;
     public float NetHeight, NetHeading, NetPitch;
-    public bool HasNet;
+
+    /// <summary>Where this craft is being eased toward — the host's last word on it, carried
+    /// forward between packets so a lost one coasts instead of stalling. See <see cref="NetGlide"/>.</summary>
+    public Vector2 NetPos => _glide.Target;
+    public bool HasNet => _glide.Has;
 
     /// <summary>Records the host's latest transform for a remote craft. The first time, the
     /// craft is snapped onto it — a craft first seen must appear where it is, not slide in from
     /// wherever the placeholder opened — and eased toward it every time after.</summary>
     public void NetTarget(Vector2 pos, float height, float heading, float pitch)
     {
-        if (!HasNet) { Position = pos; Height = height; Heading = heading; Pitch = pitch; }
-        NetPos = pos; NetHeight = height; NetHeading = heading; NetPitch = pitch;
-        HasNet = true;
+        if (_glide.Report(pos)) { Position = pos; Height = height; Heading = heading; Pitch = pitch; }
+        NetHeight = height; NetHeading = heading; NetPitch = pitch;
     }
 
     /// <summary>Eases a remote craft one frame's worth toward its last host transform;
     /// <paramref name="k"/> is the blend fraction. A no-op until the first target has landed.</summary>
-    public void EaseToNet(float k)
+    public void EaseToNet(float k, float dt)
     {
-        if (!HasNet) return;
-        Position = Torus.Wrap(Position + Torus.Delta(Position, NetPos) * k);
+        if (!_glide.Has) return;
+        _glide.Coast(dt);
+        Position = Torus.Wrap(Position + Torus.Delta(Position, _glide.Target) * k);
         Height += (NetHeight - Height) * k;
         Heading += MathF.IEEERemainder(NetHeading - Heading, MathF.Tau) * k;
         Pitch += (NetPitch - Pitch) * k;
@@ -978,8 +982,24 @@ public sealed class PlayerTank
         => Ammo = Math.Min(MaxAmmo, Ammo + (int)MathF.Ceiling(MaxAmmo * fraction));
 
     /// <summary>Applies incoming damage; spends a life and resets shield at zero.</summary>
-    public void TakeDamage(float amount)
+    public void TakeDamage(float amount) => TakeDamage(amount, null);
+
+    /// <summary>
+    /// The same, told where the hit came from. Only the SOLDIER does anything with it —
+    /// a body flinches away from what struck it and a tank does not — but every chassis
+    /// records it, because which craft is being worn is not something a damage site should
+    /// have to know.
+    /// </summary>
+    public void TakeDamage(float amount, Vector2? from)
     {
+        if (from is { } at)
+        {
+            Vector2 d = Torus.Delta(Position, at);
+            if (d.LengthSquared() > 1e-6f) FlinchAngle = MathF.Atan2(d.X, d.Y);
+        }
+        FlinchAmount = Math.Clamp(amount / 20f, 0.25f, 1f);
+        FlinchSeq++;
+
         Shield -= amount;
         if (Shield <= 0f)
         {
@@ -991,6 +1011,19 @@ public sealed class PlayerTank
             }
         }
     }
+
+    /// <summary>
+    /// The last hit taken: which way it came from in world radians, how hard, and a counter
+    /// that ticks once per hit so a renderer at any frame rate acts on each exactly once.
+    ///
+    /// <see cref="FlinchAngle"/> and <see cref="FlinchSeq"/> both cross the wire — see
+    /// <c>Snapshot.WritePlayers</c> — because the flinch is the one damage reaction that is
+    /// worth nothing without a direction, and a team-mate whose body jerks away from the
+    /// thing that shot them tells you where that thing is.
+    /// </summary>
+    public float FlinchAngle;
+    public float FlinchAmount = 1f;
+    public int FlinchSeq;
 
     /// <summary>
     /// The two throttles: W/S along the heading, A/D across it. The heading itself is the

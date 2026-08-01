@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>
 /// The mix. Everything below this line is arithmetic on float arrays — no Raylib, no
@@ -29,7 +29,10 @@ public sealed class Mixer
     /// offline render can push whatever it likes through in one go.</summary>
     public const int MaxBlock = 8192;
 
-    private const int BusCount = 4;
+    /// <summary>Derived from the enum rather than restated, so adding a category to
+    /// <see cref="Bus"/> allocates its accumulator and gets it summed without anyone having
+    /// to remember this line exists.</summary>
+    private static readonly int BusCount = Enum.GetValues<Bus>().Length;
 
     /// <summary>Gain put back after the softened ceiling. Just under the ratio between the
     /// two ceilings, so the quiet end lifts without the average arriving louder than the

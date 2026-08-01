@@ -1,4 +1,4 @@
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>Special places that override the ordinary room entirely. Everything else — the
 /// open grid, an alley, a plaza — is derived continuously and needs no name.</summary>
@@ -137,7 +137,11 @@ public sealed class Ambience
             cutoff = MathF.Min(cutoff, 20000f * MathF.Pow(0.035f, c));   // → ~700Hz at full
             gain *= 1f - 0.68f * c;
             wet = MathF.Max(wet, 0.35f * c);
-            mix.RingTarget = 0.055f * c * c;      // squared: the ring is a peak, not a plateau
+            // Cubed rather than squared, and quiet even at the top. The tone is a pure sine
+            // sitting above a mix that has just been ducked and slammed shut, so it has the
+            // whole top end to itself — it reads far louder than its level suggests, and only
+            // a genuinely point-blank blast should leave much of it behind at all.
+            mix.RingTarget = 0.018f * c * c * c;
             mix.RingHz = 4200f - 400f * c;
         }
         else mix.RingTarget = 0f;

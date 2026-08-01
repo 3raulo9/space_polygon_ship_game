@@ -1,9 +1,9 @@
 ﻿using System.Numerics;
-using VoidTanks.Entities;
-using VoidTanks.Net;
-using VoidTanks.World;
+using Unrendered.Entities;
+using Unrendered.Net;
+using Unrendered.World;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// Headless behaviour check for the combat sim — no window, no graphics. Drives
@@ -142,6 +142,10 @@ public static partial class SelfTest
         failures += Check("friendly fire on, a team-mate's round bites", FriendlyFireOnHurtsTheTeam);
         failures += Check("a snapshot survives the wire and lands where it was sent", SnapshotRoundTrips);
         failures += Check("a client sees the host's craft move, over a bad wire", ClientTracksTheHost);
+        failures += Check("latency does not drag a client's own craft backwards", PredictionIsNotDraggedBackwardsByLatency);
+        failures += Check("a player's own aim is never wrenched back by the wire", ClientAimIsNeverWrenchedBack);
+        failures += Check("one press is one shot, even with the packet lost", ALostInputPacketCostsNoActionAndDuplicatesNone);
+        failures += Check("a remote craft coasts through a lost packet, it doesn't stall", ARemoteCraftCoastsThroughALostPacket);
         failures += Check("a client's own craft obeys the host's harm and capture", OwnCraftObeysTheHost);
         failures += Check("a remote craft glides between snapshots, it doesn't strobe", RemoteCraftInterpolates);
         failures += Check("a boss's seizure crosses so onlookers see the grab", SeizureArmCrossesTheWire);
@@ -158,6 +162,7 @@ public static partial class SelfTest
         failures += Check("a client grows its roster to see a later, higher-seated joiner", ClientGrowsForLaterSeats);
         failures += Check("a lost field packet keeps the enemies it had", FieldPacketIsKeepLast);
         failures += Check("a dropped player is held, then restored on rejoin", DropAndRejoinRestoresTheSeat);
+        failures += Check("a rejoined player's controls still reach the host", ARejoinedPlayerCanStillDrive);
         failures += Check("a full match refuses a new joiner but not a rejoiner", FullMatchStillLetsYouBack);
         failures += Check("FLAT keeps the city but seeds nothing hostile", FlatMapIsASandbox);
         failures += Check("PLANET is the full world, unchanged", PlanetMapStillSpawns);
@@ -223,6 +228,40 @@ public static partial class SelfTest
         failures += Check("the maw's lasers bite every craft they reach", MawLasersBiteEverySeat);
         failures += Check("one player being seized does not disarm the rest", ASeizedMateDoesNotFreezeTheRoom);
         failures += Check("a splash round bites whoever is standing in it", SplashBitesEverySeat);
+
+        // --- Controls and the mixer -----------------------------------------------
+        failures += Check("the shipped bindings are the controls the game always had",
+            DefaultBindingsMatchTheOldHardcodedKeys);
+        failures += Check("a rebound control survives being written and read back",
+            BindingsRoundTripThroughTheConfig);
+        failures += Check("two actions on one button are flagged, and only where it matters",
+            ClashesAreReportedWithinASectionOnly);
+        failures += Check("the controls list fits the screen wherever it is scrolled to",
+            TheControlsListAlwaysFitsOnScreen);
+        failures += Check("every cue is on a fader the player can actually reach",
+            EveryCueIsOnACategoryBus);
+        failures += Check("a category fader turns down its own cues and nobody else's",
+            CategoryFadersAreIndependent);
+
+        // The figure. Everything here is true over time rather than in any one frame, which
+        // is exactly why none of it can be checked by looking at the game.
+        failures += Check("a body in the air folds harder the faster it goes", FlightFoldsWithSpeed);
+        failures += Check("an arrival buckles the knees and springs back up",
+            LandingCompressesThenRecovers);
+        failures += Check("a limb arrives after the body it hangs from",
+            LimbsLagTheBodyTheyHangFrom);
+        failures += Check("a planted boot stays put while the body walks over it",
+            PlantedBootsDoNotSkate);
+        failures += Check("the boots stay on their own sides of the body",
+            BootsStayOnTheirOwnSides);
+        failures += Check("the shoulders turn against the hips through a stride",
+            HipsAndShouldersTurnAgainstEachOther);
+        failures += Check("a hand goes to the cable that is carrying it",
+            AHeldCablePutsTheHandOnItsLauncher);
+        failures += Check("a hit throws the head away from whatever caused it",
+            FlinchThrowsTheHeadAwayFromTheHit);
+        failures += Check("no run of nonsense can put a NaN in a joint",
+            NothingProducesANonNumber);
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -1222,9 +1261,10 @@ public static partial class SelfTest
     private static string? InputFrameRoundTrips()
     {
         var sent = new InputFrame(
-            Btn.Forward | Btn.MouseL | Btn.Q | Btn.Space,
-            Btn.Q | Btn.Space,
-            new Vector2(-13.5f, 240.25f));
+            Btn.Forward | Btn.Fire | Btn.SpiderPounce | Btn.Jump,
+            Btn.SpiderPounce | Btn.Jump,
+            new Vector2(-13.5f, 240.25f))
+            .WithAim(2.31f, -0.42f);
 
         Span<byte> wire = stackalloc byte[InputFrame.Size];
         sent.Write(wire);
@@ -1232,13 +1272,32 @@ public static partial class SelfTest
 
         if (got.Down != sent.Down) return "the held keys changed on the way through";
         if (got.Pressed != sent.Pressed) return "the edges changed on the way through";
-        if (Vector2.Distance(got.LookDelta, sent.LookDelta) > 1f / 16f)
-            return $"the look drifted: sent {sent.LookDelta}, got {got.LookDelta}";
+
+        // What crosses is the ANGLE, not the mouse movement that produced it. A delta cannot
+        // survive a lossy channel — the host integrates it, so a dropped packet is a piece of
+        // the player's turn the host never gets back and can never be told about. An absolute
+        // angle is self-correcting, and it is the thing the host is entitled to take at its
+        // word, so it is the thing the wire has to carry faithfully.
+        if (!got.HasAim) return "the frame arrived with nothing to say about where it points";
+        if (MathF.Abs(got.Aim.X - 2.31f) > 1e-3f || MathF.Abs(got.Aim.Y - -0.42f) > 1e-3f)
+            return $"the aim drifted: sent <2.31, -0.42>, got {got.Aim}";
+
+        // And the delta is deliberately NOT carried. Asserted rather than merely unasserted:
+        // a frame arriving with a live look delta would mean the host was turning the craft a
+        // second time, on top of the angle it was just handed.
+        if (got.LookX != 0 || got.LookY != 0)
+            return "the mouse delta crossed the wire, so the host will turn the craft twice";
 
         // The named reads have to survive too — the world asks for those, not for bits.
         if (!got.Forward) return "a frame that was driving forward arrived stopped";
         if (!got.SpiderPouncePressed) return "the pounce edge didn't survive";
         if (got.RocketPressed) return "a rocket nobody fired arrived down the wire";
+
+        // A locally-sampled frame must NOT claim to carry an aim: the machine that sampled it
+        // turns its own craft with the delta, and a false claim here would have the host
+        // stamping an angle of zero onto its own seat sixty times a second.
+        if (new InputFrame(Btn.Forward, Btn.None, Vector2.Zero).HasAim)
+            return "a frame nobody stamped claims to know where it points";
         return null;
     }
 
@@ -1950,6 +2009,93 @@ public static partial class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// A player who reconnects has to be able to DRIVE, not merely reappear.
+    ///
+    /// The host buffers each seat's input by tick number and throws away anything at or below
+    /// the highest tick it has already taken from that seat — which is what makes the redundant
+    /// copies on every packet free to ignore, and what stops a packet that overtook a newer one
+    /// from winding a craft backwards. It also sets a trap. A machine that reconnects is a NEW
+    /// session and its tick counter starts again at one, so a seat still holding the old
+    /// high-water mark would reject every frame that player sent for the next several minutes.
+    /// Their craft would sit in the world, correctly restored, with the controls apparently
+    /// dead, and nothing anywhere would say why.
+    ///
+    /// The existing rejoin tests cannot catch it: they reuse the same session object, whose
+    /// clock keeps counting. This one rebuilds the client the way a real reconnection does, and
+    /// then leans on the throttle.
+    /// </summary>
+    private static string? ARejoinedPlayerCanStillDrive()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+
+        // Long enough that the seat's input clock is well past anything a fresh session would
+        // produce for a good while — which is exactly the state that used to be fatal.
+        var drive = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+        for (int i = 0; i < 400; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(drive);
+            hw.Update((float)Config.FixedDt, InputFrame.Empty);
+            cw.Update((float)Config.FixedDt, drive);
+        }
+
+        // Hands off the keys before the drop. This matters to the test rather than to the game:
+        // the host's last-frame fallback carries HELD keys forward, so a seat that disconnects
+        // mid-throttle would coast on that stale frame and a craft that moved afterwards would
+        // prove nothing about whether the rejoiner's own input was getting through.
+        for (int i = 0; i < 20; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hw.Update((float)Config.FixedDt, InputFrame.Empty);
+            cw.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+
+        // They drop, and come back as a new machine: a new session on the same wire, with its
+        // own clock starting from nothing.
+        net.DropPeer(0, 1);
+        for (int i = 0; i < 5; i++) { net.Advance(); host.Pump(InputFrame.Empty); }
+        net.Readmit(0, 1);
+
+        var cw2 = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false, Authoritative = false };
+        cw2.Enemies.Clear();
+        var rejoined = new Session(net[1], host: false) { LocalName = "ACE" };
+        rejoined.JoinMatch(cw2);
+        rejoined.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            rejoined.Pump(InputFrame.Empty);
+            hw.Update((float)Config.FixedDt, InputFrame.Empty);
+            cw2.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (rejoined.LocalSeat != 1) return "the rejoiner was not restored to their seat";
+        if (hw.Players[1].Away) return "the host still has the rejoined player marked away";
+
+        // And now the whole point: the throttle has to reach the host.
+        Vector2 before = hw.Players[1].Position;
+        for (int i = 0; i < 180; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            rejoined.Pump(drive);
+            hw.Update((float)Config.FixedDt, InputFrame.Empty);
+            cw2.Update((float)Config.FixedDt, drive);
+        }
+
+        float went = Torus.Distance(hw.Players[1].Position, before);
+        if (went < 20f)
+            return $"a rejoined player leaning on the throttle for three seconds moved {went:0.0} "
+                 + "on the host — their input is being thrown away as stale";
+        return null;
+    }
+
     private static bool FeedHas(NoticeFeed feed, string needle)
     {
         foreach (var e in feed.Entries)
@@ -2178,6 +2324,374 @@ public static partial class SelfTest
         float gap = Torus.Distance(clientWorld.Players[0].Position, hostWorld.Player.Position);
         if (gap > 10f)
             return $"the client's copy of the host drifted {gap:0.0} away over a lossy wire";
+        return null;
+    }
+
+    /// <summary>
+    /// The rubber band, caught in a test.
+    ///
+    /// A client predicts its own craft so the controls feel attached to something, and the
+    /// host's snapshot then says where it really ended up. The trap is what the difference
+    /// between the two is measured against: the snapshot describes the craft as it was when
+    /// the host stepped this client's input, which is a full round trip ago, so a MOVING craft
+    /// is always about (speed x round trip) ahead of it and always will be. Correcting toward
+    /// it therefore drags the craft backward the whole time the player drives — at every ping,
+    /// for ever, with nothing wrong. That is the single thing a laggy-feeling client feels.
+    ///
+    /// The fix is to measure the error against this machine's own prediction FOR THE SAME TICK
+    /// the host is describing, which the host names on every players packet. A prediction that
+    /// was right then costs nothing now, however bad the wire is.
+    ///
+    /// So: the same craft, the same keys, from the same spot, twice — once with no network at
+    /// all, and once as a client half a second of round trip away from the host. They have to
+    /// end up in the same place.
+    /// </summary>
+    private static string? PredictionIsNotDraggedBackwardsByLatency()
+    {
+        // A quarter of a second each way and nothing else — no loss, no jitter — so what this
+        // measures is the reconciliation rather than the wire.
+        var link = new LinkQuality(15, 0, 0f);
+        Vector2 start = Torus.Wrap(new Vector2(-60f, -60f));
+        const float Aim = 0.9f;
+        const int Ticks = 300;                                  // five seconds of driving
+        var drive = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+
+        // The answer key: no wire in the picture at all. Wherever this craft ends up is where
+        // the player's hands asked to go.
+        var solo = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        solo.Enemies.Clear();
+        solo.Pickups.Clear();
+        solo.Player.Position = start;
+        solo.Player.Heading = Aim;
+        for (int i = 0; i < Ticks; i++) solo.StepForTest((float)Config.FixedDt, drive);
+        float soloWent = Torus.Distance(solo.Player.Position, start);
+        if (soloWent < 40f) return $"the reference craft only drove {soloWent:0.0} in five seconds";
+
+        var net = new LoopbackNet(2, link, seed: 90210);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        hostWorld.Pickups.Clear();
+
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+        clientWorld.Pickups.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        // Let the handshake land across a slow wire before anything is measured.
+        for (int i = 0; i < 90; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.StepForTest((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.StepForTest((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (client.LocalSeat != 1) return "the client never got a seat";
+
+        // Both ends of the client's craft put on the reference craft's mark, and the host's own
+        // craft parked well out of the way so it cannot be driven into.
+        hostWorld.Players[0].Position = Torus.Wrap(new Vector2(140f, 140f));
+        foreach (var w in new[] { hostWorld, clientWorld })
+        {
+            w.Players[1].Position = start;
+            w.Players[1].Heading = Aim;
+        }
+
+        for (int i = 0; i < Ticks; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(drive);
+            hostWorld.StepForTest((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.StepForTest((float)Config.FixedDt, drive);
+        }
+
+        // The one that matters: what the player is looking at on their own screen. Half a
+        // second of round trip at this speed is about thirteen units of travel, so a craft
+        // being dragged onto the stale position lands that far short — several times this bar.
+        float shortfall = Torus.Distance(clientWorld.Players[1].Position, solo.Player.Position);
+        if (shortfall > 3f)
+            return $"the client's own craft ended up {shortfall:0.0} from where the same keys "
+                 + "drove it with no wire — it is being dragged backwards by the latency";
+
+        // And the host agrees, which is what stops the above being achieved by simply ignoring
+        // the host. The host is a one-way trip behind by construction, hence the looser bar.
+        float apart = Torus.Distance(hostWorld.Players[1].Position, solo.Player.Position);
+        if (apart > 12f)
+            return $"the host has the client's craft {apart:0.0} from where it drove itself";
+        return null;
+    }
+
+    /// <summary>
+    /// Where a player is looking is theirs.
+    ///
+    /// Aim used to cross the wire as a mouse DELTA the host integrated, and that cannot survive
+    /// a channel that drops things: every lost packet took a permanent bite out of the host's
+    /// idea of where this player was pointing, with nothing to ever put it back. The only thing
+    /// that reconciled the two was the client hauling its own camera round onto the host's
+    /// stale heading — a hard snap past forty degrees, which a fast flick at any real ping
+    /// clears easily. Being unable to turn without the view being wrenched back is as close to
+    /// unplayable as this game got.
+    ///
+    /// Now the angle itself crosses and the host takes it at its word, so the client's aim is
+    /// never touched at all. This drives a long, hard turn across a bad wire and insists the
+    /// player's own view is exactly what their hand asked for, to the last radian.
+    /// </summary>
+    private static string? ClientAimIsNeverWrenchedBack()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Awful, seed: 777);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        for (int i = 0; i < 90; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (client.LocalSeat != 1) return "the client never got a seat";
+
+        // The same hand, turning the same craft, with nothing on the other end of it. This is
+        // what the player asked for; anything else the networked craft does is somebody else
+        // moving their view.
+        var solo = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        solo.Enemies.Clear();
+
+        // A steady hard swing — the mouse moved a long way every tick for two seconds, which
+        // is the motion the old snap threshold could not survive.
+        var flick = new InputFrame(Btn.None, Btn.None, new Vector2(9f, 0f));
+        PlayerTank mine = clientWorld.Players[1];
+        mine.Heading = 0f;
+        solo.Player.Heading = 0f;
+
+        for (int i = 0; i < 120; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(flick);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, flick);
+            solo.Update((float)Config.FixedDt, flick);
+        }
+
+        float expected = solo.Player.Heading;
+        float drift = MathF.Abs(MathF.IEEERemainder(mine.Heading - expected, MathF.Tau));
+        if (drift > 1e-3f)
+            return $"the player's own view was moved {drift:0.000} rad by something that was "
+                 + "not their hand";
+
+        // The turn was a real one and not a rounding error, or the above proves nothing.
+        if (MathF.Abs(MathF.IEEERemainder(expected, MathF.Tau)) < 0.5f)
+            return "the test never actually turned the craft far enough to matter";
+
+        // Mid-turn the host is legitimately behind — a third of a second of wire is a third of
+        // a second of turn it has not been told about yet, and no scheme can fix that. What
+        // matters is what is left when the hand stops: let the wire drain and the host has to
+        // land EXACTLY where the player is looking.
+        //
+        // This is the half a mouse delta could not do. A delta is a contribution, so a dropped
+        // packet is a slice of the turn subtracted from the host's total with nothing to ever
+        // add it back — the two ends settle a permanent distance apart, and further losses
+        // widen it without limit. An angle is a statement of fact, so one surviving packet puts
+        // the host exactly right no matter how many were lost before it.
+        for (int i = 0; i < 150; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (net.Dropped == 0) return "the wire never actually dropped anything to recover from";
+
+        float gap = MathF.Abs(MathF.IEEERemainder(hostWorld.Players[1].Heading - mine.Heading,
+                                                  MathF.Tau));
+        if (gap > 0.01f)
+            return $"after the turn ended and the wire drained, the host still has this craft "
+                 + $"pointing {gap:0.000} rad away from its player — the disagreement is permanent";
+
+        // And the client's own view still has not been touched by any of it.
+        float settled = MathF.Abs(MathF.IEEERemainder(mine.Heading - expected, MathF.Tau));
+        if (settled > 1e-3f)
+            return $"the player's view was pulled {settled:0.000} rad off its own line while the "
+                 + "wire caught up";
+        return null;
+    }
+
+    /// <summary>
+    /// One press is one shot, even when the packet carrying it never arrives.
+    ///
+    /// A frame carries EDGES — the single tick a key went down — and it went out unreliable,
+    /// alone, once. So a dropped packet was an action the player took that simply never
+    /// happened. The other half was worse: the host held the last frame it received and re-ran
+    /// it on every tick nothing arrived, edges and all, so the same lost packet could just as
+    /// easily fire the thing twice.
+    ///
+    /// Both halves are exercised here against a wire that is switched off outright — not made
+    /// lossy, switched off — around a single press of the slug. It has to fire exactly once.
+    /// </summary>
+    private static string? ALostInputPacketCostsNoActionAndDuplicatesNone()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 31337);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        for (int i = 0; i < 30; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (client.LocalSeat != 1) return "the client never got a seat";
+
+        var slug = new InputFrame(Btn.TankSlug, Btn.TankSlug, Vector2.Zero);
+        int ammoBefore = hostWorld.Players[1].Ammo;
+
+        // Every round the host ever spawns for this seat, counted once each at the moment it
+        // first appears — the honest count of how many times the press was acted on, which
+        // neither ammo nor a live projectile list can give (a slug flies off and expires).
+        var seen = new HashSet<object>();
+        int slugs = 0;
+
+        // The press itself, and then a hundred and twenty ticks of silence from this client:
+        // long past the slug's own cooldown, so a host repeating the edge frame has every
+        // opportunity to fire a second one. The mute covers the press tick as well, so the
+        // packet that carried the edge is genuinely gone and only the redundant copies in the
+        // packets behind it can save the shot.
+        for (int i = 0; i < 200; i++)
+        {
+            net.Advance();
+            bool pressing = i == 0;
+            net.Mute(1, i < 3);            // the press's own packet, and the two behind it
+            host.Pump(InputFrame.Empty);
+            client.Pump(pressing ? slug : InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, pressing ? slug : InputFrame.Empty);
+
+            foreach (var r in hostWorld.Projectiles)
+                if (r.Owner == 1 && seen.Add(r)) slugs++;
+        }
+
+        if (slugs == 0)
+            return "the press was lost with the packet that carried it — the redundant copies "
+                 + "in the packets behind it did not save it";
+        if (slugs > 1)
+            return $"one press fired {slugs} rounds: the host is repeating the edges of a frame "
+                 + "it is only holding because nothing newer arrived";
+
+        int spent = ammoBefore - hostWorld.Players[1].Ammo;
+        if (spent != PlayerTank.SlugAmmoCost)
+            return $"one slug should cost {PlayerTank.SlugAmmoCost} rounds, and this cost {spent}";
+        return null;
+    }
+
+    /// <summary>
+    /// A remote craft carries on through a missed packet instead of standing still.
+    ///
+    /// Easing a body onto the host's last reported position turns twenty reports a second into
+    /// a glide, which is most of the job. What it got wrong was the packet that never came: the
+    /// target stopped moving, so the body eased onto it and PARKED until the next one landed,
+    /// then lurched. On a wire dropping one packet in twenty that is a hitch about once a
+    /// second on every craft and every hunter on screen simultaneously, and it reads exactly
+    /// like lag — which it is not. The host knows where that craft is and the client has
+    /// everything it needs to work out where it is heading.
+    ///
+    /// So the target coasts along the speed the last two reports implied. This drives a craft
+    /// in a straight line, cuts the wire dead for a tenth of a second, and insists it keeps
+    /// going.
+    /// </summary>
+    private static string? ARemoteCraftCoastsThroughALostPacket()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 5150);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        // The host drives its own craft in a straight line; the client only ever watches it.
+        var drive = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+        for (int i = 0; i < 240; i++)
+        {
+            net.Advance();
+            host.Pump(drive);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, drive);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (clientWorld.Players.Count < 2) return "the client never learned about the host's craft";
+
+        PlayerTank seenHere = clientWorld.Players[0];
+        if (!seenHere.HasNet) return "the client is not being told about the host's craft at all";
+
+        // Now the wire dies for six ticks — a tenth of a second, two whole snapshots gone. This
+        // is a mute rather than a lossy link so the gap is exact and the test cannot pass by
+        // luck.
+        Vector2 wasAt = seenHere.Position;
+        net.Mute(0, true);
+        for (int i = 0; i < 6; i++)
+        {
+            net.Advance();
+            host.Pump(drive);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, drive);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        net.Mute(0, false);
+
+        // Six ticks at the tank's pace is about two and a half units. A craft that stalled has
+        // eased onto a stationary target and travelled a small fraction of that; one that
+        // coasted has kept very nearly the host's real speed.
+        float went = Torus.Distance(seenHere.Position, wasAt);
+        if (went < 1.5f)
+            return $"with the wire cut for a tenth of a second the remote craft moved {went:0.00} "
+                 + "— it is standing still between packets rather than carrying on";
+
+        // And it did not run away with itself: the coast is a guess, and a guess that outruns
+        // the thing it is guessing about is worse than the stall it replaced.
+        float ahead = Torus.Distance(seenHere.Position, hostWorld.Players[0].Position);
+        if (ahead > 6f)
+            return $"the coasting craft ended up {ahead:0.0} from where it really is";
         return null;
     }
 
@@ -5776,7 +6290,7 @@ public static partial class SelfTest
             return "a remote seat's cable muzzle sits on the host's own craft";
 
         // Drive their hook from their own input frame, as the host does for a wire packet.
-        var fire = new InputFrame(Btn.E, Btn.E, Vector2.Zero);
+        var fire = new InputFrame(Btn.RightHook, Btn.RightHook, Vector2.Zero);
         world.SetInput(1, fire);
         world.Update((float)Config.FixedDt, InputFrame.Empty);
 
@@ -5815,7 +6329,7 @@ public static partial class SelfTest
         mate.Heading = 0f;
 
         // Seat 1 vents its dischargers, from its own input frame as a wire packet would.
-        world.SetInput(1, new InputFrame(Btn.E, Btn.E, Vector2.Zero));
+        world.SetInput(1, new InputFrame(Btn.TankSmoke, Btn.TankSmoke, Vector2.Zero));
         world.Update((float)Config.FixedDt, InputFrame.Empty);
 
         if (world.Smoke.Count == 0) return "the remote tank's dischargers never fired";

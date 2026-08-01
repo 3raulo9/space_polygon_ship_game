@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// The in-world dashboard, drawn flat over the low-res target after the 3D pass
@@ -287,7 +287,7 @@ internal static class HudRenderer
     // --- Equip slots (R T Y U): the crafted CRAB CORE lives here ---
     // A small row of four boxes in the strip's free centre band, between the vital bars
     // on the left and the radar on the right. Pressing the matching key throws the slot's
-    // contents (see InputMap.WeaponSlotPressed / World.UseWeaponSlot).
+    // contents (see InputFrame.WeaponSlotPressed / World.UseWeaponSlot).
     private const int WSlot = 16;      // box side
     private const int WGap = 6;
     private const int WTop = 3;

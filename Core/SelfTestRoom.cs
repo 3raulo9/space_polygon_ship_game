@@ -1,9 +1,9 @@
 using System.Numerics;
-using VoidTanks.Entities;
-using VoidTanks.Net;
-using VoidTanks.World;
+using Unrendered.Entities;
+using Unrendered.Net;
+using Unrendered.World;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// Checks for the things that make twenty players a <em>room</em> rather than twenty

@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Acoustics;
+namespace Unrendered.Acoustics;
 
 /// <summary>
 /// One sound currently making noise. A voice owns a read cursor into a shared

@@ -1,6 +1,6 @@
 using Raylib_cs;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// <c>--musiccheck</c>: proves the soundtrack out without a window and without the
@@ -30,6 +30,18 @@ public static class MusicCheck
     public static int Run()
     {
         Raylib.InitAudioDevice();
+
+        // Open the mixer's own stream first, exactly as a real launch does.
+        //
+        // This check used to talk straight to MusicBox with no engine behind it, and that is
+        // precisely why it never saw the worst thing the soundtrack has done. raylib's stream
+        // buffer size is a global read by the next stream that loads, the mixer sets it to
+        // twelve milliseconds for its own callback-fed stream, and a Music stream refilled
+        // once per rendered frame cannot live on twelve milliseconds — it tore continuously.
+        // A harness that runs a quieter version of the game than the game is not a harness.
+        var engine = new Acoustics.AudioEngine(CueBank.BuildTable());
+        engine.Open();
+
         MusicBox.Init();
 
         var tracks = MusicBox.Tracks;
@@ -40,6 +52,7 @@ public static class MusicCheck
             Console.WriteLine("NOTHING TO PLAY — drop a .wav/.ogg/.mp3/.flac into Assets/Audio/Music"
                 + " and rebuild, or straight into the built game's copy of that folder.");
             MusicBox.Shutdown();
+            engine.Close();
             Raylib.CloseAudioDevice();
             return 1;
         }
@@ -95,6 +108,7 @@ public static class MusicCheck
                 if (heard[i] == heard[i - 1]) repeats++;
 
         MusicBox.Shutdown();
+        engine.Close();
         Raylib.CloseAudioDevice();
 
         Console.WriteLine();

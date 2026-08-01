@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// The enemy squads, drawn out in the world: the figures themselves, the cables they are
@@ -26,11 +26,24 @@ public sealed class EnemySoldierRenderer
 {
     private readonly SoldierModel _figure = new();
 
+    /// <summary>One animator per squad member, kept between frames. A body with no memory
+    /// cannot lag, overshoot or settle, and four of them sharing one animator would move as
+    /// one animal.</summary>
+    private readonly SoldierAnimatorSet _anim = new();
+
     public void Draw(World.World world, Vector3 cameraPos, float elapsed)
     {
         if (world.Soldiers.Count == 0) return;
 
         var eyeXZ = new Vector2(cameraPos.X, cameraPos.Z);
+        float dt = Raylib.GetFrameTime();
+        _anim.Begin();
+
+        // Where the eye is, for the heads to track. These are the only enemies in the game
+        // that have to be read as *aware* — the player has to be able to tell which of the
+        // four has noticed them — and a head turned toward you is the cheapest and by some
+        // way the loudest way to say so.
+        Vector3 eye = cameraPos;
 
         foreach (var s in world.Soldiers)
         {
@@ -45,18 +58,13 @@ public sealed class EnemySoldierRenderer
             SoldierRenderer.DrawCable(s.Right, Launcher(at, s, right: true), eyeXZ);
             SoldierRenderer.DrawCable(s.Left, Launcher(at, s, right: false), eyeXZ);
 
-            bool perched = s.Move == SoldierMove.Perched;
-            var flight = new SoldierModel.FlightPose(
-                Speed: s.PlanarSpeed,
-                Bank: s.Bank,
-                Grounded: s.Move == SoldierMove.Running,
-                Perched: perched,
-                Blades: s.BladesOut,
-                Stagger: s.Stagger,
-                // Offset per soldier so four of them never breathe or stride in unison —
-                // the cheapest possible fix for the single thing that most makes a group
-                // of figures read as one thing drawn four times.
-                Time: elapsed + s.Slot * 1.37f);
+            SoldierAnimator anim = _anim.For(s);
+            _anim.Flinch(s, s.FlinchSeq, s.FlinchAngle, s.FlinchAmount);
+            _anim.Slash(s, s.SlashSeq);
+            // Alternating hands, the same way the player's own rig swaps the weapon over,
+            // so a burst reads as a body working a rifle rather than one arm twitching.
+            _anim.Fire(s, s.ShotSeq, (s.ShotSeq & 1) == 0);
+            anim.Step(Signals(s, at, eye, elapsed), dt);
 
             // The corruption, worn on the outside. A seeded body is going magenta at the
             // edges and a turned one is nothing else — which is the only readout this
@@ -83,8 +91,7 @@ public sealed class EnemySoldierRenderer
             _figure.DrawFlier(at, s.Height, s.Heading, cameraPos,
                 cloth, webbing, steel, steel,
                 GridRenderer.LerpColor(Palette.SoldierBlade, Palette.NeonMagenta, rot),
-                flight,
-                EnemySoldier.Scale);
+                anim.Pose, s.BladesOut, EnemySoldier.Scale);
 
             // The tell. A soldier who has been given the turn carries a hard white spark at
             // the chest for the whole of their run — the one piece of information the player
@@ -110,6 +117,65 @@ public sealed class EnemySoldierRenderer
                     6, 6, new Color(seed.R, seed.G, seed.B, (byte)(190 * flicker)));
             }
         }
+
+        _anim.End();
+    }
+
+    /// <summary>
+    /// Everything the animator needs about one squad member, read off the brain flying them.
+    ///
+    /// Two of these are worth pointing at. The velocity is the real vector rather than a
+    /// speed, because nearly the whole air layer is a function of it — how hard the body
+    /// folds, which way it corkscrews, whether it is launching or coasting. And the look is
+    /// aimed at the eye watching them: these bodies track the player with their heads
+    /// independently of where their cables are taking them, which is the difference between
+    /// four things flying past and four people hunting.
+    /// </summary>
+    internal static SoldierAnimator.Signals Signals(EnemySoldier s, Vector2 at, Vector3 eye,
+        float elapsed)
+    {
+        // Where the eye is, relative to where the body is pointed.
+        Vector3 chest = new(at.X, s.Height + EnemySoldier.AimHeight, at.Y);
+        Vector3 toEye = eye - chest;
+        var flat = new Vector2(toEye.X, toEye.Z);
+        float lookYaw = flat.LengthSquared() > 1e-4f
+            ? Wrap(MathF.Atan2(flat.X, flat.Y) - s.Heading) : 0f;
+        float lookPitch = flat.Length() > 1e-3f ? MathF.Atan2(toEye.Y, flat.Length()) : 0f;
+
+        return new SoldierAnimator.Signals(
+            Position: s.Position,
+            Height: s.Height,
+            Heading: s.Heading,
+            Velocity: s.Velocity,
+            Grounded: s.Move == SoldierMove.Running,
+            Perched: s.Move == SoldierMove.Perched,
+            Anchored: s.AnyAnchored,
+            // They have no reel of their own to report, so the closest true thing is said
+            // instead: a committed run is a body being hauled at something, and it is the
+            // one state where the tighter, gathered shape is the right one.
+            Reeling: s.Move == SoldierMove.Diving && s.AnyAnchored,
+            LeftTension: s.Left.Tension, RightTension: s.Right.Tension,
+            LeftOut: s.Left.Out, RightOut: s.Right.Out,
+            LeftHook: new Vector3(s.Left.Tip.X, s.Left.TipY, s.Left.Tip.Y),
+            RightHook: new Vector3(s.Right.Tip.X, s.Right.TipY, s.Right.Tip.Y),
+            Bank: s.Bank,
+            Stagger: s.Stagger,
+            Blades: s.BladesOut,
+            LookYaw: lookYaw, LookPitch: lookPitch,
+            GroundY: 0f,
+            Scale: EnemySoldier.Scale,
+            // Offset per soldier so four of them never breathe or stride in unison — the
+            // cheapest possible fix for the single thing that most makes a group of figures
+            // read as one thing drawn four times.
+            Time: elapsed + s.Slot * 1.37f);
+    }
+
+    private static float Wrap(float a)
+    {
+        a %= MathF.Tau;
+        if (a > MathF.PI) a -= MathF.Tau;
+        if (a < -MathF.PI) a += MathF.Tau;
+        return a;
     }
 
     /// <summary>

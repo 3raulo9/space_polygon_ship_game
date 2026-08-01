@@ -1,7 +1,7 @@
-﻿using VoidTanks.Core;
-using VoidTanks.Input;
+﻿using Unrendered.Core;
+using Unrendered.Input;
 
-namespace VoidTanks.UI;
+namespace Unrendered.UI;
 
 /// <summary>
 /// The first thing the machine shows you. Deliberately spare: a title that

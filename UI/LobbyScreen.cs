@@ -1,9 +1,9 @@
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Input;
-using VoidTanks.Net;
+using Unrendered.Core;
+using Unrendered.Input;
+using Unrendered.Net;
 
-namespace VoidTanks.UI;
+namespace Unrendered.UI;
 
 /// <summary>
 /// The multiplayer front door: host a match and read out the code, or type someone else's.

@@ -1,9 +1,10 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.UI;
+using Unrendered.Core;
+using Unrendered.Input;
+using Unrendered.UI;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Draws the menu as flat 2D over the low-res target. Everything is measured in
@@ -30,30 +31,16 @@ internal static class MenuRenderer
         DrawFooter(elapsed);
     }
 
-    /// <summary>Draws the controls screen (rows of cyclable values) over the target.</summary>
-    public static void DrawSettings(SettingsScreen screen, float elapsed)
+    /// <summary>Draws whichever settings page is up. <paramref name="alpha"/> fades the
+    /// whole thing, so the pause panel can bring it in over a live match.</summary>
+    public static void DrawSettings(SettingsScreen screen, float elapsed, byte alpha = 255)
     {
-        DrawHeading("SETTINGS", elapsed);
-
-        Font font = Raylib.GetFontDefault();
-        // Tighter and higher than it was: the mixer's faders took the page from three rows
-        // to eight, and the whole list plus BACK still has to sit above the footer on a
-        // 240-line target without anything scrolling.
-        const int y = 74;
-        const int step = 15;
-
-        // Walked rather than listed, so adding a row to the screen adds it here too.
-        var rows = System.Enum.GetValues<SettingsScreen.Row>();
-        int at = 0;
-        foreach (var row in rows)
+        switch (screen.At)
         {
-            if (row == SettingsScreen.Row.Back) continue;
-            DrawValueRow(font, screen, row, y + step * at);
-            at++;
+            case SettingsScreen.Page.Controls: DrawControls(screen, elapsed, alpha); break;
+            case SettingsScreen.Page.Audio: DrawAudio(screen, elapsed, alpha); break;
+            default: DrawSettingsRoot(screen, elapsed, alpha); break;
         }
-        DrawBackRow(font, screen, y + step * at + 4);
-
-        DrawFooterHint("< > CHANGE · UP DN MOVE · ESC BACK");
     }
 
     // --- Title: flickering, occasionally-dropped glyphs ---
@@ -147,26 +134,40 @@ internal static class MenuRenderer
 
     private static void DrawFooterHint(string hint) => DrawFooterHint(hint, 255);
 
-    private static void DrawFooterHint(string hint, byte alpha)
+    /// <summary>
+    /// <paramref name="size"/> defaults to the 8px the title screen has always used, and the
+    /// settings pages ask for 10 instead.
+    ///
+    /// <para>Raylib's default font is a 10-pixel bitmap, so a requested 8 is a 0.8 downscale
+    /// of a bitmap with nearest-neighbour filtering — whole rows of pixels are dropped and the
+    /// glyphs come apart. On the title menu that reads as the degraded-terminal look the whole
+    /// game is built on. On a page whose hint is the only place the rebinding keys are written
+    /// down, it reads as a bug.</para>
+    /// </summary>
+    private static void DrawFooterHint(string hint, byte alpha, Color? tint = null, int size = 8)
     {
         Font font = Raylib.GetFontDefault();
-        const int size = 8;
         Vector2 s = Raylib.MeasureTextEx(font, hint, size, Spacing);
-        // Barely there — a prompt left glowing at the bottom of a dead terminal.
-        Color c = Fade(Scale(Palette.HudChrome, 0.35f), alpha);
+        // Barely there — a prompt left glowing at the bottom of a dead terminal. Except when
+        // it is carrying a warning, which is allowed to be legible.
+        Color c = Fade(tint ?? Scale(Palette.HudChrome, 0.35f), alpha);
         Raylib.DrawTextEx(font, hint, new Vector2((W - s.X) * 0.5f, H - 18), size, Spacing, c);
     }
 
     // --- Pause panel ---
 
     /// <summary>
-    /// Draws the pause panel over the blurred frozen frame. It fades up only once
-    /// the pixel-blur has mostly closed (<paramref name="t"/> past ~0.35), so the
-    /// text arrives after the world has dissolved, not on top of a sharp scene.
+    /// Draws the pause panel over the dimmed world. <paramref name="t"/> (0..1) is how far
+    /// the panel has come in, which is also how far the world behind it has been dimmed; the
+    /// text arrives a little after the dim starts so the two do not fight.
+    ///
+    /// <para>Identical in single player and multiplayer, down to the last row's wording. The
+    /// world behind it is frozen in one and still moving in the other, and that is the only
+    /// difference the player is meant to notice.</para>
     /// </summary>
     public static void DrawPause(UI.PauseMenu menu, float elapsed, float t)
     {
-        float a = Math.Clamp((t - 0.35f) / 0.45f, 0f, 1f);
+        float a = Math.Clamp((t - 0.2f) / 0.5f, 0f, 1f);
         if (a <= 0f) return;
         byte alpha = (byte)(a * 255);
 
@@ -184,34 +185,252 @@ internal static class MenuRenderer
         Raylib.DrawRectangle((W - ruleW) / 2, 66 + hs + 6, ruleW, 1,
             Fade(Scale(Palette.GridFar, 0.6f), alpha));
 
-        DrawPauseItem(font, "RESUME", UI.PauseMenu.Item.Resume, menu, 128, alpha);
-        DrawPauseItem(font, "BACK TO MENU", UI.PauseMenu.Item.BackToMenu, menu, 152, alpha);
+        int y = 122;
+        foreach (var item in System.Enum.GetValues<UI.PauseMenu.Item>())
+        {
+            DrawCentredRow(font, UI.PauseMenu.Label(item), menu.Selected == item, y, alpha);
+            y += 22;
+        }
 
-        DrawFooterHint("ESC / ENTER RESUME", alpha);
+        // Ten rather than the title screen's eight. The degraded, half-resolved look belongs
+        // to UNRENDERED itself; a panel a player opens mid-fight to find a control is a tool,
+        // and its one line of instructions has to be readable. See DrawFooterHint.
+        DrawFooterHint("ESC / ENTER RESUME", alpha, null, 10);
     }
 
-    private static void DrawPauseItem(Font font, string label, UI.PauseMenu.Item item,
-        UI.PauseMenu menu, int y, byte alpha)
+    // --- Settings: the front page ---
+
+    private static void DrawSettingsRoot(SettingsScreen screen, float elapsed, byte alpha)
     {
-        bool selected = menu.Selected == item;
-        Vector2 size = Raylib.MeasureTextEx(font, label, ItemSize, Spacing);
-        float x = (W - size.X) * 0.5f;
+        DrawHeading("SETTINGS", elapsed, alpha);
 
-        Color color = Fade(selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.55f), alpha);
-        Raylib.DrawTextEx(font, label, new Vector2(x, y), ItemSize, Spacing, color);
+        Font font = Raylib.GetFontDefault();
+        int y = 116;
+        const int step = 24;
 
-        if (selected)
+        foreach (var row in System.Enum.GetValues<SettingsScreen.RootRow>())
         {
-            Color bracket = Fade(Palette.HudChrome, alpha);
-            Raylib.DrawTextEx(font, "[", new Vector2(x - 14, y), ItemSize, Spacing, bracket);
-            Raylib.DrawTextEx(font, "]", new Vector2(x + size.X + 6, y), ItemSize, Spacing, bracket);
+            DrawCentredRow(font, SettingsScreen.RootLabel(row), screen.Root == row, y, alpha);
+            y += step;
         }
+
+        DrawFooterHint("UP DN MOVE · ENTER SELECT · ESC BACK", alpha);
+    }
+
+    // --- Settings: the mixer ---
+
+    private static void DrawAudio(SettingsScreen screen, float elapsed, byte alpha)
+    {
+        DrawPanel(alpha);
+        DrawHeading("SOUND", elapsed, alpha);
+
+        Font font = Raylib.GetFontDefault();
+        const int y = 74;
+        const int step = 15;
+
+        // Walked rather than listed, so adding a fader to the screen adds it here too.
+        int at = 0;
+        foreach (var row in System.Enum.GetValues<SettingsScreen.AudioRow>())
+        {
+            if (row == SettingsScreen.AudioRow.Back) continue;
+            DrawValueRow(font, SettingsScreen.AudioLabel(row), screen.AudioValue(row),
+                screen.Audio == row, y + step * at, alpha);
+            at++;
+        }
+        DrawCentredRow(font, "BACK", screen.Audio == SettingsScreen.AudioRow.Back,
+            y + step * at + 4, alpha);
+
+        DrawFooterHint("< > CHANGE · UP DN MOVE · ESC BACK", alpha, null, 10);
+    }
+
+    // --- Settings: the bindings ---
+
+    /// <summary>
+    /// The controls list. Long enough that it scrolls, so the window is walked from the
+    /// screen's own scroll offset and section headings are drawn as they are passed rather
+    /// than laid out up front — a heading only earns a line when the first row under it is
+    /// actually visible.
+    /// </summary>
+    private static void DrawControls(SettingsScreen screen, float elapsed, byte alpha)
+    {
+        DrawPanel(alpha);
+        DrawHeading("CONTROLS", elapsed, alpha);
+
+        Font font = Raylib.GetFontDefault();
+        const int top = SettingsScreen.ListTop;
+        const int step = SettingsScreen.RowHeight;
+        const int headStep = SettingsScreen.HeadingHeight;
+
+        var all = InputActions.All;
+        int y = top;
+        InputSection? drawn = null;
+
+        // How many rows fit is the screen's answer, not this method's — the cursor has to
+        // stay inside the same window the draw uses, so only one of them may decide it.
+        int last = Math.Min(all.Length,
+            screen.ControlScroll + SettingsScreen.RowsFrom(screen.ControlScroll));
+        for (int i = screen.ControlScroll; i < last; i++)
+        {
+            var action = all[i];
+            var section = InputActions.SectionOf(action);
+            if (drawn != section)
+            {
+                drawn = section;
+                DrawSectionHead(font, section, y, alpha);
+                y += headStep;
+            }
+
+            DrawBindRow(font, screen, action, i == screen.ControlRow, y, alpha);
+            y += step;
+        }
+
+        // A hint that the list continues, at whichever end it does. Without it the page
+        // reads as if it holds eight bindings. Parked at fixed heights rather than against
+        // the last row drawn, which moves with the sections and would otherwise put the
+        // bottom tick into the RESET row on some scroll positions and not others.
+        if (screen.ControlScroll > 0) DrawTick(font, "^", top - 11, alpha);
+        if (last < all.Length) DrawTick(font, "v", SettingsScreen.ListBottom - 6, alpha);
+
+        // RESET and BACK live under the window rather than in it: they are not bindings, and
+        // scrolling past the end of the list to reach the way out is a bad way to leave.
+        DrawCentredRow(font, "RESET TO DEFAULTS",
+            screen.ControlRow == screen.ControlResetRow, 196, alpha, small: true);
+        DrawCentredRow(font, "BACK", screen.ControlRow == screen.ControlBackRow, 208, alpha,
+            small: true);
+
+        if (screen.Capturing) DrawCapturePrompt(font, screen, alpha);
+        else if (screen.LastClash is { } clash)
+            DrawFooterHint("ALSO BOUND TO " + InputActions.Label(clash), alpha,
+                Palette.Warning, 10);
+        else
+            DrawFooterHint("ENTER BIND · < > SLOT · DEL CLEAR · ESC BACK", alpha, null, 10);
+    }
+
+    private static void DrawSectionHead(Font font, InputSection section, int y, byte alpha)
+    {
+        // Ten, not eight — the font's own size. See DrawFooterHint.
+        const int size = 10;
+        string label = InputActions.SectionLabel(section);
+        string? note = InputActions.SectionNote(section);
+
+        Raylib.DrawTextEx(font, label, new Vector2(ColLeft, y), size, Spacing,
+            Fade(Palette.GridNear, alpha));
+
+        if (note != null)
+        {
+            Vector2 m = Raylib.MeasureTextEx(font, note, size, Spacing);
+            Raylib.DrawTextEx(font, note, new Vector2(ColRight - m.X, y), size, Spacing,
+                Fade(Scale(Palette.HudChrome, 0.36f), alpha));
+        }
+
+        Raylib.DrawRectangle(ColLeft, y + size + 2, ColRight - ColLeft, 1,
+            Fade(Scale(Palette.GridFar, 0.5f), alpha));
+    }
+
+    /// <summary>
+    /// One binding: its name on the left, its two slots on the right. The focused slot wears
+    /// the brackets, so the cursor says which of the two an ENTER is about to overwrite.
+    /// Both slots go warning-red when the action is sharing a button with a neighbour in its
+    /// own section.
+    /// </summary>
+    private static void DrawBindRow(Font font, SettingsScreen screen, InputAction action,
+        bool selected, int y, byte alpha)
+    {
+        const int size = 10;
+        var bind = screen.Settings.Bindings[action];
+        bool clash = screen.IsClashing(action);
+
+        Color label = selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.5f);
+        Raylib.DrawTextEx(font, InputActions.Label(action), new Vector2(ColLeft, y), size,
+            Spacing, Fade(label, alpha));
+
+        // Two fixed columns, so the slots line up down the page and an empty one reads as a
+        // gap in a column rather than as a shorter row.
+        DrawSlot(font, bind.Primary.Label, selected && screen.ControlSlot == 0, clash,
+            SlotOneX, y, size, alpha);
+        DrawSlot(font, bind.Secondary.Label, selected && screen.ControlSlot == 1, clash,
+            SlotTwoX, y, size, alpha);
+    }
+
+    private static void DrawSlot(Font font, string text, bool focused, bool clash, int x,
+        int y, int size, byte alpha)
+    {
+        Color c = clash
+            ? (focused ? Palette.Warning : Scale(Palette.Warning, 0.65f))
+            : (focused ? Palette.HudChrome : Scale(Palette.HudChrome, 0.42f));
+
+        Raylib.DrawTextEx(font, text, new Vector2(x, y), size, Spacing, Fade(c, alpha));
+
+        if (!focused) return;
+        Vector2 m = Raylib.MeasureTextEx(font, text, size, Spacing);
+        Color bracket = Fade(clash ? Palette.Warning : Palette.HudChrome, alpha);
+        Raylib.DrawTextEx(font, "[", new Vector2(x - 8, y), size, Spacing, bracket);
+        Raylib.DrawTextEx(font, "]", new Vector2(x + m.X + 3, y), size, Spacing, bracket);
+    }
+
+    /// <summary>The "press something" prompt. A band across the middle rather than a dialog:
+    /// the list stays visible behind it, which is the only way to see what you are answering
+    /// for.</summary>
+    private static void DrawCapturePrompt(Font font, SettingsScreen screen, byte alpha)
+    {
+        const int bandY = 100;
+        const int bandH = 34;
+        Raylib.DrawRectangle(0, bandY, W, bandH, Fade(new Color(5, 7, 10, 225), alpha));
+        Raylib.DrawRectangle(0, bandY, W, 1, Fade(Scale(Palette.GridNear, 0.8f), alpha));
+        Raylib.DrawRectangle(0, bandY + bandH - 1, W, 1, Fade(Scale(Palette.GridNear, 0.8f), alpha));
+
+        string what = screen.FocusedAction is { } a ? InputActions.Label(a) : "";
+        string head = "PRESS A KEY FOR " + what;
+        const int hs = 10;
+        Vector2 hm = Raylib.MeasureTextEx(font, head, hs, Spacing);
+        Raylib.DrawTextEx(font, head, new Vector2((W - hm.X) * 0.5f, bandY + 7), hs, Spacing,
+            Fade(Palette.HudChrome, alpha));
+
+        const string sub = "ESC TO CANCEL";
+        const int ss = 8;
+        Vector2 sm = Raylib.MeasureTextEx(font, sub, ss, Spacing);
+        Raylib.DrawTextEx(font, sub, new Vector2((W - sm.X) * 0.5f, bandY + 21), ss, Spacing,
+            Fade(Scale(Palette.HudChrome, 0.45f), alpha));
+    }
+
+    private static void DrawTick(Font font, string glyph, int y, byte alpha)
+    {
+        const int size = 8;
+        Vector2 m = Raylib.MeasureTextEx(font, glyph, size, Spacing);
+        Raylib.DrawTextEx(font, glyph, new Vector2((W - m.X) * 0.5f, y), size, Spacing,
+            Fade(Scale(Palette.HudChrome, 0.4f), alpha));
     }
 
     // --- Settings screen pieces ---
 
+    // The panel's columns, in internal pixels. Shared by the mixer and the bindings so the
+    // two pages line up with each other and read as one screen seen twice.
+    private const int ColLeft = 34;    // label left edge
+    private const int ColRight = 286;  // value right edge
+    private const int SlotOneX = 176;  // primary binding
+    private const int SlotTwoX = 240;  // secondary
+
+    /// <summary>
+    /// The dark slab the two dense settings pages sit on.
+    ///
+    /// <para>The screens behind them — the drifting grid off the title menu, a live firefight
+    /// off the pause panel — are both a chequerboard floor under a magenta sky, and a column
+    /// of eight-pixel key names laid straight onto that is unreadable. The sparse screens (the
+    /// title, the settings front page, the pause panel) do not need it and do not get it: half
+    /// a dozen words in fourteen-pixel chrome survive anything, and the backdrop showing
+    /// through is most of what those screens are.</para>
+    /// </summary>
+    private static void DrawPanel(byte alpha)
+    {
+        const int top = 30;
+        const int bottom = 234;   // low enough to take the footer hint in with it
+        Raylib.DrawRectangle(0, top, W, bottom - top, Fade(new Color(5, 7, 10, 232), alpha));
+        Raylib.DrawRectangle(0, top, W, 1, Fade(Scale(Palette.GridFar, 0.55f), alpha));
+        Raylib.DrawRectangle(0, bottom - 1, W, 1, Fade(Scale(Palette.GridFar, 0.55f), alpha));
+    }
+
     /// <summary>A smaller, steadier version of the title flicker for sub-screen headings.</summary>
-    private static void DrawHeading(string text, float elapsed)
+    private static void DrawHeading(string text, float elapsed, byte alpha = 255)
     {
         Font font = Raylib.GetFontDefault();
         const int size = 22;
@@ -220,48 +439,51 @@ internal static class MenuRenderer
         const int y = 40;
 
         float breathe = 0.78f + 0.22f * MathF.Abs(MathF.Sin(elapsed * 0.9f));
-        Raylib.DrawTextEx(font, text, new Vector2(x, y), size, Spacing, Scale(Palette.HudChrome, breathe));
+        Raylib.DrawTextEx(font, text, new Vector2(x, y), size, Spacing,
+            Fade(Scale(Palette.HudChrome, breathe), alpha));
 
         int ruleW = (int)m.X;
         Color rule = Scale(Palette.GridFar, 0.5f + 0.2f * MathF.Sin(elapsed * 1.7f));
-        Raylib.DrawRectangle((W - ruleW) / 2, y + size + 5, ruleW, 1, rule);
+        Raylib.DrawRectangle((W - ruleW) / 2, y + size + 5, ruleW, 1, Fade(rule, alpha));
     }
 
     /// <summary>
     /// A label on the left, its cyclable value (in arrow brackets when focused) on
     /// the right, laid out in a fixed centred column so the rows read as a panel.
     /// </summary>
-    private static void DrawValueRow(Font font, SettingsScreen screen, SettingsScreen.Row row, int y)
+    private static void DrawValueRow(Font font, string label, string value, bool selected,
+        int y, byte alpha)
     {
-        bool selected = screen.Selected == row;
         const int size = ItemSize;
-        const int colLeft = 60;    // label left edge (internal px)
-        const int colRight = 260;  // value right edge
 
         Color labelColor = selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.55f);
-        Raylib.DrawTextEx(font, SettingsScreen.Label(row), new Vector2(colLeft, y), size, Spacing, labelColor);
+        Raylib.DrawTextEx(font, label, new Vector2(ColLeft, y), size, Spacing,
+            Fade(labelColor, alpha));
 
-        string value = screen.Value(row);
         string shown = selected ? "< " + value + " >" : value;
         Vector2 vs = Raylib.MeasureTextEx(font, shown, size, Spacing);
         Color valColor = selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.45f);
-        Raylib.DrawTextEx(font, shown, new Vector2(colRight - vs.X, y), size, Spacing, valColor);
+        Raylib.DrawTextEx(font, shown, new Vector2(ColRight - vs.X, y), size, Spacing,
+            Fade(valColor, alpha));
     }
 
-    private static void DrawBackRow(Font font, SettingsScreen screen, int y)
+    /// <summary>A centred, bracket-flanked choice — BACK, RESET, the front page's two doors,
+    /// the pause panel's rows. The one row shape the whole UI shares.</summary>
+    private static void DrawCentredRow(Font font, string label, bool selected, int y,
+        byte alpha, bool small = false)
     {
-        bool selected = screen.Selected == SettingsScreen.Row.Back;
-        const int size = ItemSize;
-        string label = "BACK";
+        int size = small ? 10 : ItemSize;
         Vector2 s = Raylib.MeasureTextEx(font, label, size, Spacing);
         float x = (W - s.X) * 0.5f;
-        Color c = selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.55f);
+
+        Color c = Fade(selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.55f), alpha);
         Raylib.DrawTextEx(font, label, new Vector2(x, y), size, Spacing, c);
-        if (selected)
-        {
-            Raylib.DrawTextEx(font, "[", new Vector2(x - 14, y), size, Spacing, Palette.HudChrome);
-            Raylib.DrawTextEx(font, "]", new Vector2(x + s.X + 6, y), size, Spacing, Palette.HudChrome);
-        }
+
+        if (!selected) return;
+        Color bracket = Fade(Palette.HudChrome, alpha);
+        int gap = small ? 10 : 14;
+        Raylib.DrawTextEx(font, "[", new Vector2(x - gap, y), size, Spacing, bracket);
+        Raylib.DrawTextEx(font, "]", new Vector2(x + s.X + 6, y), size, Spacing, bracket);
     }
 
     // --- helpers ---

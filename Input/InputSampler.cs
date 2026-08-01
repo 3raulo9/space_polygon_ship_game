@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Input;
+namespace Unrendered.Input;
 
 /// <summary>
 /// Turns the keyboard in front of the machine into <see cref="InputFrame"/>s.
@@ -27,35 +27,45 @@ public sealed class InputSampler
     /// <summary>Reads the devices. Call once per render frame, before the fixed-step loop.</summary>
     public void Sample()
     {
-        Settings s = InputMap.Active;
+        Bindings b = InputMap.Active.Bindings;
         Btn down = Btn.None;
 
-        // Rebindable: the settings screen decides which key this is, and the answer lands
-        // here already resolved.
-        if (s.ForwardDown()) down |= Btn.Forward;
-        if (s.BackDown()) down |= Btn.Back;
-        if (s.TurnLeftDown()) down |= Btn.TurnLeft;
-        if (s.TurnRightDown()) down |= Btn.TurnRight;
-        if (s.JumpDown()) down |= Btn.Jump;
-        if (s.FireDown()) down |= Btn.Fire;
-        if (s.GrenadeDown()) down |= Btn.Grenade;
-        if (s.HyperspaceDown()) down |= Btn.Hyperspace;
+        // Every action, every tick, whichever chassis is being driven. Resolving only the
+        // ones the current craft reads would be cheaper and wrong: the sampler is the one
+        // place in the game that must not know what is being driven, and a frame is twelve
+        // bytes whether eight bits are set or twenty.
+        //
+        // Held state only — the edges are worked out below against the last tick that
+        // actually ran, which is not the same question as "did raylib see a press this
+        // render frame". See InputFrame's remarks.
+        if (b.Down(InputAction.Forward)) down |= Btn.Forward;
+        if (b.Down(InputAction.Back)) down |= Btn.Back;
+        if (b.Down(InputAction.TurnLeft)) down |= Btn.TurnLeft;
+        if (b.Down(InputAction.TurnRight)) down |= Btn.TurnRight;
+        if (b.Down(InputAction.Jump)) down |= Btn.Jump;
+        if (b.Down(InputAction.Fire)) down |= Btn.Fire;
+        if (b.Down(InputAction.Secondary)) down |= Btn.Secondary;
+        if (b.Down(InputAction.Hyperspace)) down |= Btn.Hyperspace;
 
-        // Fixed physical keys: whatever they mean is the reading chassis's business.
-        if (Raylib.IsKeyDown(KeyboardKey.Q)) down |= Btn.Q;
-        if (Raylib.IsKeyDown(KeyboardKey.E)) down |= Btn.E;
-        if (Raylib.IsKeyDown(KeyboardKey.R)) down |= Btn.R;
-        if (Raylib.IsKeyDown(KeyboardKey.T)) down |= Btn.T;
-        if (Raylib.IsKeyDown(KeyboardKey.Y)) down |= Btn.Y;
-        if (Raylib.IsKeyDown(KeyboardKey.U)) down |= Btn.U;
-        if (Raylib.IsKeyDown(KeyboardKey.W)) down |= Btn.W;
-        if (Raylib.IsKeyDown(KeyboardKey.A)) down |= Btn.A;
-        if (Raylib.IsKeyDown(KeyboardKey.S)) down |= Btn.S;
-        if (Raylib.IsKeyDown(KeyboardKey.D)) down |= Btn.D;
-        if (Raylib.IsKeyDown(KeyboardKey.Space)) down |= Btn.Space;
-        if (Raylib.IsKeyDown(KeyboardKey.Enter)) down |= Btn.Enter;
-        if (Raylib.IsMouseButtonDown(MouseButton.Left)) down |= Btn.MouseL;
-        if (Raylib.IsMouseButtonDown(MouseButton.Right)) down |= Btn.MouseR;
+        if (b.Down(InputAction.TankLurch)) down |= Btn.TankLurch;
+        if (b.Down(InputAction.TankSmoke)) down |= Btn.TankSmoke;
+        if (b.Down(InputAction.TankSlug)) down |= Btn.TankSlug;
+
+        if (b.Down(InputAction.SpiderPounce)) down |= Btn.SpiderPounce;
+
+        if (b.Down(InputAction.LeftHook)) down |= Btn.LeftHook;
+        if (b.Down(InputAction.RightHook)) down |= Btn.RightHook;
+        if (b.Down(InputAction.HighJump)) down |= Btn.HighJump;
+
+        if (b.Down(InputAction.Beat)) down |= Btn.Beat;
+        if (b.Down(InputAction.Brake)) down |= Btn.Brake;
+
+        if (b.Down(InputAction.Slot1)) down |= Btn.Slot1;
+        if (b.Down(InputAction.Slot2)) down |= Btn.Slot2;
+        if (b.Down(InputAction.Slot3)) down |= Btn.Slot3;
+        if (b.Down(InputAction.Slot4)) down |= Btn.Slot4;
+
+        if (b.Down(InputAction.Interact)) down |= Btn.Interact;
 
         _frame = new InputFrame(down, down & ~_prevDown, Raylib.GetMouseDelta());
         _prevDown = down;

@@ -1,21 +1,28 @@
-using VoidTanks.Core;
-using VoidTanks.Input;
+using Unrendered.Core;
+using Unrendered.Input;
 
-namespace VoidTanks.UI;
+namespace Unrendered.UI;
 
 /// <summary>
-/// The panel that drops over a frozen run when Escape is pressed in-world. Spare,
-/// like the title menu: two choices — slip back into the fight, or abandon it to
-/// the terminal. Escape resumes (so the same key both pauses and unpauses). Owns
-/// only selection state; the blur transition and drawing live in the Renderer, so
-/// this stays pure state and never touches Raylib.
+/// The panel that drops over a run when Escape is pressed in-world. Spare, like the title
+/// menu: slip back into the fight, open the settings, or abandon it to the terminal. Escape
+/// resumes, so the same key both opens and closes it.
+///
+/// <para><b>The same panel in both modes, and deliberately so.</b> Single-player freezes the
+/// world behind it and multiplayer does not — a room of twenty cannot be held still because
+/// one person went to find the volume — but that difference belongs to the loop, and none of
+/// it is visible here. The panel does not know which kind of match it is over, has no row
+/// that appears in one and not the other, and does not word itself differently. A player who
+/// learns where RESUME sits has learned it for both.</para>
+///
+/// <para>Owns only selection state; the dim and the drawing live in the Renderer.</para>
 /// </summary>
 public sealed class PauseMenu
 {
     /// <summary>What the pause panel is asking the loop to do this frame.</summary>
-    public enum Action { None, Resume, BackToMenu }
+    public enum Action { None, Resume, OpenSettings, BackToMenu }
 
-    public enum Item { Resume, BackToMenu }
+    public enum Item { Resume, Settings, BackToMenu }
 
     public Item Selected { get; private set; } = Item.Resume;
 
@@ -36,6 +43,7 @@ public sealed class PauseMenu
             return Selected switch
             {
                 Item.Resume => Action.Resume,
+                Item.Settings => Action.OpenSettings,
                 Item.BackToMenu => Action.BackToMenu,
                 _ => Action.None,
             };
@@ -52,4 +60,11 @@ public sealed class PauseMenu
         Selected = (Item)next;
         Audio.PlayBlip();
     }
+
+    public static string Label(Item item) => item switch
+    {
+        Item.Resume => "RESUME",
+        Item.Settings => "SETTINGS",
+        _ => "BACK TO MENU",
+    };
 }

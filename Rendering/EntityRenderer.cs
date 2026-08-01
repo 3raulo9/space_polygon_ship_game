@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Draws the flat-shaded solids (enemies, projectiles) inside the 3D pass.
@@ -59,6 +59,17 @@ public sealed class EntityRenderer
     // is never on screen.
     private readonly SoldierModel _soldierModel = new();
 
+    /// <summary>One animator per body drawn through this renderer: the team-mates out in
+    /// the world, the figure on the hangar turntable, the bestiary specimen, and the
+    /// outlines a VIRUS perceives. They have memory, so they outlive the frame.</summary>
+    private readonly SoldierAnimatorSet _figures = new();
+
+    /// <summary>Stable keys for the two figures that are not entities — the hangar's and the
+    /// bestiary's — so each keeps its own animator across frames instead of being rebuilt
+    /// mid-breath.</summary>
+    private readonly object _hangarFigure = new();
+    private readonly object _bestiaryFigure = new();
+
     /// <summary>The soldier's cables and hooks in the live world — drawn from the rig's
     /// own state, not from a mesh, because a cable's shape is decided every frame by
     /// where its anchor is and how hard it is pulling.</summary>
@@ -95,7 +106,7 @@ public sealed class EntityRenderer
     /// those screens can show the same one the player is about to drive into.
     /// </summary>
     public void DrawStructures(Vector3 cameraPos)
-        => _structures.Draw(VoidTanks.World.StructureField.Backdrop, cameraPos);
+        => _structures.Draw(Unrendered.World.StructureField.Backdrop, cameraPos);
 
     public void Draw(World.World world, Vector3 cameraPos)
     {
@@ -104,6 +115,12 @@ public sealed class EntityRenderer
         // over the world's edge is then drawn just past the player rather than a whole
         // arena away, which is what keeps the seam invisible as they roam over it.
         var eyeXZ = new Vector2(cameraPos.X, cameraPos.Z);
+
+        // Open the frame for the figures. Anything drawn between here and the end of the
+        // pass keeps the animator it had; anything that has stopped being drawn eventually
+        // loses it, which is what stops a long match accumulating one per soldier that ever
+        // existed.
+        _figures.Begin();
 
         // The city first: it is the backdrop everything else is fought in front of. This
         // stage's own copy, not the shared backdrop — the towers this run has cut down
@@ -312,6 +329,8 @@ public sealed class EntityRenderer
             float size = s.IsSpark ? s.Size : s.Size * (0.4f + 0.6f * f);
             mesh.Draw(posXZ, s.Angle, s.Position.Y, cameraPos, size, tint);
         }
+
+        _figures.End();
     }
 
     /// <summary>
@@ -540,6 +559,7 @@ public sealed class EntityRenderer
     public void DrawUnseen(World.World world, Vector3 cameraPos, float elapsed)
     {
         var eyeXZ = new Vector2(cameraPos.X, cameraPos.Z);
+        _figures.Begin();
 
         foreach (var e in world.Enemies)
         {
@@ -559,15 +579,16 @@ public sealed class EntityRenderer
             Color edge = EdgeFor(s.Velocity.Length());
             if (edge.A == 0) continue;
 
-            var flight = new SoldierModel.FlightPose(
-                Speed: s.PlanarSpeed, Bank: s.Bank,
-                Grounded: s.Move == SoldierMove.Running,
-                Perched: s.Move == SoldierMove.Perched,
-                Blades: s.BladesOut, Stagger: s.Stagger,
-                Time: elapsed + s.Slot * 1.37f);
+            Vector2 at = Torus.NearestImage(s.Position, eyeXZ);
+            SoldierAnimator anim = _figures.For(s);
+            anim.Step(EnemySoldierRenderer.Signals(s, at, cameraPos, elapsed),
+                Raylib.GetFrameTime());
 
-            _soldierModel.DrawGhost(Torus.NearestImage(s.Position, eyeXZ), s.Height, s.Heading,
-                cameraPos, edge, flight, EnemySoldier.Scale);
+            // Every joint comes through unchanged; only the surface is gone. A wireframe of
+            // something articulated still reads as a person moving, which is the whole
+            // reason the mote can track these at all.
+            _soldierModel.DrawGhost(at, s.Height, s.Heading,
+                cameraPos, edge, anim.Pose, s.BladesOut, EnemySoldier.Scale);
         }
 
         // The two big machines are rigs rather than meshes, and wireframing a whole posed
@@ -604,6 +625,8 @@ public sealed class EntityRenderer
             Vector3 tail = head - p.Heading3 * 2.2f;
             Raylib.DrawLine3D(tail, head, Color.White);
         }
+
+        _figures.End();
     }
 
     /// <summary>
@@ -631,6 +654,120 @@ public sealed class EntityRenderer
     /// where it was — which is exactly what a sense built on disturbance would have to do.
     /// </summary>
     private readonly MotionTracker _motion = new();
+
+    /// <summary>
+    /// The pose of a figure standing in a hangar with nothing to do: breathing, shifting its
+    /// weight, scanning the room, and every seven seconds raising a launcher to look at the
+    /// hook seated in it.
+    ///
+    /// It comes out of the same animator everything else does rather than out of a function
+    /// of the clock, which is what it used to be. The beats are unchanged — that idle was
+    /// right — but running them through the layers means the launcher it lifts now has
+    /// weight in it, the head arrives at where it is looking a moment late, and the whole
+    /// figure settles rather than snapping between two sines.
+    /// </summary>
+    private SoldierPose IdlePose(object who, Vector2 pos, float heading, float elapsed)
+    {
+        SoldierAnimator anim = _figures.For(who);
+        anim.Step(new SoldierAnimator.Signals(
+            Position: pos, Height: 0f, Heading: heading, Velocity: Vector3.Zero,
+            Grounded: true, Perched: false, Anchored: false, Reeling: false,
+            LeftTension: 0f, RightTension: 0f, LeftOut: false, RightOut: false,
+            LeftHook: Vector3.Zero, RightHook: Vector3.Zero,
+            Bank: 0f, Stagger: 0f, Blades: false,
+            LookYaw: 0f, LookPitch: 0f, GroundY: 0f, Scale: 1f, Time: elapsed),
+            Raylib.GetFrameTime());
+        return anim.Pose;
+    }
+
+    /// <summary>
+    /// Another player's body out in the world, posed for what it is actually doing.
+    ///
+    /// This is the one draw in the file that had been quietly wrong. Every craft goes
+    /// through the hangar's turntable draw, which is exactly right for the four that are
+    /// machines — a tank is the same tank whether it is parked or moving — and exactly wrong
+    /// for the one that is a person: a team-mate falling forty metres between two towers was
+    /// drawn standing at ease, breathing, checking their launcher.
+    ///
+    /// Nothing about that body is on the wire but where it is, so the momentum is read the
+    /// only way it can be: by remembering where it was. Which is enough — the whole air
+    /// layer is a function of the velocity vector, and a velocity differenced off twenty
+    /// snapshots a second is a perfectly good velocity for deciding how hard a body folds.
+    /// </summary>
+    private void DrawSoldierCraft(PlayerTank craft, Vector2 pos, Vector3 cameraPos, float elapsed)
+    {
+        float scale = WorldScale(PlayerClass.Soldier);
+        Vector3 vel = _drift.Velocity(craft, pos, craft.Height);
+        var planar = new Vector2(vel.X, vel.Z);
+        bool grounded = craft.Height <= 0.02f;
+
+        // Whether they are hanging off a line is not replicated, so it is inferred: a body
+        // this far off the ground and travelling this fast is on a cable, because on this
+        // chassis there is nothing else it could be on. The inference only ever picks
+        // between two silhouettes — folded and carving, or loose and falling — and at the
+        // range a team-mate is usually seen at, picking the right one of those is the whole
+        // of the job.
+        bool anchored = !grounded && planar.Length() > 9f;
+        float tension = anchored ? Math.Clamp(planar.Length() / 22f, 0.2f, 1f) : 0f;
+
+        SoldierAnimator anim = _figures.For(craft);
+        _figures.Flinch(craft, craft.FlinchSeq, craft.FlinchAngle, craft.FlinchAmount);
+
+        anim.Step(new SoldierAnimator.Signals(
+            Position: craft.Position, Height: craft.Height, Heading: craft.Heading,
+            Velocity: vel,
+            Grounded: grounded, Perched: false, Anchored: anchored, Reeling: false,
+            LeftTension: tension, RightTension: tension,
+            LeftOut: anchored, RightOut: anchored,
+            // No anchor point on the wire either, so the hands are pointed up the line the
+            // body is being pulled along — which is where a cable that is carrying you is.
+            LeftHook: new Vector3(pos.X, craft.Height + 14f, pos.Y),
+            RightHook: new Vector3(pos.X, craft.Height + 14f, pos.Y),
+            Bank: 0f, Stagger: 0f, Blades: false,
+            LookYaw: 0f, LookPitch: craft.Pitch,
+            GroundY: 0f, Scale: scale, Time: elapsed),
+            Raylib.GetFrameTime());
+
+        Loadout build = craft.Build;
+        _soldierModel.DrawFlier(pos, craft.Height, craft.Heading, cameraPos,
+            build.PartColor(PlayerClass.Soldier, 0),
+            build.PartColor(PlayerClass.Soldier, 1),
+            build.PartColor(PlayerClass.Soldier, 2),
+            build.PartColor(PlayerClass.Soldier, 3),
+            Palette.SoldierBlade, anim.Pose, blades: false, scale);
+    }
+
+    /// <summary>
+    /// Remembers where a body was so its momentum can be recovered. The snapshot carries a
+    /// position and not a velocity, and differencing one against the last is the only way
+    /// back to the vector every air pose is a function of.
+    /// </summary>
+    private readonly DriftTracker _drift = new();
+
+    private sealed class DriftTracker
+    {
+        private readonly Dictionary<object, (Vector2 At, float Y, Vector3 V)> _seen =
+            new(ReferenceEqualityComparer.Instance);
+
+        public Vector3 Velocity(object who, Vector2 now, float height)
+        {
+            var v = Vector3.Zero;
+            if (_seen.TryGetValue(who, out var was))
+            {
+                float dt = MathF.Max(1e-4f, Raylib.GetFrameTime());
+                Vector2 moved = Torus.Delta(was.At, now);
+                var raw = new Vector3(moved.X / dt, (height - was.Y) / dt, moved.Y / dt);
+                // Heavily smoothed. This is sampled on the render clock against a position
+                // that only changes when a packet lands, so the raw difference is a spike
+                // followed by several frames of nothing — and a body posed off that would
+                // flicker between flying and falling twenty times a second.
+                if (raw.Length() < 200f) v = Vector3.Lerp(was.V, raw, 0.12f);
+                else v = was.V;
+            }
+            _seen[who] = (now, height, v);
+            return v;
+        }
+    }
 
     private sealed class MotionTracker
     {
@@ -666,12 +803,22 @@ public sealed class EntityRenderer
         // standing on the grid is a soldier having a bad day.
         if (kind == EnemyKind.Soldier)
         {
-            var pose = new SoldierModel.FlightPose(
-                Speed: 26f, Bank: 0.30f, Grounded: false, Perched: false,
-                Blades: true, Stagger: 0f, Time: elapsed);
+            // Held at the speed and the bank of a committed run, so the specimen strikes
+            // the shape it kills from rather than standing to attention in a display case.
+            SoldierAnimator anim = _figures.For(_bestiaryFigure);
+            anim.Step(new SoldierAnimator.Signals(
+                Position: pos, Height: 1.9f, Heading: heading,
+                Velocity: new Vector3(MathF.Sin(heading) * 26f, -2f, MathF.Cos(heading) * 26f),
+                Grounded: false, Perched: false, Anchored: true, Reeling: false,
+                LeftTension: 0.8f, RightTension: 0.3f, LeftOut: true, RightOut: false,
+                LeftHook: new Vector3(pos.X, 12f, pos.Y + 8f), RightHook: Vector3.Zero,
+                Bank: 0.30f, Stagger: 0f, Blades: true,
+                LookYaw: 0f, LookPitch: 0.1f, GroundY: 0f, Scale: 1f, Time: elapsed),
+                Raylib.GetFrameTime());
+
             _soldierModel.DrawFlier(pos, 1.9f, heading, cameraPos,
                 Palette.SoldierCloth, Palette.SoldierMark, Palette.SoldierSteel,
-                Palette.SoldierSteel, Palette.SoldierBlade, pose);
+                Palette.SoldierSteel, Palette.SoldierBlade, anim.Pose, blades: true);
             return;
         }
 
@@ -715,6 +862,14 @@ public sealed class EntityRenderer
         if (craft.Class == PlayerClass.Virus && craft.Virus is { Hosted: true } worn)
         {
             DrawWornHost(craft, worn, pos, cameraPos, elapsed);
+            return;
+        }
+
+        // The one chassis that is a person rather than a machine, and the one the turntable
+        // draw is wrong for: a body has to be posed for what it is doing, not merely turned.
+        if (craft.Class == PlayerClass.Soldier)
+        {
+            DrawSoldierCraft(craft, pos, cameraPos, elapsed);
             return;
         }
 
@@ -776,7 +931,8 @@ public sealed class EntityRenderer
             case VirusHost.Soldier:
                 // The person, drawn from the same articulated figure the hangar shows. It carries
                 // its own palette; the infection reads from the veins laid over it below.
-                _soldierModel.Draw(build, pos, heading, cameraPos, elapsed);
+                _soldierModel.Draw(build, pos, heading, cameraPos,
+                    IdlePose(_hangarFigure, pos, heading, elapsed));
                 coreY = craft.Height + 2.2f;
                 break;
 
@@ -871,7 +1027,8 @@ public sealed class EntityRenderer
             case PlayerClass.Soldier:
                 // Posed rather than merely turned: it breathes, shifts its weight, scans
                 // the hangar and periodically raises a launcher to check the hook in it.
-                _soldierModel.Draw(loadout, pos, heading, cameraPos, elapsed);
+                _soldierModel.Draw(loadout, pos, heading, cameraPos,
+                    IdlePose(_hangarFigure, pos, heading, elapsed));
                 break;
 
             case PlayerClass.Fish:

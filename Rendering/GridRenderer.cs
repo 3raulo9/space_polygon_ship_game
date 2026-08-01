@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// The floor: a solid chess-board of filled cells receding into fog (Doc 02).

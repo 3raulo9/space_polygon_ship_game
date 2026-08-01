@@ -1,7 +1,7 @@
 using System.Numerics;
 using Raylib_cs;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// A tiny hand-drawn 5×7 bitmap font, rendered by stamping solid rectangles per lit

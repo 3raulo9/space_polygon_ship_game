@@ -1,4 +1,4 @@
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// Which world a match is played on. PLANET is the game as it has always been — the city,

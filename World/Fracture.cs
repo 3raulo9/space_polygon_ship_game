@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.World;
+namespace Unrendered.World;
 
 /// <summary>One block of a fractured tower, in the structure's own local (unscaled) space —
 /// the same space the renderer's tower meshes are built in, so a chunk drawn at the
