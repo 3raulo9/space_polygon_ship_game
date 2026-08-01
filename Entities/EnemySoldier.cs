@@ -514,8 +514,8 @@ public sealed class EnemySoldier
         // Transform is eased, not snapped: store it as the target and let the client's step
         // glide the drawn soldier onto it, so a squad that updates twenty times a second still
         // flies smoothly. The first sighting snaps so a new member appears where it is.
-        if (!_hasNet) { Position = pos; Height = height; Heading = heading; _hasNet = true; }
-        _netPos = pos; _netHeight = height; _netHeading = heading;
+        if (_glide.Report(pos)) { Position = pos; Height = height; Heading = heading; }
+        _netHeight = height; _netHeading = heading;
         // The rest is display state the renderer reads outright — no in-between to interpolate.
         Move = move;
         Bank = bank;
@@ -528,15 +528,16 @@ public sealed class EnemySoldier
     /// every squad member the latest packet named so the rest can be dropped.</summary>
     public bool NetSeen;
 
-    private Vector2 _netPos;
+    private NetGlide _glide;
     private float _netHeight, _netHeading;
-    private bool _hasNet;
 
-    /// <summary>Client-side: eases this soldier one frame toward its last reported transform.</summary>
-    public void EaseToNet(float k)
+    /// <summary>Client-side: eases this soldier one frame toward its last reported transform,
+    /// which coasts through a missed packet rather than standing still — see <see cref="NetGlide"/>.</summary>
+    public void EaseToNet(float k, float dt)
     {
-        if (!_hasNet) return;
-        Position = Torus.Wrap(Position + Torus.Delta(Position, _netPos) * k);
+        if (!_glide.Has) return;
+        _glide.Coast(dt);
+        Position = Torus.Wrap(Position + Torus.Delta(Position, _glide.Target) * k);
         Height += (_netHeight - Height) * k;
         Heading += MathF.IEEERemainder(_netHeading - Heading, MathF.Tau) * k;
     }

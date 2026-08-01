@@ -211,23 +211,26 @@ public sealed class EnemyTank
     /// would have two hunters sharing a past.</summary>
     public int HitId;
 
-    private Vector2 _netPos;
+    private NetGlide _glide;
     private float _netHeading;
-    private bool _hasNet;
 
     /// <summary>Client-side: records where the host last put this hunter. Snaps on first sight,
     /// eases every time after.</summary>
     public void NetTarget(Vector2 pos, float heading)
     {
-        if (!_hasNet) { Position = pos; Heading = heading; _hasNet = true; }
-        _netPos = pos; _netHeading = heading;
+        if (_glide.Report(pos)) { Position = pos; Heading = heading; }
+        _netHeading = heading;
     }
 
-    /// <summary>Client-side: eases this hunter one frame toward its last reported transform.</summary>
-    public void EaseToNet(float k)
+    /// <summary>Client-side: eases this hunter one frame toward its last reported transform,
+    /// which carries itself forward through a missed packet rather than standing still — see
+    /// <see cref="NetGlide"/>. A stalling hunter is the most visible thing on a client's screen:
+    /// there are dozens of them and they are all doing it at once.</summary>
+    public void EaseToNet(float k, float dt)
     {
-        if (!_hasNet) return;
-        Position = Torus.Wrap(Position + Torus.Delta(Position, _netPos) * k);
+        if (!_glide.Has) return;
+        _glide.Coast(dt);
+        Position = Torus.Wrap(Position + Torus.Delta(Position, _glide.Target) * k);
         Heading += MathF.IEEERemainder(_netHeading - Heading, MathF.Tau) * k;
     }
 

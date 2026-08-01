@@ -88,10 +88,35 @@ public readonly struct InputFrame
     public readonly Btn Pressed;
 
     /// <summary>Mouse movement for this tick in sixteenths of a pixel. Quantised so the
-    /// frame stays a fixed twelve bytes on the wire; a sixteenth of a pixel is far below
-    /// what the look sensitivity can express, so nothing is lost that anyone can feel.
-    /// Only meaningful while the cursor is captured.</summary>
+    /// frame stays small; a sixteenth of a pixel is far below what the look sensitivity can
+    /// express, so nothing is lost that anyone can feel. Only meaningful while the cursor is
+    /// captured — and, since <see cref="Aim"/> arrived, only meaningful <em>locally</em>: it
+    /// is deliberately not on the wire (see the format note at the bottom).</summary>
     public readonly short LookX, LookY;
+
+    /// <summary>
+    /// Where this craft is actually pointing, in radians, quantised the same way the snapshot
+    /// quantises a heading. Zero and meaningless unless <see cref="HasAim"/>.
+    ///
+    /// <para>This is the half of the frame the host <em>takes at its word</em>. Aim used to
+    /// cross as <see cref="LookX"/>/<see cref="LookY"/> — a mouse <em>delta</em> the host
+    /// integrated — and that cannot work over a lossy channel: every dropped input packet
+    /// deducted a permanent, unrecoverable amount from the host's idea of where the client was
+    /// looking, and the only thing that ever corrected the disagreement was the client's own
+    /// reconciliation yanking its camera backwards onto a heading it had never chosen. An
+    /// absolute angle is self-healing: a lost packet costs one tick of freshness and the next
+    /// one puts the host back exactly on the player's line.</para>
+    /// </summary>
+    public readonly short AimYaw, AimPitch;
+
+    /// <summary>True when <see cref="AimYaw"/>/<see cref="AimPitch"/> mean anything — set on
+    /// every frame a networked client sends, and never on a locally-sampled one (the machine
+    /// doing the sampling turns its own craft with the mouse delta, as it always did).</summary>
+    public readonly bool HasAim;
+
+    /// <summary>Radians per quantised unit, matching <c>Snapshot</c>'s heading scale so an
+    /// angle costs the same two bytes and the same precision everywhere it is written.</summary>
+    private const float AimScale = 65536f / MathF.Tau;
 
     public InputFrame(Btn down, Btn pressed, Vector2 look)
     {
@@ -99,15 +124,35 @@ public readonly struct InputFrame
         Pressed = pressed;
         LookX = Quantise(look.X);
         LookY = Quantise(look.Y);
+        AimYaw = 0; AimPitch = 0; HasAim = false;
     }
 
-    private InputFrame(Btn down, Btn pressed, short lx, short ly)
+    private InputFrame(Btn down, Btn pressed, short lx, short ly,
+                       short aimYaw, short aimPitch, bool hasAim)
     {
         Down = down; Pressed = pressed; LookX = lx; LookY = ly;
+        AimYaw = aimYaw; AimPitch = aimPitch; HasAim = hasAim;
     }
 
     private static short Quantise(float px)
         => (short)Math.Clamp(MathF.Round(px * 16f), short.MinValue, short.MaxValue);
+
+    private static short QuantiseAngle(float radians)
+        => (short)Math.Clamp(MathF.Round(MathF.IEEERemainder(radians, MathF.Tau) * AimScale),
+                             short.MinValue, short.MaxValue);
+
+    /// <summary>
+    /// The same frame, stamped with the absolute direction the craft is pointing. What a
+    /// client puts on every input packet just before it goes out, so the host drives that seat
+    /// along the line the player is really looking down rather than along a running total of
+    /// mouse deltas it may have holes in.
+    /// </summary>
+    public InputFrame WithAim(float heading, float pitch)
+        => new(Down, Pressed, LookX, LookY, QuantiseAngle(heading), QuantiseAngle(pitch), true);
+
+    /// <summary>The stamped direction, in radians, as (yaw, pitch). Meaningless unless
+    /// <see cref="HasAim"/>.</summary>
+    public Vector2 Aim => new(AimYaw / AimScale, AimPitch / AimScale);
 
     /// <summary>A tick with nothing held and nothing pressed — a player whose hands are off
     /// the keys, which is also what a disconnected peer looks like until it says otherwise.</summary>
@@ -125,8 +170,25 @@ public readonly struct InputFrame
     /// kept. This is what the second and later sim steps inside one render frame get:
     /// a craft carries on driving under a held W, but one click stays one shot and the
     /// frame's mouse movement is applied exactly once.
+    ///
+    /// <para>The aim is <em>kept</em>. This frame is also what the host falls back to for a
+    /// seat whose input packet did not arrive this tick, and a player who is still holding W
+    /// is also still pointing where they were pointing — zeroing it would swing their craft to
+    /// face north for one tick every time the wire hiccupped.</para>
     /// </summary>
-    public InputFrame Repeat() => new(Down, Btn.None, 0, 0);
+    public InputFrame Repeat() => new(Down, Btn.None, 0, 0, AimYaw, AimPitch, HasAim);
+
+    /// <summary>
+    /// This frame, plus the edges of an <paramref name="earlier"/> one being skipped over.
+    ///
+    /// The host eats two ticks of input in one step when a client's packets have arrived in a
+    /// clump and it has fallen behind. Held keys and aim come from this frame — it is the newer
+    /// and therefore the truer account of where the hands are — but the edges are OR'd, because
+    /// the tick being caught up on is still a tick on which the player pressed something, and
+    /// silently dropping it is the same lost action the redundancy exists to prevent.
+    /// </summary>
+    public InputFrame Absorbing(in InputFrame earlier)
+        => new(Down, Pressed | earlier.Pressed, LookX, LookY, AimYaw, AimPitch, HasAim);
 
     /// <summary>
     /// The same frame with every trigger cleared, but the movement left alone. What a client
@@ -141,7 +203,7 @@ public readonly struct InputFrame
                          | Btn.TankLurch | Btn.TankSmoke | Btn.TankSlug | Btn.SpiderPounce
                          | Btn.LeftHook | Btn.RightHook
                          | Btn.Slot1 | Btn.Slot2 | Btn.Slot3 | Btn.Slot4;
-        return new(Down & ~combat, Pressed & ~combat, LookX, LookY);
+        return new(Down & ~combat, Pressed & ~combat, LookX, LookY, AimYaw, AimPitch, HasAim);
     }
 
     // --- What the chassis actually ask for ---------------------------------------
@@ -213,22 +275,35 @@ public readonly struct InputFrame
     public bool InteractPressed => Hit(Btn.Interact);
 
     // --- Wire format --------------------------------------------------------------
-    // Fixed twelve bytes, little-endian, no version tag. The tag belongs on the packet
-    // that carries a run of these, not on every frame inside it.
+    // Fixed thirteen bytes, little-endian, no version tag. The tag belongs on the packet
+    // that carries a run of these, not on every frame inside it — and a run is exactly what
+    // carries them now, so the size is worth a sentence: a client sends the last dozen frames
+    // in every packet, which makes thirteen bytes into a hundred and sixty. That is still
+    // nothing on an uplink, and it is what turns a lost input packet from a lost action into
+    // no event at all.
+    //
+    // The mouse delta is deliberately NOT here. It was, and it was the wrong thing to send:
+    // the host integrated it, so a dropped packet cost the host a piece of the player's turn
+    // for ever. What crosses instead is the absolute angle the delta produced, which the host
+    // takes outright — see WithAim. LookX/LookY stay on the struct because the machine that
+    // sampled them still turns its own craft with them; they simply stop at the socket.
 
-    public const int Size = 12;
+    public const int Size = 13;
 
     public void Write(Span<byte> dst)
     {
         BitConverter.TryWriteBytes(dst[..4], (uint)Down);
         BitConverter.TryWriteBytes(dst.Slice(4, 4), (uint)Pressed);
-        BitConverter.TryWriteBytes(dst.Slice(8, 2), LookX);
-        BitConverter.TryWriteBytes(dst.Slice(10, 2), LookY);
+        BitConverter.TryWriteBytes(dst.Slice(8, 2), AimYaw);
+        BitConverter.TryWriteBytes(dst.Slice(10, 2), AimPitch);
+        dst[12] = HasAim ? (byte)1 : (byte)0;
     }
 
     public static InputFrame Read(ReadOnlySpan<byte> src) => new(
         (Btn)BitConverter.ToUInt32(src[..4]),
         (Btn)BitConverter.ToUInt32(src.Slice(4, 4)),
+        0, 0,
         BitConverter.ToInt16(src.Slice(8, 2)),
-        BitConverter.ToInt16(src.Slice(10, 2)));
+        BitConverter.ToInt16(src.Slice(10, 2)),
+        src[12] != 0);
 }

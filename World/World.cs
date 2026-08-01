@@ -304,22 +304,83 @@ public sealed class World : IAnchorField
     private bool _hasNet;
     private bool _netFollow;   // capture/away: the host owns the transform outright — follow it, no deadzone
 
-    // Below this much positional disagreement the prediction is simply trusted: the standing
-    // gap between a predicted craft and the host's confirmation of it is about a round-trip of
-    // travel, and correcting that every snapshot would drag the craft backward the whole time
-    // it drove. Past the snap distance the two have genuinely parted company — a teleport, a bad
-    // desync — and easing across the map would look worse than a cut.
+    // What the correction is measured AGAINST is the whole of whether this feels like a game.
+    //
+    // It used to be measured against the craft's position *now*, and that is guaranteed wrong:
+    // the transform in a snapshot is what the host computed from this client's input a full
+    // round trip ago, so a moving craft is always about (speed x RTT) ahead of it. Correcting
+    // toward it therefore dragged the craft backward the entire time it drove, at every ping,
+    // forever — the rubber band. The old deadzone below existed only to hide that, and it could
+    // not: it is a fixed distance and the error it was hiding grows with latency.
+    //
+    // Now the client keeps a short history of its own predictions and the host says which input
+    // tick each snapshot was computed from, so the error is measured against what this machine
+    // itself predicted FOR THAT SAME TICK. Two things then follow. A prediction that was right
+    // yields an error of zero no matter how bad the ping is, so there is no drag at all. And an
+    // error that is real — a collision the host resolved differently, a knockback, a hyperspace
+    // it rolled its own dice for — is the true size of the disagreement rather than the true
+    // disagreement plus a round trip of ordinary travel, so it can be corrected far more tightly
+    // than the old four units ever dared to.
     //
     // Every one of these is a guess until it has been driven on two machines with real
     // latency between them, so they are read from the environment rather than compiled in:
-    // set VOIDTANKS_NET_DEADZONE / _SNAP / _RATE / _HEADDEAD / _HEADSNAP / _REMOTERATE to
-    // retune a running build without a rebuild, which is the only way a two-machine session
-    // can converge on numbers in one sitting. The defaults are the shipped values.
-    private static readonly float ReconcileDeadzone = Tune("VOIDTANKS_NET_DEADZONE", 4f);
+    // set VOIDTANKS_NET_DEADZONE / _SNAP / _RATE / _REMOTERATE to retune a running build
+    // without a rebuild, which is the only way a two-machine session can converge on numbers
+    // in one sitting. The defaults are the shipped values.
+    private static readonly float ReconcileDeadzone = Tune("VOIDTANKS_NET_DEADZONE", 0.5f);
     private static readonly float ReconcileSnap = Tune("VOIDTANKS_NET_SNAP", 22f);
     private static readonly float ReconcileRate = Tune("VOIDTANKS_NET_RATE", 12f);
-    private static readonly float ReconcileHeadingDead = Tune("VOIDTANKS_NET_HEADDEAD", 0.06f);
-    private static readonly float ReconcileHeadingSnap = Tune("VOIDTANKS_NET_HEADSNAP", 0.7f);
+
+    // --- The prediction history the error is measured against ----------------------
+    //
+    // Sixty-four ticks, a little over a second, which is past any round trip that is still a
+    // game. Indexed by tick modulo the length with the tick stored alongside, so a stale slot
+    // is recognised as stale rather than silently answering for a tick that has rolled off.
+
+    private const int PredictFrames = 64;
+    private readonly Vector2[] _predPos = new Vector2[PredictFrames];
+    private readonly float[] _predHeight = new float[PredictFrames];
+    private readonly uint[] _predTick = new uint[PredictFrames];
+    private bool _predAny;
+
+    /// <summary>The correction still owed to the host, in world units, and how much of the
+    /// height gap is left. Paid off over a few frames by <see cref="SmoothLocalCraft"/> rather
+    /// than all at once, so a real disagreement settles instead of snapping.</summary>
+    private Vector2 _netError;
+    private float _netErrorHeight;
+
+    /// <summary>
+    /// Client-side: files where this machine predicted its own craft would be at the end of
+    /// <paramref name="tick"/>'s step. Called once a tick by the session, before anything the
+    /// host has said is folded in, so what is stored is this machine's own honest guess.
+    /// </summary>
+    public void RecordPrediction(uint tick)
+    {
+        if (Authoritative) return;
+        PlayerTank me = Players[LocalIndex];
+        int i = (int)(tick % PredictFrames);
+        _predTick[i] = tick;
+        _predPos[i] = me.Position;
+        _predHeight[i] = me.Height;
+        _predAny = true;
+    }
+
+    /// <summary>
+    /// Slides the whole history by a correction that has just been applied to the craft.
+    ///
+    /// Without this the next snapshot would measure the same disagreement all over again — the
+    /// history would still hold the pre-correction guesses — and the craft would be corrected
+    /// for it a second and third time, which is an oscillation rather than a convergence. Sixty
+    /// -four vector adds on the frames where a correction actually lands; nothing.
+    /// </summary>
+    private void ShiftPredictions(Vector2 by, float byHeight)
+    {
+        for (int i = 0; i < PredictFrames; i++)
+        {
+            _predPos[i] = Torus.Wrap(_predPos[i] + by);
+            _predHeight[i] += byHeight;
+        }
+    }
 
     /// <summary>Reads one network feel constant from the environment, or hands back the
     /// shipped default. Bad text is ignored rather than crashing a session.</summary>
@@ -336,7 +397,12 @@ public sealed class World : IAnchorField
     /// is not predicting anything, so the transform is followed rather than blended against a
     /// prediction that is not happening.
     /// </summary>
-    public void ReconcileLocal(Vector2 pos, float height, float heading, float pitch, bool follow)
+    /// <param name="ackedInputTick">The client tick whose input the host had consumed when it
+    /// computed this transform, echoed back on the packet. Zero when the host has not consumed
+    /// anything from this seat yet (a fresh join), which falls back to the old measurement
+    /// against the craft's current position — worse, but only for the first moments.</param>
+    public void ReconcileLocal(Vector2 pos, float height, float heading, float pitch, bool follow,
+                               uint ackedInputTick = 0)
     {
         _netPos = pos;
         _netHeight = height;
@@ -344,13 +410,47 @@ public sealed class World : IAnchorField
         _netPitch = pitch;
         _netFollow = follow;
         _hasNet = true;
+
+        // The host has the wheel — a seizure, or a craft frozen for a dropped player. There is
+        // no prediction to be right or wrong, so there is no error to carry; the follow branch
+        // of SmoothLocalCraft glides straight onto the transform instead.
+        if (follow) { _netError = Vector2.Zero; _netErrorHeight = 0f; return; }
+
+        PlayerTank me = Players[LocalIndex];
+        int i = (int)(ackedInputTick % PredictFrames);
+
+        if (_predAny && ackedInputTick != 0 && _predTick[i] == ackedInputTick)
+        {
+            // The measurement that makes this whole thing work: host's answer for tick K
+            // against our own guess for tick K. Latency does not appear in it anywhere.
+            _netError = Torus.Delta(_predPos[i], pos);
+            _netErrorHeight = height - _predHeight[i];
+        }
+        else
+        {
+            // No history for that tick — we have just joined, or the host is so far behind that
+            // the tick has rolled out of the ring. Measure against now, which is what this did
+            // before there was a history at all.
+            _netError = Torus.Delta(me.Position, pos);
+            _netErrorHeight = height - me.Height;
+        }
     }
 
     /// <summary>
-    /// Eases the local craft toward the last authoritative transform the host sent. Called once
-    /// a frame on a client, after the craft has predicted its own step. Small errors are left
-    /// alone (the prediction is trusted), real ones are blended out over a few frames, and a
-    /// craft the host has grabbed or frozen simply follows.
+    /// Pays off whatever the craft still owes the host. Called once a frame on a client, after
+    /// the craft has predicted its own step. Small errors are left alone (the prediction is
+    /// trusted), real ones are blended out over a few frames, and a craft the host has grabbed
+    /// or frozen simply follows.
+    ///
+    /// <para><b>Aim is not touched here, and that is the point.</b> Where a player is looking is
+    /// theirs — it is the one part of the transform that comes from a hand on a mouse rather
+    /// than from physics, and it is now sent to the host as an absolute angle the host takes at
+    /// its word (see <see cref="SetInput"/> and <c>InputFrame.WithAim</c>). Correcting it here
+    /// was fighting a battle that no longer exists, and losing it visibly: the host's heading
+    /// was a round trip stale, so a fast flick built an error past the old snap threshold and
+    /// the camera was wrenched back onto a line the player had already turned away from. The
+    /// follow branch below still moves it, because a craft in a seizure is not being aimed by
+    /// anybody.</para>
     /// </summary>
     private void SmoothLocalCraft(float dt)
     {
@@ -370,22 +470,30 @@ public sealed class World : IAnchorField
             return;
         }
 
-        // Position: trust small errors, ease real ones, cut on a genuine parting.
-        Vector2 err = Torus.Delta(me.Position, _netPos);
-        float dist = err.Length();
-        if (dist > ReconcileSnap) me.Position = _netPos;
-        else if (dist > ReconcileDeadzone) me.Position = Torus.Wrap(me.Position + err * k);
+        // Position: trust a small disagreement, ease a real one, cut on a genuine parting.
+        // Whatever is paid off is taken off the outstanding error AND slid through the
+        // prediction history, so the next snapshot measures what is still wrong rather than
+        // billing for the same correction twice.
+        float dist = _netError.Length();
+        if (dist <= ReconcileDeadzone) _netError = Vector2.Zero;
+        else
+        {
+            Vector2 step = dist > ReconcileSnap ? _netError : _netError * k;
+            me.Position = Torus.Wrap(me.Position + step);
+            _netError -= step;
+            ShiftPredictions(step, 0f);
+        }
 
-        // Heading: the same deadzone-then-blend, so mouse aim stays the player's but never
-        // drifts from what the host is telling everyone else the craft points at.
-        float dh = MathF.IEEERemainder(_netHeading - me.Heading, MathF.Tau);
-        float ah = MathF.Abs(dh);
-        if (ah > ReconcileHeadingSnap) me.Heading = _netHeading;
-        else if (ah > ReconcileHeadingDead) me.Heading += dh * k;
-
-        // Height eases in without a deadzone — a jump the host resolved differently should
-        // settle rather than hang a few units off the deck.
-        if (MathF.Abs(_netHeight - me.Height) > 0.05f) me.Height += (_netHeight - me.Height) * k;
+        // Height settles without a deadzone — a jump the host resolved differently should come
+        // to rest on the deck rather than hang a few units off it.
+        if (MathF.Abs(_netErrorHeight) > 0.05f)
+        {
+            float hstep = _netErrorHeight * k;
+            me.Height += hstep;
+            _netErrorHeight -= hstep;
+            ShiftPredictions(Vector2.Zero, hstep);
+        }
+        else _netErrorHeight = 0f;
     }
 
     /// <summary>How fast a remote puppet is eased onto the host's latest report of it, per
@@ -404,9 +512,9 @@ public sealed class World : IAnchorField
     {
         float k = 1f - MathF.Exp(-RemoteSmoothRate * dt);
         for (int i = 0; i < Players.Count; i++)
-            if (i != LocalIndex) Players[i].EaseToNet(k);
-        foreach (var e in Enemies) e.EaseToNet(k);
-        foreach (var s in Soldiers) s.EaseToNet(k);
+            if (i != LocalIndex) Players[i].EaseToNet(k, dt);
+        foreach (var e in Enemies) e.EaseToNet(k, dt);
+        foreach (var s in Soldiers) s.EaseToNet(k, dt);
     }
 
     // --- Lag compensation ---------------------------------------------------------
@@ -4007,7 +4115,24 @@ public sealed class World : IAnchorField
     /// client's input frame lands after it comes off the wire.</summary>
     public void SetInput(int seat, in InputFrame frame)
     {
-        if ((uint)seat < (uint)_inputs.Length) _inputs[seat] = frame;
+        if ((uint)seat >= (uint)_inputs.Length) return;
+        _inputs[seat] = frame;
+
+        // A networked frame carries the absolute direction its player is pointing, and the
+        // host takes it outright rather than re-deriving it from mouse deltas it may have
+        // holes in. Applied HERE, before the step rather than after it, because the craft
+        // drives along its heading: stamping the aim afterwards would move it a tick's worth
+        // in the direction it was facing last time and only then turn it.
+        //
+        // Not while a cinematic or a seizure has the wheel, and not on a craft frozen for a
+        // dropped player — in all three the transform belongs to the host and a stale angle
+        // from before the hold must not wrench it back.
+        if (!frame.HasAim || (uint)seat >= (uint)Players.Count) return;
+        PlayerTank who = Players[seat];
+        if (who.Captured || who.Away) return;
+        Vector2 aim = frame.Aim;
+        who.Heading = aim.X;
+        who.Pitch = Math.Clamp(aim.Y, -who.LookElevation, who.LookElevation);
     }
 
     /// <summary>

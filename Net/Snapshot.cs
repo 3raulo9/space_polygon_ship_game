@@ -139,7 +139,13 @@ public static class Snapshot
     /// snapping it back to a position from a hundred milliseconds ago would judder in the
     /// player's hands.
     /// </summary>
-    public static uint ApplyPlayers(World.World world, ReadOnlySpan<byte> src)
+    /// <param name="ackedInputTick">Which of this client's own input ticks the host had
+    /// consumed when it wrote the packet. Carried per recipient on the packet header and handed
+    /// to <see cref="World.World.ReconcileLocal"/>, which is what lets the local craft's error
+    /// be measured against its own prediction for that same tick instead of against a position
+    /// a round trip out of date.</param>
+    public static uint ApplyPlayers(World.World world, ReadOnlySpan<byte> src,
+                                    uint ackedInputTick = 0)
     {
         try
         {
@@ -191,7 +197,7 @@ public static class Snapshot
                     me.Captured = held;
                     me.Away = (mark & Mark.Away) != 0;
                     world.ReconcileLocal(Torus.Wrap(new Vector2(x, y)), h, head, pitch,
-                        follow: held || me.Away);
+                        follow: held || me.Away, ackedInputTick: ackedInputTick);
                     continue;
                 }
 
@@ -726,6 +732,20 @@ public static class Snapshot
         }
         dst[soldierCountAt] = (byte)ns;
         return at;
+    }
+
+    /// <summary>
+    /// Whether a freshly written bosses packet actually describes anything — either boss in
+    /// range, or a squad member. An empty one is six bytes that say "drop the puppets", which
+    /// matters exactly once per boss and is worth sending at a slow couple of hertz rather than
+    /// at the full snapshot rate. See the tiering in <c>Session.Broadcast</c>.
+    /// </summary>
+    public static bool BossesCarryAnything(ReadOnlySpan<byte> written)
+    {
+        // tick(4), flags(1), ...bodies..., soldierCount(1). Flags non-zero means a boss is in
+        // range; the squad count is the last byte, whatever the bosses took up before it.
+        if (written.Length < 6) return false;
+        return written[4] != 0 || written[^1] != 0;
     }
 
     /// <summary>Lays a bosses packet over this client's world, installing or dropping the
