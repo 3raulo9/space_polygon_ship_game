@@ -110,7 +110,7 @@ public sealed class Game : IDisposable
         Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_MENU");
     private bool _captureMenu =>
         _captureScreen is "1" or "menu" or "settings" or "controls" or "sound"
-                       or "test" or "class" or "lobby" or "room";
+                       or "test" or "class" or "lobby" or "room" or "starmap";
     private int _frame;
 
     /// <summary>Capture-only: the harness is holding the SPIDER's lance charge, so no
@@ -266,6 +266,15 @@ public sealed class Game : IDisposable
                 // LAUNCH tears down the hangar and starts a fade, which owns the next
                 // frame — so only draw the hangar while we're actually still in it.
                 if (_state == GameState.ClassSelect && !_fading) DrawClassSelect();
+                continue;
+            }
+
+            if (_state == GameState.StarMap)
+            {
+                UpdateStarMap();
+                // Same rule as the hangar: the drop starts a fade that owns the next frame, so
+                // only draw the chart while we are genuinely still standing at it.
+                if (_state == GameState.StarMap && !_fading) DrawStarMap();
                 continue;
             }
 
@@ -501,11 +510,13 @@ public sealed class Game : IDisposable
 
         switch (_menu.Update())
         {
-            case Menu.Action.StartSinglePlayer:
-                // Single Player no longer drops straight into the world: it opens the
-                // hangar first, where the chassis and the build are chosen. The fade
-                // still runs, so the menu dissolves into the hangar the same way it
+            case Menu.Action.StartDescent:
+            case Menu.Action.StartSandbox:
+                // Neither drops straight into the world: both open the hangar first, where the
+                // chassis and the build are chosen, and then the chart, where the world is.
+                // The fade still runs, so the menu dissolves into the hangar the same way it
                 // used to dissolve into the grid.
+                _soloMode = _menu.Selected == Menu.Item.Descent ? GameMode.Descent : GameMode.Sandbox;
                 BeginFade(() => _state = GameState.ClassSelect);
                 break;
             case Menu.Action.StartMultiplayer:
@@ -550,7 +561,9 @@ public sealed class Game : IDisposable
                 {
                     MpRole.Host => StartHosting,
                     MpRole.Join => StartJoining,
-                    _ => EnterSinglePlayer,
+                    // Solo: the craft is settled, now choose where to take it. A match has
+                    // already done this at the lobby's holo table before anyone reaches a pod.
+                    _ => OpenStarMap,
                 });
                 break;
             case ClassSelectScreen.Action.Back:
@@ -741,6 +754,7 @@ public sealed class Game : IDisposable
             case GameState.ClassSelect: _renderer.DrawClassSelect(_classSelect, _menuTime); break;
             case GameState.Settings: _renderer.DrawSettings(_settingsScreen, _menuTime); break;
             case GameState.Test: _renderer.DrawTest(_testScreen, _menuTime); break;
+            case GameState.StarMap: _renderer.DrawStarMap(_soloChart, _soloMode, _menuTime); break;
             case GameState.Lobby:
                 if (_room != null) _renderer.DrawLobbyRoom(_room, _menuTime);
                 else _renderer.DrawMenu(_menu, _menuTime);
@@ -950,10 +964,50 @@ public sealed class Game : IDisposable
         _room.Connecting();
     }
 
+    /// <summary>Which of the two games a solo run is. Set at the title menu, carried through
+    /// the hangar and the chart, and handed to the world at the drop.</summary>
+    private GameMode _soloMode = GameMode.Sandbox;
+
+    /// <summary>The solo chart. Kept between runs so a player who lands, dies and comes back is
+    /// looking at the world they last chose rather than at SOLUNE again.</summary>
+    private readonly UI.StarMap _soloChart = new();
+
+    /// <summary>The hangar is done: put the chart up. No vote here — there is nobody to vote
+    /// with, so the cursor <em>is</em> the decision and Enter takes it.</summary>
+    private void OpenStarMap() => _state = GameState.StarMap;
+
+    /// <summary>
+    /// Advances the solo chart. Left/right turn it, Enter drops, Escape falls back to the
+    /// hangar — through the same dissolve as everything else, so no screen hard-cuts.
+    /// </summary>
+    private void UpdateStarMap()
+    {
+        _menuTime += Raylib.GetFrameTime();
+
+        if (InputMap.MenuLeft) _soloChart.Move(-1);
+        if (InputMap.MenuRight) _soloChart.Move(+1);
+
+        if (InputMap.MenuConfirm) { BeginFade(EnterSinglePlayer); return; }
+        if (Raylib.IsKeyPressed(KeyboardKey.Escape)) BeginFade(() => _state = GameState.ClassSelect);
+    }
+
     private void EnterSinglePlayer()
     {
-        // Explicitly the solo match: one seat, sealed, nobody can be dropped into it.
-        _world = new World.World(_loadout, MatchSettings.SinglePlayer);
+        // Explicitly the solo match: one seat, sealed, nobody can be dropped into it — now
+        // with the mode chosen at the title and the world chosen at the chart.
+        MatchSettings solo = MatchSettings.SinglePlayer;
+        solo.Mode = _soloMode;
+        solo.Destination = _soloChart.Cursor;
+
+        // Capture overrides: the harness reaches the world directly, with no menu and no chart
+        // to walk, so UNRENDERED_PLANET picks the destination and UNRENDERED_HOUR (0 dawn,
+        // .25 noon, .5 dusk, .75 midnight) sets the clock. Both are ignored in normal play.
+        if (_capturePath != null) solo.Destination = CapturePlanet();
+
+        _world = new World.World(_loadout, solo);
+        if (_capturePath != null
+            && float.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_HOUR"), out float hour))
+            _world.SetDayPhaseForTest(hour);
         _state = GameState.Playing;
         _inventoryOpen = false;
     }
@@ -1022,6 +1076,13 @@ public sealed class Game : IDisposable
                         int.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_ROW"),
                             out int row) ? row : 0);
                     _renderer.DrawSettings(_settingsScreen, _menuTime);
+                }
+                else if (_captureScreen == "starmap")
+                {
+                    // UNRENDERED_PLANET=<name|index> turns the chart to a given world, so each
+                    // of the five readouts can be photographed without walking the cursor.
+                    _soloChart.PointAt(CapturePlanet());
+                    _renderer.DrawStarMap(_soloChart, _soloMode, _menuTime);
                 }
                 else if (_captureScreen == "class") _renderer.DrawClassSelect(_classSelect, _menuTime);
                 else if (_captureScreen == "test") _renderer.DrawTest(_testScreen, _menuTime);
@@ -1414,6 +1475,22 @@ public sealed class Game : IDisposable
     /// stations and a few avatars can be photographed headlessly. UNRENDERED_ROOM=antechamber
     /// grabs the entry face instead; otherwise it is the room proper with the local player
     /// seated as host and two others milling about.</summary>
+    /// <summary>Capture-only: which world the chart is turned to, by name or by index.
+    /// Defaults to SOLUNE, the one with the cycle and so the one worth looking at.</summary>
+    private static PlanetId CapturePlanet()
+    {
+        string? want = Environment.GetEnvironmentVariable("UNRENDERED_PLANET");
+        if (string.IsNullOrEmpty(want)) return PlanetId.Solune;
+        if (int.TryParse(want, out int i) && i >= 0 && i < Planet.All.Count) return (PlanetId)i;
+        foreach (var p in Planet.All)
+            if (string.Equals(p.Name, want, StringComparison.OrdinalIgnoreCase)) return p.Id;
+        return PlanetId.Solune;
+    }
+
+    /// <summary>Capture-only: builds a representative lobby room so the dome, the planet, the
+    /// stations and a few avatars can be photographed headlessly. UNRENDERED_ROOM=antechamber
+    /// grabs the entry face; UNRENDERED_ROOM=vote opens a destination vote with ballots already
+    /// cast, so the holo chart and its pips can be seen doing something.</summary>
     private World.LobbyRoom CaptureRoom()
     {
         if (_room != null) return _room;
@@ -1431,6 +1508,25 @@ public sealed class Game : IDisposable
         // avatars and the planet glowing up through the glass at once.
         room.Position = new System.Numerics.Vector2(0f, -14f);
         room.Pitch = -0.22f;
+
+        if (Environment.GetEnvironmentVariable("UNRENDERED_ROOM") == "vote")
+        {
+            room.OpenVoteForTest();
+            room.Chart.Cast(0, PlanetId.Thalos);
+            room.Chart.Cast(1, PlanetId.Thalos);
+            room.Chart.Cast(2, PlanetId.Kirene);
+            // Stand a few paces off the table looking at it, rather than back by the door —
+            // close enough to read the pips, far enough that the chart is a table and not a
+            // wall of moons.
+            room.Position = new System.Numerics.Vector2(0f, 7.5f);
+            room.Pitch = -0.06f;
+            // And move the other two out of the shot; they open standing right where the
+            // camera has to be to see the chart at all.
+            room.ApplyAvatar(1, "RAUL", PlayerClass.Tank, true,
+                new System.Numerics.Vector2(-9f, 15f), 2.4f, 0f, 0f);
+            room.ApplyAvatar(2, "MOTE", PlayerClass.Virus, false,
+                new System.Numerics.Vector2(9f, 15f), -1.2f, 0f, 2.5f);
+        }
         return _room = room;
     }
 
@@ -1489,6 +1585,12 @@ public sealed class Game : IDisposable
     private void DrawClassSelect()
     {
         _renderer.DrawClassSelect(_classSelect, _menuTime);
+        _renderer.Present();
+    }
+
+    private void DrawStarMap()
+    {
+        _renderer.DrawStarMap(_soloChart, _soloMode, _menuTime);
         _renderer.Present();
     }
 

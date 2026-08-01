@@ -29,7 +29,7 @@ public sealed class LobbyRoom
     /// <summary>What the local player is currently leaning on. While focused on a station the
     /// walker is frozen and the station owns Left/Right/Up/Down, so nothing a nav key does can
     /// also nudge the avatar across the floor.</summary>
-    public enum Focus { Walking, Pod, Console, Code, Naming }
+    public enum Focus { Walking, Pod, Console, Code, Naming, Chart }
 
     /// <summary>What the room is asking the loop to do this frame. Everything else — a pick, a
     /// name, a rules change — the room records on itself and the loop reads through the dirty
@@ -56,6 +56,11 @@ public sealed class LobbyRoom
     // Room stations.
     public static readonly Vector2 Pod = new(-11f, 4f);
     public static readonly Vector2 ConsoleStation = new(11f, 4f);
+
+    /// <summary>The holo chart of the five worlds, stood in the middle of the floor between the
+    /// pod and the console rather than off at a wall — it is the one station the whole room has
+    /// business at, and a vote should look like people gathering round a table.</summary>
+    public static readonly Vector2 ChartStation = new(0f, 14f);
 
     // --- One player in the room -------------------------------------------------------
 
@@ -108,6 +113,15 @@ public sealed class LobbyRoom
 
     /// <summary>The console row the host is on. Mirrors the old text lobby's rows.</summary>
     public UI.LobbyScreen.Row ConsoleRow { get; private set; } = UI.LobbyScreen.Row.Seats;
+
+    /// <summary>The chart of the five worlds, and the room's vote about which one to drop
+    /// onto. Every player has one; the host's is the one that counts.</summary>
+    public readonly UI.StarMap Chart = new();
+
+    /// <summary>Set on the frame the host opens a vote, for the loop to broadcast and clear.
+    /// The tally itself is pushed continuously while a vote runs, so this only marks the
+    /// <em>start</em> — the one edge a client cannot infer from a countdown it has not seen.</summary>
+    public bool VoteDirty { get; private set; }
 
     /// <summary>The chassis highlighted in the pod, which Enter commits.</summary>
     public int PodIndex { get; private set; }
@@ -169,11 +183,19 @@ public sealed class LobbyRoom
         TypedCode = "";
     }
 
-    public void ClearDirty() { PickDirty = NameDirty = RulesDirty = false; }
+    public void ClearDirty()
+    {
+        PickDirty = NameDirty = RulesDirty = VoteDirty = false;
+        Chart.ClearDirty();
+    }
 
     /// <summary>Test hook: choose a chassis without going through the pod's key handling — the
     /// same effect as confirming a pick at the pod.</summary>
     public void PickForTest(PlayerClass chassis) { MyChassis = chassis; PickDirty = true; }
+
+    /// <summary>Test hook: put the destination to the room without going through the console's
+    /// key handling — the same effect as the host confirming the VOTE row.</summary>
+    public void OpenVoteForTest() { Chart.OpenVote(); VoteDirty = true; }
 
     /// <summary>Test hook: settle the rules without going through the console's key handling —
     /// the same effect as the host nudging every row, including the flag that puts the change
@@ -181,8 +203,34 @@ public sealed class LobbyRoom
     /// path a change arrives <em>from</em> the wire by).</summary>
     public void SetRulesForTest(MatchSettings m) { Match = m.Clamped(); RulesDirty = true; }
 
-    /// <summary>The host applies a live rules edit made at its own console.</summary>
-    public void AdoptRules(MatchSettings m) => Match = m.Clamped();
+    /// <summary>The host applies a live rules edit made at its own console. A client takes the
+    /// same call off the wire — which is also how a settled destination reaches its chart, so
+    /// the hologram in front of a client always shows the world they are actually going to.</summary>
+    public void AdoptRules(MatchSettings m)
+    {
+        Match = m.Clamped();
+        if (!IsHost) Chart.PointAt(Match.Destination);
+    }
+
+    /// <summary>Host-side: run the vote's clock. Returns the world the room settled on the
+    /// frame the countdown expires, and null every other frame.</summary>
+    public PlanetId? TickVote(float dt)
+    {
+        if (!IsHost || !Chart.Tick(dt)) return null;
+        PlanetId won = Chart.Resolve(Match.Destination);
+        SetDestination(won);
+        return won;
+    }
+
+    /// <summary>Host-side: settle the destination, from a vote or from the host's own hand.</summary>
+    public void SetDestination(PlanetId id)
+    {
+        var m = Clone(Match);
+        m.Destination = id;
+        Match = m.Clamped();
+        Chart.PointAt(id);
+        RulesDirty = true;
+    }
 
     /// <summary>How many are seated, for the console readout and the launch gate.</summary>
     public int Seated => Avatars.Count == 0 ? 1 : Avatars.Count;
@@ -206,6 +254,7 @@ public sealed class LobbyRoom
             Focus.Naming => UpdateNaming(input),
             Focus.Code => UpdateCode(input),
             Focus.Pod => UpdatePod(input),
+            Focus.Chart => UpdateChart(input),
             Focus.Console => UpdateConsole(input),
             _ => UpdateWalking(input, dt),
         };
@@ -261,6 +310,7 @@ public sealed class LobbyRoom
             else if (Stage == Phase.InRoom)
             {
                 if (Near(Pod)) { Where = Focus.Pod; PodIndex = MyChassis.HasValue ? (int)MyChassis.Value : 0; }
+                else if (Near(ChartStation)) { Where = Focus.Chart; }
                 else if (IsHost && Near(ConsoleStation)) { Where = Focus.Console; }
             }
         }
@@ -268,6 +318,7 @@ public sealed class LobbyRoom
     }
 
     public bool NearPod => Stage == Phase.InRoom && Near(Pod);
+    public bool NearChart => Stage == Phase.InRoom && Near(ChartStation);
     public bool NearConsole => Stage == Phase.InRoom && IsHost && Near(ConsoleStation);
     public bool NearHost => Stage == Phase.Antechamber && Near(HostPillar);
     public bool NearJoin => Stage == Phase.Antechamber && Near(JoinPillar);
@@ -295,6 +346,31 @@ public sealed class LobbyRoom
         return Action.None;
     }
 
+    // --- The holo chart ---------------------------------------------------------------
+
+    /// <summary>
+    /// Standing at the table. Everyone can walk up and turn the chart — reading the conditions
+    /// on a world you are about to be dropped onto is not a privilege — but what confirming
+    /// does depends on who you are and whether a vote is running: the host settles it outright,
+    /// anyone else casts a ballot, and outside a vote a client's Enter does nothing at all
+    /// rather than pretending to.
+    /// </summary>
+    private Action UpdateChart(in InputFrame input)
+    {
+        if (Raylib.IsKeyPressed(KeyboardKey.Escape)) { Where = Focus.Walking; return Action.None; }
+
+        // Edges, not held, for the same reason the pod uses them: one world per press.
+        if (input.Hit(Btn.TurnLeft)) Chart.Move(-1);
+        if (input.Hit(Btn.TurnRight)) Chart.Move(+1);
+
+        if (Raylib.IsKeyPressed(KeyboardKey.Enter) || input.InteractPressed)
+        {
+            if (Chart.VoteOpen) Chart.CastLocal(LocalSeat);
+            else if (IsHost) SetDestination(Chart.Cursor);
+        }
+        return Action.None;
+    }
+
     // --- The host console -------------------------------------------------------------
 
     private Action UpdateConsole(in InputFrame input)
@@ -311,8 +387,8 @@ public sealed class LobbyRoom
             var m = Clone(Match);
             switch (ConsoleRow)
             {
-                case UI.LobbyScreen.Row.Map:
-                    m.Map = m.Map == GameMap.Planet ? GameMap.Flat : GameMap.Planet;
+                case UI.LobbyScreen.Row.Mode:
+                    m.Mode = m.Mode == GameMode.Sandbox ? GameMode.Descent : GameMode.Sandbox;
                     break;
                 case UI.LobbyScreen.Row.Seats:
                     m.MaxPlayers = Math.Clamp(m.MaxPlayers + nudge, Math.Max(2, Seated), MatchSettings.MaxSeats);
@@ -331,9 +407,21 @@ public sealed class LobbyRoom
             RulesDirty = true;     // the loop mirrors the new rules to every client
         }
 
-        // LAUNCH only once everyone in the room has picked a craft.
-        if (Raylib.IsKeyPressed(KeyboardKey.Enter) && ConsoleRow == UI.LobbyScreen.Row.Launch && AllReady)
-            return Action.Launch;
+        if (Raylib.IsKeyPressed(KeyboardKey.Enter))
+        {
+            // Put the destination to the room. Refused while one is already running, so a host
+            // leaning on Enter cannot keep resetting the clock out from under people.
+            if (ConsoleRow == UI.LobbyScreen.Row.Vote && !Chart.VoteOpen)
+            {
+                Chart.OpenVote();
+                VoteDirty = true;
+            }
+            // LAUNCH only once everyone in the room has picked a craft — and never in the
+            // middle of a vote, which would land the room somewhere it had not finished
+            // arguing about.
+            else if (ConsoleRow == UI.LobbyScreen.Row.Launch && AllReady && !Chart.VoteOpen)
+                return Action.Launch;
+        }
 
         return Action.None;
     }
@@ -445,8 +533,12 @@ public sealed class LobbyRoom
         a.Name = name;
     }
 
-    /// <summary>A seat has left — drop their figure.</summary>
-    public void Remove(int seat) => Avatars.Remove(seat);
+    /// <summary>A seat has left — drop their figure, and their ballot with it.</summary>
+    public void Remove(int seat)
+    {
+        Avatars.Remove(seat);
+        Chart.Withdraw(seat);
+    }
 
     /// <summary>Mirror the local walker into its own avatar entry so the roster and the launch
     /// gate see it too.</summary>
@@ -471,7 +563,8 @@ public sealed class LobbyRoom
         MaxPlayers = m.MaxPlayers,
         FriendlyFire = m.FriendlyFire,
         Revives = m.Revives,
-        Map = m.Map,
+        Destination = m.Destination,
+        Mode = m.Mode,
         SpawnEnemies = m.SpawnEnemies,
     };
 }

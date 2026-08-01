@@ -164,9 +164,12 @@ public static partial class SelfTest
         failures += Check("a dropped player is held, then restored on rejoin", DropAndRejoinRestoresTheSeat);
         failures += Check("a rejoined player's controls still reach the host", ARejoinedPlayerCanStillDrive);
         failures += Check("a full match refuses a new joiner but not a rejoiner", FullMatchStillLetsYouBack);
-        failures += Check("FLAT keeps the city but seeds nothing hostile", FlatMapIsASandbox);
-        failures += Check("PLANET is the full world, unchanged", PlanetMapStillSpawns);
-        failures += Check("the enemies-off toggle survives the wire", EnemyToggleCrossesTheWire);
+        failures += Check("the five worlds are five different places", TheFiveWorldsAreDifferentPlaces);
+        failures += Check("a world's gravity and density reach the sim", APlanetsConditionsReachTheSim);
+        failures += Check("night on SOLUNE closes the fog and the hunters in", NightOnSoluneClosesIn);
+        failures += Check("the destination and the mode survive the wire", RulesSurviveTheWire);
+        failures += Check("the world's clock crosses to a client", TheHoursCrossesTheWire);
+        failures += Check("a room's vote settles on the most-wanted world", TheRoomVoteSettles);
         failures += Check("enemies off empties PLANET but keeps the city", EnemiesOffEmptiesThePlanet);
         failures += Check("a worn host, and its rot, cross the wire", VirusHostCrossesTheWire);
         failures += Check("a tower cut down on the host comes down on the client", StructureDamageCrossesTheWire);
@@ -1630,57 +1633,170 @@ public static partial class SelfTest
             : null;
     }
 
-    private static string? FlatMapIsASandbox()
+    /// <summary>
+    /// The five destinations must actually be five places. A chart that is only a colour swap
+    /// would pass every other test in this file, so this one asserts on the numbers the sim
+    /// reads: no two worlds may agree on all of hostiles, gravity and view distance.
+    /// </summary>
+    private static string? TheFiveWorldsAreDifferentPlaces()
     {
-        var flat = new World.World(null,
-            new MatchSettings { MaxPlayers = 4, Map = GameMap.Flat });
+        if (Planet.All.Count != 5) return $"the chart has {Planet.All.Count} worlds, not five";
 
-        // The city still stands to fight around...
-        if (flat.Structures.Count == 0) return "FLAT threw the city away";
-        // ...but nothing hostile was seeded, and the spawn director is off.
-        if (flat.Enemies.Count != 0) return $"FLAT opened with {flat.Enemies.Count} enemies";
-        if (flat.Pickups.Count != 0) return $"FLAT seeded {flat.Pickups.Count} pickups";
-        if (flat.Boss != null || flat.Maw != null) return "FLAT raised a boss";
-        if (flat.DynamicSpawning) return "FLAT left the spawn director running";
+        for (int i = 0; i < Planet.All.Count; i++)
+        {
+            Planet a = Planet.All[i];
+            if ((int)a.Id != i) return $"{a.Name} is not at its own index — the wire sends the index";
+            if (a.Murk is < 0f or > 1f) return $"{a.Name}'s murk is outside 0..1";
+            if (a.Gravity <= 0f) return $"{a.Name} has no gravity at all";
 
-        // Stepping it a while must not conjure anything out of the empty sim.
-        for (int i = 0; i < 60 * 30; i++) flat.StepForTest((float)Config.FixedDt);
-        if (flat.Enemies.Count != 0) return $"FLAT spawned {flat.Enemies.Count} enemies over 30s";
+            for (int j = i + 1; j < Planet.All.Count; j++)
+            {
+                Planet b = Planet.All[j];
+                if (a.Name == b.Name) return $"two worlds are both called {a.Name}";
+                if (Same(a.Hostiles, b.Hostiles) && Same(a.Gravity, b.Gravity) && Same(a.Murk, b.Murk))
+                    return $"{a.Name} and {b.Name} are the same place with different paint";
+            }
+        }
+
+        // The draw distance is the same everywhere and at every hour — a world says it is hard
+        // to see across by going dark out there, never by pulling its horizon in. Checked at
+        // both ends of SOLUNE's day, which is the only place a per-hour distance could hide.
+        var solune = Planet.Get(PlanetId.Solune);
+        foreach (float hour in new[] { 0f, 0.25f, 0.5f, 0.75f })
+        {
+            SkyLook look = solune.Look(hour);
+            if (look.Murk is < 0f or > 1f) return $"SOLUNE's murk left 0..1 at hour {hour}";
+        }
+        if (Rendering.Atmosphere.FogStart != Config.FogStart
+            || Rendering.Atmosphere.FogEnd != Config.FogEnd)
+            return "the draw distance is not the fixed one";
+
+        // Exactly one world turns. Two would need two clocks on the wire; none would make the
+        // whole day/night system dead code.
+        int cycling = Planet.All.Count(p => p.HasCycle);
+        if (cycling != 1) return $"{cycling} worlds have a day/night cycle — there should be one";
+        if (!Planet.Get(PlanetId.Solune).HasCycle) return "SOLUNE is not the one that turns";
+        return null;
+
+        static bool Same(float x, float y) => MathF.Abs(x - y) < 0.001f;
+    }
+
+    /// <summary>
+    /// A world's conditions have to reach the things that read them: the craft's fall, and how
+    /// hard the director pushes. Checked against ABYSSE and KIRENE, the two extremes.
+    /// </summary>
+    private static string? APlanetsConditionsReachTheSim()
+    {
+        var heavy = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Abysse });
+        var light = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Kirene });
+
+        if (heavy.Player.GravityScale <= light.Player.GravityScale)
+            return "ABYSSE does not pull harder than KIRENE";
+        if (Math.Abs(heavy.Player.GravityScale - Planet.Get(PlanetId.Abysse).Gravity) > 0.001f)
+            return "the craft did not take the world's gravity";
+
+        // Two worlds standing at once must not share their physics — the whole reason gravity
+        // is an instance field and not a global.
+        if (Math.Abs(light.Player.GravityScale - Planet.Get(PlanetId.Kirene).Gravity) > 0.001f)
+            return "one world's gravity leaked into the other's";
+
+        // A host's world is built at the HOST pillar, before anyone has been to the chart — so
+        // the rules that arrive at LAUNCH are the first time it hears which world it is on, and
+        // the craft already standing in it have to be re-weighted. Without this a host who
+        // chose ABYSSE would launch everyone onto it and still jump like they were on SOLUNE.
+        var early = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+        early.EnsureSeat(2);
+        early.Match = new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Abysse };
+        foreach (var craft in early.Players)
+            if (Math.Abs(craft.GravityScale - Planet.Get(PlanetId.Abysse).Gravity) > 0.001f)
+                return "a craft kept the old world's gravity after the rules named a new one";
+
+        // The default solo run lands on SOLUNE and is otherwise the game as it always was: it
+        // opens with a hunter and salvage, and the director is running.
+        var solo = new World.World();
+        if (solo.Match.Destination != PlanetId.Solune) return "a solo world did not default to SOLUNE";
+        if (solo.Match.Mode != GameMode.Sandbox) return "a solo world did not default to SANDBOX";
+        if (solo.Enemies.Count == 0) return "a solo world opened with no hunter";
+        if (solo.Pickups.Count == 0) return "a solo world opened with no salvage";
+        if (!solo.DynamicSpawning) return "a solo world has the spawn director off";
         return null;
     }
 
-    private static string? PlanetMapStillSpawns()
+    /// <summary>
+    /// SOLUNE's night has to be a thing the sim can feel, not just a thing the sky does: at
+    /// midnight the hunters close in and the fog shuts down. Driven off the test hatch rather
+    /// than by waiting six real minutes for the clock to come round.
+    /// </summary>
+    private static string? NightOnSoluneClosesIn()
     {
-        // The default map is the whole game, untouched: it opens with a hunter and salvage,
-        // exactly as a solo run always has.
-        var planet = new World.World(null, new MatchSettings { MaxPlayers = 4, Map = GameMap.Planet });
-        if (planet.Enemies.Count == 0) return "PLANET opened with no hunter";
-        if (planet.Pickups.Count == 0) return "PLANET opened with no salvage";
-        if (!planet.DynamicSpawning) return "PLANET has the spawn director off";
+        var w = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Solune });
+        w.Enemies.Add(new Entities.EnemyTank(new Vector2(0f, 60f), elite: false));
+        var hunter = w.Enemies[^1];
 
-        // And a plain solo world is PLANET.
-        var solo = new World.World();
-        if (solo.Match.Map != GameMap.Planet) return "a solo world was not PLANET";
+        w.SetDayPhaseForTest(0.25f);   // noon
+        float dayRange = hunter.PreferredRange;
+        float dayMurk = w.Sky.Murk;
+        Raylib_cs.Color dayHaze = w.Sky.Fog;
+        if (w.Sky.Night > 0.01f) return "noon on SOLUNE registered as night";
+
+        w.SetDayPhaseForTest(0.75f);   // midnight
+        if (w.Sky.Night < 0.99f) return "midnight on SOLUNE did not register as night";
+        if (hunter.PreferredRange >= dayRange) return "the hunters held the same range after dark";
+
+        // The far field goes darker, and it does it WITHOUT the horizon moving: the whole point
+        // is that the same geometry is still drawn, you just cannot make it out any more.
+        if (w.Sky.Murk <= dayMurk) return "the far field did not go murkier after dark";
+        if (Brightness(w.Sky.Fog) >= Brightness(dayHaze))
+            return "the haze did not darken after dark";
+        if (Rendering.Atmosphere.FogEnd != Config.FogEnd)
+            return "nightfall moved the draw distance";
+
+        // A world with no cycle never moves, however long it is stepped, and never registers
+        // as night.
+        var still = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Verene });
+        float opened = still.DayPhase;
+        for (int i = 0; i < 60 * 30; i++) still.StepForTest((float)Config.FixedDt);
+        if (still.DayPhase != opened) return "a world with no cycle turned anyway";
+        if (still.Sky.Night != 0f) return "a world with no cycle went dark";
+
+        // And a fresh SOLUNE opens in daylight rather than at dawn — landing must not drop
+        // people straight into the half-dark with the fog already shut.
+        var fresh = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Solune });
+        if (fresh.Sky.Night > 0.01f) return "a fresh SOLUNE opened in twilight";
         return null;
+
+        static float Brightness(Raylib_cs.Color c) => c.R + c.G + c.B;
     }
 
     /// <summary>The lobby's new ENEMIES switch is a fifth rules byte; it has to cross the wire
     /// beside the rest and default to on, or a host who turned the fight off would launch a
     /// match every client still thinks is full of hunters.</summary>
-    private static string? EnemyToggleCrossesTheWire()
+    private static string? RulesSurviveTheWire()
     {
         var m = new MatchSettings
         {
             MaxPlayers = 12, FriendlyFire = true, Revives = 7,
-            Map = GameMap.Flat, SpawnEnemies = false,
+            Destination = PlanetId.Thalos, Mode = GameMode.Descent, SpawnEnemies = false,
         };
         Span<byte> buf = stackalloc byte[MatchSettings.Size];
         m.Write(buf);
         MatchSettings r = MatchSettings.Read(buf);
 
         if (r.SpawnEnemies) return "the enemies-off toggle did not survive the wire";
-        if (r.MaxPlayers != 12 || !r.FriendlyFire || r.Revives != 7 || r.Map != GameMap.Flat)
-            return "the rest of the rules did not survive alongside the new toggle";
+        if (r.Destination != PlanetId.Thalos) return "the destination did not survive the wire";
+        if (r.Mode != GameMode.Descent) return "the mode did not survive the wire";
+        if (r.MaxPlayers != 12 || !r.FriendlyFire || r.Revives != 7)
+            return "the rest of the rules did not survive alongside the destination";
+
+        // A byte naming a world this build does not have must land on SOLUNE rather than on
+        // an index into nothing — a malformed welcome must not be able to crash a joiner.
+        Span<byte> junk = stackalloc byte[MatchSettings.Size];
+        m.Write(junk);
+        junk[3] = 200;
+        junk[5] = 200;
+        MatchSettings safe = MatchSettings.Read(junk);
+        if (safe.Destination != PlanetId.Solune) return "a nonsense destination was not clamped";
+        if (safe.Mode != GameMode.Sandbox) return "a nonsense mode was not clamped";
 
         // The default is a match with enemies — an omitted/older setting must never read as off.
         Span<byte> def = stackalloc byte[MatchSettings.Size];
@@ -1689,12 +1805,117 @@ public static partial class SelfTest
         return null;
     }
 
-    /// <summary>Enemies off is independent of the map: PLANET keeps its city and salvage, but
-    /// seeds and spawns nothing hostile — no hunters, no bosses, no squads, ever.</summary>
+    /// <summary>
+    /// A client never runs the spawn director, but it does draw the sky — so the hour has to
+    /// reach it or two people standing on SOLUNE together would be in different halves of the
+    /// day. It rides the field packet; this drives the same two-world rig the rest of the
+    /// netcode is built against and asks whether the client's clock followed the host's.
+    /// </summary>
+    private static string? TheHoursCrossesTheWire()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Typical, seed: 4242);
+        var rules = new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Solune };
+
+        var hostWorld = new World.World(null, rules) { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, rules) { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        // Put the host's clock at dusk and the client's at dawn, then let them talk. Started
+        // deliberately apart: two clocks that agreed to begin with would keep agreeing on
+        // their own, and the test would pass without a byte crossing.
+        hostWorld.SetDayPhaseForTest(0.5f);
+        clientWorld.SetDayPhaseForTest(0f);
+
+        for (int i = 0; i < 600; i++)   // ten seconds
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.StepForTest((float)Config.FixedDt);
+            clientWorld.StepForTest((float)Config.FixedDt);
+        }
+
+        if (client.LastAppliedTick == 0) return "the client never applied a single snapshot";
+
+        float gap = MathF.Abs(hostWorld.DayPhase - clientWorld.DayPhase);
+        if (gap > 0.5f) gap = 1f - gap;   // shortest way round the dial
+        if (gap > 0.01f)
+            return $"the client's clock is {gap:0.000} of a day off the host's after ten seconds";
+
+        // And the clock actually ran — a pair of stopped clocks also agree.
+        if (hostWorld.DayPhase == 0.5f) return "the host's day never advanced";
+        return null;
+    }
+
+    /// <summary>
+    /// The whole point of putting the destination to the room: three people vote, the world
+    /// most of them wanted is the one the match is bound for, and every machine is told. Uses
+    /// the real sessions and the real countdown — no shortcuts through the resolution, because
+    /// the bug this guards against is a client resolving a tie for itself.
+    /// </summary>
+    private static string? TheRoomVoteSettles()
+    {
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 8, Revives = 2 });
+
+        var host = s.Host.Room!;
+        if (host.Match.Destination != PlanetId.Solune) return "the room did not open on SOLUNE";
+
+        host.OpenVoteForTest();
+        s.Step(20);
+
+        // Everyone must have been told a vote is running — including the two clients, whose
+        // charts only know because the opening packet reached them.
+        foreach (Machine m in s.All)
+            if (m.Room is { } r && !r.Chart.VoteOpen)
+                return "a machine in the room was never told the vote had opened";
+
+        // Two for THALOS, one for ABYSSE. THALOS must win outright — no tie, so nothing here
+        // depends on the coin flip.
+        s.All[1].Room!.Chart.PointAt(PlanetId.Thalos);
+        s.All[1].Room!.Chart.CastLocal(s.All[1].Net.LocalSeat);
+        s.All[2].Room!.Chart.PointAt(PlanetId.Thalos);
+        s.All[2].Room!.Chart.CastLocal(s.All[2].Net.LocalSeat);
+        host.Chart.PointAt(PlanetId.Abysse);
+        host.Chart.CastLocal(host.LocalSeat);
+        s.Step(30);
+
+        if (host.Chart.Tally(PlanetId.Thalos) != 2)
+            return $"the host counted {host.Chart.Tally(PlanetId.Thalos)} votes for THALOS, not 2";
+        foreach (Machine m in s.All)
+            if (m.Room is { } r && r.Chart.Tally(PlanetId.Thalos) != 2)
+                return "a client's tally disagreed with the host's";
+
+        // Run the clock out. Twenty seconds at sixty a second, plus a little to let the
+        // result travel.
+        s.Step((int)(UI.StarMap.VoteDuration * 60f) + 60);
+
+        if (host.Chart.VoteOpen) return "the vote never closed";
+        if (host.Match.Destination != PlanetId.Thalos)
+            return $"the room voted THALOS and the host settled on {host.Match.World.Name}";
+        foreach (Machine m in s.All)
+        {
+            if (m.Room is not { } r) continue;
+            if (r.Match.Destination != PlanetId.Thalos)
+                return $"a client was never told the room chose THALOS (it has {r.Match.World.Name})";
+            if (r.Chart.VoteOpen) return "a client's countdown never stopped";
+        }
+        return null;
+    }
+
+    /// <summary>Enemies off is independent of the destination: the world keeps its city and its
+    /// salvage, but seeds and spawns nothing hostile — no hunters, no bosses, no squads, ever.
+    /// This is what the retired FLAT map used to be, without giving up the sky you chose.</summary>
     private static string? EnemiesOffEmptiesThePlanet()
     {
         var world = new World.World(null,
-            new MatchSettings { MaxPlayers = 4, Map = GameMap.Planet, SpawnEnemies = false });
+            new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Solune, SpawnEnemies = false });
 
         if (world.Structures.Count == 0) return "enemies-off threw the city away";
         if (world.Pickups.Count == 0) return "enemies-off seeded no salvage — it is not a hostile";

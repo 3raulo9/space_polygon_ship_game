@@ -57,8 +57,8 @@ internal static class LobbyRenderer
             Palette.GridNear);
 
         int y = 122;
-        Row(font, s, LobbyScreen.Row.Map, "MAP",
-            s.Match.Map == GameMap.Flat ? "FLAT" : "PLANET", y);
+        Row(font, s, LobbyScreen.Row.Mode, "MODE",
+            s.Match.Mode == GameMode.Descent ? "DESCENT" : "SANDBOX", y);
         Row(font, s, LobbyScreen.Row.Seats, "SEATS", s.Match.MaxPlayers.ToString(), y + 16);
         Row(font, s, LobbyScreen.Row.FriendlyFire, "FRIENDLY FIRE",
             s.Match.FriendlyFire ? "ON" : "OFF", y + 32);

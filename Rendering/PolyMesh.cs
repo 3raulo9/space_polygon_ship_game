@@ -82,9 +82,10 @@ public sealed class PolyMesh
         return this;
     }
 
-    // A fixed light direction (Doc 02): a single crude directional term. Points
-    // down and to one side so facets read as distinct planes.
-    private static readonly Vector3 LightDir = Vector3.Normalize(new Vector3(-0.4f, -1f, -0.3f));
+    // A single crude directional term (Doc 02), pointing down and to one side so facets read
+    // as distinct planes. Fixed on four of the five worlds — and on SOLUNE it swings with the
+    // sun, so a facet genuinely lights from the east at dawn and from overhead at noon.
+    private static Vector3 LightDir => Atmosphere.LightDir;
 
     /// <summary>
     /// Draws the mesh at a world position, rotated by <paramref name="heading"/>
@@ -116,7 +117,7 @@ public sealed class PolyMesh
             // A per-instance tint (used by short-lived debris that fade as they
             // die) overrides the face's built-in colour before shading.
             Color shaded = ShadeFace(a, b, c, tint ?? f.BaseColor, cameraPos);
-            Color final = GridRenderer.LerpColor(shaded, Palette.Fog, fog);
+            Color final = GridRenderer.LerpColor(shaded, Atmosphere.FogColor, fog);
 
             Raylib.DrawTriangle3D(a, b, c, final);
         }

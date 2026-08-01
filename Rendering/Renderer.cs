@@ -88,6 +88,11 @@ public sealed class Renderer : IDisposable
         // the match carried on without it. Everything below reads this rather than
         // world.Player, so a spectator gets the whole camera — the chassis's own eye height,
         // its bank, its field of view, the shake of whatever is happening to it.
+        // The air this frame is drawn through: the sky, fog and light of whichever of the five
+        // worlds the match is standing on, at whatever hour it is there. Installed before a
+        // single pixel is laid down, because the floor, every mesh and the sky band all read it.
+        Atmosphere.Adopt(world.Sky);
+
         PlayerTank player = world.Eye;
 
         // First-person eye: sits at the chassis's own eye height above the craft,
@@ -515,6 +520,11 @@ public sealed class Renderer : IDisposable
     /// </summary>
     public void DrawMenu(UI.Menu menu, float elapsed)
     {
+        // No world behind the title, so the default sky — SOLUNE at noon. Reset explicitly
+        // rather than assumed: a player who backs out of a match leaves the atmosphere of
+        // wherever they were standing installed, and the menu would inherit ABYSSE's fog.
+        Atmosphere.Reset();
+
         var pos = IdleDrift(elapsed);
         float pan = MathF.Sin(elapsed * 0.05f) * 0.25f;
         var eye = new Vector3(pos.X, Config.CameraHeight + 1.5f, pos.Y);
@@ -659,6 +669,19 @@ public sealed class Renderer : IDisposable
     /// The walkable multiplayer lobby: a first-person eye at the local walker, looking into a
     /// domed room over a planet, with everyone else drawn as their chosen craft.
     /// </summary>
+    /// <summary>
+    /// The solo chart, between the hangar and the drop. Flat 2D into the same small target as
+    /// every other screen — no world behind it, because you are not standing anywhere yet.
+    /// </summary>
+    public void DrawStarMap(UI.StarMap chart, GameMode mode, float elapsed)
+    {
+        Atmosphere.Reset();
+
+        Raylib.BeginTextureMode(_target);
+        StarMapRenderer.Draw(chart, mode, elapsed, voting: false);
+        Raylib.EndTextureMode();
+    }
+
     public void DrawLobbyRoom(World.LobbyRoom room, float elapsed)
     {
         var eye = new Vector3(room.Position.X, World.LobbyRoom.EyeHeight + room.Height, room.Position.Y);

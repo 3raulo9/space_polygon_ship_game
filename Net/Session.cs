@@ -112,6 +112,17 @@ public enum Msg : byte
     /// perhaps once every few seconds, and there is no next packet to correct a lost one.
     /// </summary>
     Mark = 23,
+
+    /// <summary>
+    /// The room's argument about where to land. One id in both directions, like
+    /// <see cref="Mark"/>, with a kind byte saying which: a client sends CAST ("I am for
+    /// THALOS"), the host sends TALLY (the clock, and who is behind what).
+    ///
+    /// Reliable. A vote is twenty seconds long and a lost ballot is a person's say silently
+    /// not counting — there is no next packet that would fix it in time, and a countdown
+    /// nobody can see move is worse than one that arrives a frame late.
+    /// </summary>
+    Vote = 24,
 }
 
 /// <summary>
@@ -327,7 +338,19 @@ public sealed class Session
             if (room.PickDirty && LocalSeat >= 0)
                 ApplyPick(LocalSeat, room.MyChassis ?? PlayerClass.Tank);
             if (room.NameDirty) { LocalName = room.MyName; Rename(LocalSeat, room.MyName); }
+            if (room.Chart.CastDirty) room.Chart.Cast(LocalSeat, room.Chart.Cursor);
+
+            // The clock, before the rules go out: a countdown that expires this frame settles
+            // the destination, and that new destination should ride the same rules packet
+            // rather than waiting a tick behind the result everyone has already seen.
+            bool settled = room.TickVote((float)Core.Config.FixedDt) is not null;
+
             if (room.RulesDirty) BroadcastRules(room.Match);
+            // Only on the edges that a client cannot work out for itself: the vote opening,
+            // somebody's ballot moving, and the result. The countdown itself is NOT streamed —
+            // every machine runs the same twenty seconds off the opening packet, so a vote is
+            // three or four packets rather than four hundred reliable ones.
+            if (room.VoteDirty || room.Chart.CastDirty || settled) BroadcastVote(room);
             room.ClearDirty();
 
             if (++_sinceRoom >= TicksPerSnapshot)
@@ -357,6 +380,11 @@ public sealed class Session
                     w.ReplacePlayer(LocalSeat, chosen);
             }
             if (room.NameDirty) SendName(room.MyName);
+            // A client runs the same twenty seconds the host does, off the packet that opened
+            // the vote, and simply stops when it reaches zero — it never decides anything. The
+            // result arrives as a rules change, which is the only account of it that counts.
+            room.Chart.Tick((float)Core.Config.FixedDt);
+            if (room.Chart.CastDirty) SendVoteCast(room.Chart.Cursor);
             room.ClearDirty();
             // At the same rate the host describes the room back, rather than sixty times a
             // second. The room is people strolling about a floor; twenty transforms a second
@@ -422,6 +450,51 @@ public sealed class Session
         WriteShort(p, ref at, pitch * RoomAng);
         WriteShort(p, ref at, height * RoomPos);
         _net.Send(0, p.Slice(0, at), reliable: false);
+    }
+
+    // --- The destination vote -----------------------------------------------------------
+
+    private const byte VoteCast = 0;
+    private const byte VoteTally = 1;
+
+    /// <summary>Client → host: this player is for the world under their cursor.</summary>
+    private void SendVoteCast(PlanetId choice)
+    {
+        Span<byte> p = stackalloc byte[3];
+        p[0] = (byte)Msg.Vote;
+        p[1] = VoteCast;
+        p[2] = (byte)choice;
+        _net.Send(0, p, reliable: true);
+    }
+
+    /// <summary>
+    /// Host → all: whether a vote is running, how long is left of it, and every ballot cast so
+    /// far. Sent whole rather than as a delta — twenty seats is twenty bytes, and a tally that
+    /// could disagree with itself after one lost packet would be worse than useless.
+    /// </summary>
+    private void BroadcastVote(World.LobbyRoom room)
+    {
+        Span<byte> p = stackalloc byte[4 + MatchSettings.MaxSeats * 2];
+        int at = 0;
+        p[at++] = (byte)Msg.Vote;
+        p[at++] = VoteTally;
+        p[at++] = (byte)(room.Chart.VoteOpen ? 1 : 0);
+        // Tenths of a second, which is all a countdown on a 320x240 panel can show anyway.
+        p[at++] = (byte)Math.Clamp((int)MathF.Round(room.Chart.SecondsLeft * 10f), 0, 255);
+
+        int countAt = at++;
+        int written = 0;
+        foreach (var (seat, choice) in room.Chart.Votes)
+        {
+            if (written >= MatchSettings.MaxSeats) break;
+            if ((uint)seat >= MatchSettings.MaxSeats) continue;
+            p[at++] = (byte)seat;
+            p[at++] = (byte)choice;
+            written++;
+        }
+        p[countAt] = (byte)written;
+
+        _net.Broadcast(p.Slice(0, at), reliable: true);
     }
 
     private void BroadcastRules(MatchSettings m)
@@ -1438,6 +1511,37 @@ public sealed class Session
                 float height = BitConverter.ToInt16(payload.AsSpan(at, 2)) / RoomPos; at += 2;
                 Room?.ApplyTransform(seat, new System.Numerics.Vector2(x, y), head, pitch, height,
                     _nameOfSeat.TryGetValue(seat, out var n) ? n : "PLAYER");
+                break;
+            }
+
+            case Msg.Vote when IsHost:
+            {
+                // A ballot. Only counted while a vote is actually running — a client that
+                // pressed Enter as the clock ran out must not land a late vote on a room that
+                // has already been told where it is going.
+                if (payload.Length < 3 || payload[1] != VoteCast) break;
+                if (Room is not { } r || !r.Chart.VoteOpen) break;
+                if (!_seatOfPeer.TryGetValue(from, out int voter)) break;
+                var choice = (PlanetId)payload[2];
+                if (!Enum.IsDefined(choice)) break;   // a malformed byte is not a world
+                r.Chart.Cast(voter, choice);
+                BroadcastVote(r);                     // everyone watches the pips move at once
+                break;
+            }
+
+            case Msg.Vote when !IsHost:
+            {
+                if (payload.Length < 5 || payload[1] != VoteTally) break;
+                if (Room is not { } r) break;
+                r.Chart.AdoptClock(payload[2] != 0, payload[3] / 10f);
+                int n = payload[4];
+                if (payload.Length < 5 + n * 2) break;
+                r.Chart.Votes.Clear();
+                for (int i = 0; i < n; i++)
+                {
+                    var pick = (PlanetId)payload[6 + i * 2];
+                    if (Enum.IsDefined(pick)) r.Chart.Cast(payload[5 + i * 2], pick);
+                }
                 break;
             }
 

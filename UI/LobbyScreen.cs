@@ -30,8 +30,13 @@ public sealed class LobbyScreen
     /// <summary>What the screen is asking the loop to do this frame.</summary>
     public enum Action { None, Back, HostMatch, JoinMatch, Launch }
 
-    /// <summary>The rows a host can walk while waiting for people.</summary>
-    public enum Row { Map, Seats, FriendlyFire, Revives, Enemies, Launch }
+    /// <summary>
+    /// The rows a host can walk while waiting for people. Shared with the 3D room's console
+    /// (see <see cref="World.LobbyRoom"/>), which is the only place they are actually reachable
+    /// now — this text screen is dead, kept only so the vocabulary lives in one file.
+    /// MAP is gone: a destination is chosen at the holo chart, not nudged through on a row.
+    /// </summary>
+    public enum Row { Mode, Vote, Seats, FriendlyFire, Revives, Enemies, Launch }
 
     public Phase Where { get; private set; } = Phase.Choosing;
     public Row Selected { get; private set; } = Row.Seats;
@@ -111,8 +116,8 @@ public sealed class LobbyScreen
         {
             switch (Selected)
             {
-                case Row.Map:
-                    Match.Map = Match.Map == GameMap.Planet ? GameMap.Flat : GameMap.Planet;
+                case Row.Mode:
+                    Match.Mode = Match.Mode == GameMode.Sandbox ? GameMode.Descent : GameMode.Sandbox;
                     break;
                 case Row.Seats:
                     // Never below what is already in the room: a host cannot evict someone by

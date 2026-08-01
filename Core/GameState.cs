@@ -8,6 +8,9 @@ public enum GameState
 {
     Menu,
     ClassSelect, // the hangar: pick a chassis, spend the points, paint it, then launch
+    StarMap,     // solo only: the chart of the five worlds, between the hangar and the drop.
+                 // A match settles this at the lobby's holo table instead, where there are
+                 // other people to argue with about it.
     Lobby,       // the multiplayer front door: host and read out a code, or type one
     Settings,
     Test,        // hidden bestiary reached by the secret 'L' hatch
