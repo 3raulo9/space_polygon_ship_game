@@ -269,6 +269,11 @@ public sealed class EnemySoldier
     /// never breathes in unison.</summary>
     public int Slot;
 
+    /// <summary>The key this soldier goes by in the host's rewind history, so a laggy client's
+    /// shot can be tested against where it actually was on that client's screen. Assigned
+    /// lazily host-side — see <c>World.RecordRewind</c>.</summary>
+    public int HitId;
+
     /// <summary>
     /// True while this one is fighting for the player rather than against them — a squad
     /// escorting the body their comrade is being worn as. Written by the world every tick,

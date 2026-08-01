@@ -98,4 +98,24 @@ public sealed class Loadout
 
     /// <summary>Magazine size. 5 → the historical 50-round cap.</summary>
     public int MaxAmmo => 10 * Ammo;
+
+    /// <summary>
+    /// An independent copy — the build as it stands, detached from whoever goes on editing
+    /// this one.
+    ///
+    /// A craft holds its build for the life of the craft and the renderer reads the chassis
+    /// and the paint straight off it, so a craft must never share the object the hangar (and
+    /// the multiplayer launch path) keeps mutating. It used to: <see cref="World.World"/>
+    /// handed the loop's single loadout to seat 0 by reference, so the moment the local player
+    /// settled on a chassis, <em>the craft in seat 0 was drawn as it</em> — which on a client
+    /// is the host, and is exactly how everyone ended up looking at their own craft wearing
+    /// somebody else's name.
+    /// </summary>
+    public Loadout Clone()
+    {
+        var copy = new Loadout { Class = Class };
+        Array.Copy(_stats, copy._stats, _stats.Length);
+        foreach (var kv in _swatches) copy._swatches[kv.Key] = (int[])kv.Value.Clone();
+        return copy;
+    }
 }

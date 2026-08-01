@@ -62,6 +62,22 @@ public sealed class LoopbackNet
     /// drop, so a disconnect can be exercised without a real socket.</summary>
     public void DropPeer(int atEndpoint, int peer) => _ends[atEndpoint].SimulateDeparture(peer);
 
+    /// <summary>
+    /// Test hook: everything <paramref name="peer"/> sends goes nowhere while this is set —
+    /// reliable messages included.
+    ///
+    /// This is not "a lossy wire", which the quality settings already model. It is the state a
+    /// real P2P connection is in for its first moment of life: <c>ConnectP2P</c> hands back a
+    /// handle immediately and Steam is still punching through to the other machine, so anything
+    /// pushed into it in that window has no route and no retransmit will ever save it. The
+    /// joining handshake has to survive that on its own.
+    /// </summary>
+    private readonly HashSet<int> _muted = new();
+    public void Mute(int peer, bool muted)
+    {
+        if (muted) _muted.Add(peer); else _muted.Remove(peer);
+    }
+
     /// <summary>Test hook: the reconnection half — a real transport re-adds the peer on a
     /// fresh connection, which this stands in for.</summary>
     public void Readmit(int atEndpoint, int peer) => _ends[atEndpoint].Readmit(peer);
@@ -78,6 +94,7 @@ public sealed class LoopbackNet
 
     private void Dispatch(int from, int to, ReadOnlySpan<byte> payload, bool reliable)
     {
+        if (_muted.Contains(from)) { Dropped++; return; }
         Endpoint dst = _ends[to];
 
         // Unreliable payloads are allowed to vanish. Reliable ones never do — a real

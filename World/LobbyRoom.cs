@@ -148,7 +148,10 @@ public sealed class LobbyRoom
     public void Seat(int seat, string name)
     {
         LocalSeat = seat;
-        MyName = name;
+        // The name the session was opened with, but never over one the player typed in the
+        // antechamber while the dial was out — being seated used to quietly rename them back
+        // to their Steam persona a second after they had chosen something else.
+        if (!_named && name.Length > 0) MyName = name;
         Stage = Phase.InRoom;
         Trouble = null;
         Sync();
@@ -171,6 +174,12 @@ public sealed class LobbyRoom
     /// <summary>Test hook: choose a chassis without going through the pod's key handling — the
     /// same effect as confirming a pick at the pod.</summary>
     public void PickForTest(PlayerClass chassis) { MyChassis = chassis; PickDirty = true; }
+
+    /// <summary>Test hook: settle the rules without going through the console's key handling —
+    /// the same effect as the host nudging every row, including the flag that puts the change
+    /// on the wire (which <see cref="AdoptRules"/> deliberately does not, since that is the
+    /// path a change arrives <em>from</em> the wire by).</summary>
+    public void SetRulesForTest(MatchSettings m) { Match = m.Clamped(); RulesDirty = true; }
 
     /// <summary>The host applies a live rules edit made at its own console.</summary>
     public void AdoptRules(MatchSettings m) => Match = m.Clamped();
@@ -376,9 +385,13 @@ public sealed class LobbyRoom
     private void CommitName()
     {
         string name = NameBuffer.Trim();
-        if (name.Length > 0) { MyName = name; NameDirty = true; }
+        if (name.Length > 0) { MyName = name; NameDirty = true; _named = true; }
         Where = Focus.Walking;
     }
+
+    /// <summary>True once the player has typed a name of their own, so nothing later puts the
+    /// machine's default back over it. See <see cref="Seat"/>.</summary>
+    private bool _named;
 
     // --- Applying the wire's account --------------------------------------------------
 

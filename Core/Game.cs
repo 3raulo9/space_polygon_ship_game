@@ -35,6 +35,22 @@ public sealed class Game : IDisposable
     private World.World? _world;
     private GameState _state = GameState.Menu;
 
+    /// <summary>
+    /// Whether the player is out in a match rather than sitting in front of one. The
+    /// soundtrack rides on this: menus, the hangar, the lobby and the bestiary are all
+    /// silent, and a piece that is sounding when the player leaves for one of them
+    /// fades out rather than being cut.
+    ///
+    /// A pause counts as being in the world on purpose. The sim is frozen, but the
+    /// music is not scoring the sim — it is scoring the session, and killing it the
+    /// moment the panel opens makes stepping back from the game feel like quitting it.
+    /// Death and the level-clear screen count for the same reason: both are still the
+    /// match, and both are the last places you would want the sound to fall away.
+    /// </summary>
+    private bool InWorld => _state
+        is GameState.Playing or GameState.Paused or GameState.Dead
+        or GameState.LevelIntro or GameState.LevelClear;
+
     // Reads the keyboard once per frame and rations it out to the fixed steps. Everything
     // the sim knows about the player's hands arrives through this and nothing else, which
     // is what lets the same world be driven by a recording, a test, or a second player.
@@ -106,6 +122,8 @@ public sealed class Game : IDisposable
         // Load persisted controls and make them the live binding set the sim polls.
         _settings = Settings.Load();
         InputMap.Active = _settings;
+        // ...and the persisted faders into the mixer, before a single cue can be raised.
+        Audio.ApplySettings(_settings);
         _settingsScreen = new SettingsScreen(_settings);
         _classSelect = new ClassSelectScreen(_loadout);
 
@@ -177,11 +195,13 @@ public sealed class Game : IDisposable
     {
         while (!Raylib.WindowShouldClose())
         {
-            // Drain any time-scheduled audio (the boss's death cascade). Sits above
-            // every early-out below on purpose: the cascade is queued as absolute
-            // wall-clock times, so if the player pauses or bails to the menu part-way
-            // through it still finishes rather than stranding a half-played death.
-            Audio.Update();
+            // Drain any time-scheduled audio (the boss's death cascade) and service the
+            // soundtrack. Sits above every early-out below on purpose: the cascade is
+            // queued as absolute wall-clock times, so if the player pauses or bails to
+            // the menu part-way through it still finishes rather than stranding a
+            // half-played death — and a music stream has to be fed every single frame
+            // it is open, including the frames a fade or a menu owns.
+            Audio.Update(InWorld);
 
             // Steam's own callbacks — connection state changes arrive through these. Cheap
             // and harmless when Steam never came up.
@@ -192,6 +212,17 @@ public sealed class Game : IDisposable
             _session?.Notices.Age(Raylib.GetFrameTime());
 
             if (_capturePath != null && RunCaptureFrame()) break;
+
+            // The host went away mid-match. Nothing here is simulated locally — a client is
+            // shown the world, it does not run it — so what is left after the link dies is a
+            // frozen city the player can walk a ghost around in for ever. Bail back to the
+            // multiplayer front door with the reason on screen instead. Host-side this can
+            // never fire: one player leaving is a departure, not a dead session.
+            if (_steam is { Dropped: { } lost } && !_fading
+                && _state is GameState.Playing or GameState.Paused)
+            {
+                BeginFade(() => AbandonMatch(lost), _pauseBlur);
+            }
 
             SyncCursor();
 
@@ -267,6 +298,22 @@ public sealed class Game : IDisposable
             // 'F' toggles the inventory overlay. Escape closes it too if it's open;
             // otherwise Escape opens the pause panel (the world only pauses when the
             // inventory is *not* up — the panel itself never freezes the sim).
+            // Pointing at something, and — once your revives are spent — choosing which
+            // team-mate to watch. Both are multiplayer-only and both are held back while the
+            // inventory panel owns the mouse, since middle-click and the arrows mean something
+            // else in there.
+            if (_session != null && !_inventoryOpen)
+            {
+                if (InputMap.WorldPingPressed && !_world!.Spectating)
+                    _session.Mark(_world.CrosshairTarget());
+
+                if (_world!.Spectating)
+                {
+                    if (InputMap.SpectateNextPressed) _world.CycleSpectator(+1);
+                    else if (InputMap.SpectatePrevPressed) _world.CycleSpectator(-1);
+                }
+            }
+
             if (InputMap.InventoryToggle)
                 SetInventory(!_inventoryOpen);
             else if (InputMap.QuitPressed)
@@ -290,11 +337,10 @@ public sealed class Game : IDisposable
             }
             else
             {
-                // R/T/Y/U throw whatever the matching equip slot holds (the crafted CRAB
-                // CORE). Polled once per frame as a just-pressed edge, like the debug keys.
-                int weaponSlot = InputMap.WeaponSlotPressed();
-                if (weaponSlot >= 0)
-                    _world!.UseWeaponSlot(weaponSlot);
+                // R/T/Y/U used to be polled here. They now ride the input frame into
+                // World.DriveSeat, so a remote player's throw reaches the host and is spent
+                // from their own pack rather than only ever working for whoever is sitting
+                // at this keyboard.
 
                 // Debug hatch: 'L' drops one random enemy on the horizon each press.
                 // Polled once per frame (a just-pressed edge), not per fixed step.
@@ -682,8 +728,12 @@ public sealed class Game : IDisposable
         _menuTime += Raylib.GetFrameTime();
 
         // A dial that failed, or a host that went away, drops the player back into the
-        // antechamber with a reason rather than leaving them standing in a dead room.
+        // antechamber with a reason rather than leaving them standing in a dead room. Only
+        // ever a client's problem: a host sees a peer leave through the departure queue, and
+        // reporting it here used to tear the whole session down and evict everybody.
         if (_steam is { Dropped: { } why }) { _room.Fail(why); TearDownMatch(); }
+        // The host answered, and the answer was no — or never came at all.
+        else if (_session is { Rejected: { } refused }) { _room.Fail(refused); TearDownMatch(); }
 
         // Keep the host's live rules on the world it already built, so a change made at the
         // console while people gather actually takes at launch.
@@ -744,8 +794,16 @@ public sealed class Game : IDisposable
 
         // A client comes in when the host presses LAUNCH — there is no launch button on that
         // end, the host owns when the match starts.
+        //
+        // ...but not before they have chosen a craft. Somebody who dials into a match that is
+        // already running is seated and told START in the same breath, and walking them
+        // straight in gave them no moment at the pod at all: they arrived permanently as the
+        // placeholder TANK their hello carried, with no way ever to be anything else. So a
+        // client with no pick yet stays on the floor by the pod, and comes in the instant
+        // they choose. The host honours that pick mid-match like any other.
         if (_session is { IsHost: false, MatchStarted: true, LocalSeat: >= 0 } joined
-            && joined.World is { } jw)
+            && joined.World is { } jw
+            && _room is { MyChassis: not null })
         {
             // Install the craft this player chose at the pod as their own seat. The host has
             // been authoritative on it since the Pick and the snapshot names it for everyone
@@ -757,11 +815,15 @@ public sealed class Game : IDisposable
                 _loadout.Class = chosen;
                 jw.ReplacePlayer(joined.LocalSeat, _loadout);
             }
-            // Carry the room's roster of names into the match so team-mates wear a tag.
+            // Carry the room's roster of names into the match so team-mates wear a tag. Only
+            // where the host has not already named the seat: its SeatName packets are the
+            // authority, and a stale figure still called PLAYER must not overwrite one.
             if (_room is { } r)
             {
-                foreach (var a in r.Avatars.Values) jw.SeatNames[a.Seat] = a.Name;
-                jw.SeatNames[joined.LocalSeat] = r.MyName;
+                foreach (var a in r.Avatars.Values)
+                    if (!jw.SeatNames.ContainsKey(a.Seat)) jw.SeatNames[a.Seat] = a.Name;
+                if (!jw.SeatNames.ContainsKey(joined.LocalSeat))
+                    jw.SeatNames[joined.LocalSeat] = r.MyName;
             }
             joined.Room = null;
             _world = jw;
@@ -832,6 +894,24 @@ public sealed class Game : IDisposable
         _world = new World.World(_loadout, MatchSettings.SinglePlayer);
         _state = GameState.Playing;
         _inventoryOpen = false;
+    }
+
+    /// <summary>
+    /// The link died while playing: tear the match down and set the player back down in the
+    /// multiplayer antechamber with the reason showing, rather than at the title screen with
+    /// no explanation for why their match stopped existing.
+    /// </summary>
+    private void AbandonMatch(string why)
+    {
+        TearDownMatch();
+        _world = null;
+        _inventoryOpen = false;
+        _accumulator = 0;
+        _pauseBlur = 0f;
+        _resuming = false;
+        _room = new World.LobbyRoom();
+        _room.Fail(why);
+        _state = GameState.Lobby;
     }
 
     private void ReturnToMenu()

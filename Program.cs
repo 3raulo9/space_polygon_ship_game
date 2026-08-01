@@ -20,6 +20,24 @@ if (args.Contains("--steamcheck"))
     return ok ? 0 : 1;
 }
 
+// Did the soundtrack find my files? Opens the audio device but no window, rolls the
+// rotation on a collapsed clock and prints what it picks, so a .wav dropped into
+// Assets/Audio/Music can be confirmed in seconds rather than by playing for an hour and
+// hoping. Each piece is heard for a moment and then skipped to its end.
+if (args.Contains("--musiccheck"))
+    return MusicCheck.Run();
+
+// Does the world SOUND right? Drives the mixer offline against the real city and writes a
+// scripted scene to a .wav you can just play: a shot walking past, a firefight receding,
+// stepping behind a tower, a rotor circling, a blast in your face, being swallowed. The
+// self-test proves the numbers; this is how the numbers get judged. No device, no window.
+if (args.Contains("--audioscene"))
+{
+    int at = Array.IndexOf(args, "--audioscene");
+    string path = at + 1 < args.Length && !args[at + 1].StartsWith("--") ? args[at + 1] : "scene.wav";
+    return SelfTest.RenderScene(path);
+}
+
 Raylib.SetConfigFlags(ConfigFlags.VSyncHint);
 Raylib.InitWindow(Config.WindowWidth, Config.WindowHeight, "VOID TANKS");
 Raylib.SetExitKey(KeyboardKey.Null); // Escape is handled in the loop, not by Raylib

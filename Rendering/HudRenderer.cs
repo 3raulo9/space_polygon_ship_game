@@ -62,10 +62,79 @@ internal static class HudRenderer
         }
     }
 
+    /// <summary>
+    /// The scoreboard, held open on a key. Every seat in the match: their name, the chassis
+    /// they are flying, what they have destroyed, how many times they have gone down, what
+    /// revives they have left and their round trip.
+    ///
+    /// <para>Its real job is legibility. Twenty players is a room, and a room where you cannot
+    /// see who is in it, who is doing well and whose connection is falling apart is a room
+    /// where a bad experience is indistinguishable from a bug. The ping column especially:
+    /// a player being thrown about by a bad line deserves to be able to see that that is what
+    /// is happening.</para>
+    /// </summary>
+    public static void DrawScoreboard(World.World world)
+    {
+        Font font = Raylib.GetFontDefault();
+        const int size = 8;
+        int rows = world.Players.Count;
+
+        const int panelW = 220;
+        int panelH = 22 + rows * 11 + 6;
+        int x = (W - panelW) / 2;
+        int y = (H - panelH) / 2 - 10;
+
+        Raylib.DrawRectangle(x, y, panelW, panelH, new Color((byte)6, (byte)8, (byte)14, (byte)225));
+        Raylib.DrawRectangleLines(x, y, panelW, panelH, Scale(Palette.HudChrome, 0.45f));
+
+        Color head = Scale(Palette.HudChrome, 0.7f);
+        Raylib.DrawTextEx(font, "PLAYER", new Vector2(x + 8, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "CRAFT", new Vector2(x + 96, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "K", new Vector2(x + 142, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "D", new Vector2(x + 158, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "REV", new Vector2(x + 172, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "MS", new Vector2(x + 196, y + 7), size, 1, head);
+        Raylib.DrawRectangle(x + 6, y + 18, panelW - 12, 1, Scale(Palette.GridFar, 0.7f));
+
+        for (int seat = 0; seat < rows; seat++)
+        {
+            PlayerTank p = world.Players[seat];
+            int ry = y + 22 + seat * 11;
+
+            // A dropped player is dimmed rather than removed: their seat is being held for
+            // them and the room should be able to see that it is.
+            bool mine = seat == world.LocalIndex;
+            float bright = p.Away ? 0.35f : p.Spectating ? 0.55f : 1f;
+            Color col = mine ? Scale(Palette.Flag, bright) : Scale(Palette.HudChrome, bright * 0.85f);
+
+            string name = world.NameOrSeat(seat);
+            if (name.Length > 13) name = name[..13];
+            if (p.Away) name += " *";
+
+            Raylib.DrawTextEx(font, name, new Vector2(x + 8, ry), size, 1, col);
+            Raylib.DrawTextEx(font, p.Build.Class.ToString().ToUpperInvariant(),
+                new Vector2(x + 96, ry), size, 1, col);
+            Raylib.DrawTextEx(font, world.KillsOf(seat).ToString(), new Vector2(x + 142, ry), size, 1, col);
+            Raylib.DrawTextEx(font, world.DeathsOf(seat).ToString(), new Vector2(x + 158, ry), size, 1, col);
+            Raylib.DrawTextEx(font, p.Spectating ? "-" : p.Lives.ToString(),
+                new Vector2(x + 174, ry), size, 1, col);
+
+            // The one column that changes colour on its own. A line going bad is the single
+            // most useful thing this panel can tell somebody, so it says it in red.
+            int ping = world.PingOf(seat);
+            Color pc = ping >= 200 ? Palette.Warning : ping >= 110 ? Palette.Flag : col;
+            Raylib.DrawTextEx(font, seat == world.LocalIndex ? "--" : ping.ToString(),
+                new Vector2(x + 194, ry), size, 1, pc);
+        }
+    }
+
     public static void Draw(World.World world, ItemIconRenderer icons)
     {
         _icons = icons;
-        PlayerTank p = world.Player;
+        // The craft the instruments describe. Normally this machine's own; once its revives
+        // are spent, the team-mate the camera has moved to — a spent player's own bars are a
+        // row of zeroes and tell them nothing about the fight they are now watching.
+        PlayerTank p = world.Eye;
 
         // A faint panel behind the strip so the bars/radar sit on a surface
         // rather than floating over the grid — but kept dark and translucent so
@@ -74,7 +143,8 @@ internal static class HudRenderer
         Raylib.DrawRectangle(0, StripH, W, 1, Scale(Palette.GridFar, 0.6f)); // seam line
 
         DrawBars(p);
-        DrawWeaponSlots(world.Inventory);
+        DrawWeaponSlots(world.InventoryOf(world.ViewSeat));
+        if (world.Spectating) DrawSpectating(world);
         DrawRadar(world, p);
         // The firing sight sits dead centre, where the mouse aims the gun, and only on the
         // two machines: the SOLDIER and the FISH draw their own centre reticles (which
@@ -105,6 +175,19 @@ internal static class HudRenderer
         // there is a host at all. It also draws its own crosshair, since it is not a machine
         // and the dashboard's centre sight above is skipped for it. See VirusHud.
         if (p.Virus is { } virus) VirusHud.DrawOverlay(world, virus, p);
+    }
+
+    /// <summary>
+    /// Says whose eyes these are. A player out of revives is no longer in the match but is
+    /// still in the room, and the one thing they must not be left to wonder is why the craft
+    /// on screen is not answering their keys. Named, so it also tells them who is left.
+    /// </summary>
+    private static void DrawSpectating(World.World world)
+    {
+        string who = world.NameOf(world.ViewSeat);
+        if (who.Length == 0) who = $"SEAT {world.ViewSeat}";
+        PixelFont.DrawCentered("SPECTATING", W / 2, StripH + 6, 1, Palette.Warning);
+        PixelFont.DrawCentered(who, W / 2, StripH + 14, 1, Palette.HudChrome);
     }
 
     // --- The SPIDER's lance meter: 0..100 down the right-hand edge ---

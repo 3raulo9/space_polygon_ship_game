@@ -83,6 +83,24 @@ public static class InputMap
     /// </summary>
     public static bool InventoryToggle => Raylib.IsKeyPressed(KeyboardKey.F);
 
+    /// <summary>Held, not pressed: the scoreboard is a thing you look at while the match
+    /// carries on around you, not a screen you enter and leave. Tab, because every player
+    /// who has been near a multiplayer game already knows that.</summary>
+    public static bool ScoreboardDown => Raylib.IsKeyDown(KeyboardKey.Tab);
+
+    /// <summary>Drops a marker on the world at the crosshair. Middle mouse, with G as the
+    /// alternative for anyone whose hand is nowhere near the wheel — this is a coordination
+    /// tool and it has to be reachable from whatever the chassis has the player doing.</summary>
+    public static bool WorldPingPressed
+        => Raylib.IsMouseButtonPressed(MouseButton.Middle) || Raylib.IsKeyPressed(KeyboardKey.G);
+
+    /// <summary>While spectating: step to the previous / next living team-mate. Sitting on
+    /// one player until they die is not watching a match, it is waiting.</summary>
+    public static bool SpectatePrevPressed => Raylib.IsKeyPressed(KeyboardKey.Left)
+                                           || Raylib.IsMouseButtonPressed(MouseButton.Left);
+    public static bool SpectateNextPressed => Raylib.IsKeyPressed(KeyboardKey.Right)
+                                           || Raylib.IsMouseButtonPressed(MouseButton.Right);
+
     // --- The SOLDIER ---------------------------------------------------------
     // A separate scheme, not a re-skin of the tank's. This chassis is a person in first
     // person: the mouse is the aim, WASD is a body rather than a throttle, and the two

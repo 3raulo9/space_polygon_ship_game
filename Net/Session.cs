@@ -55,6 +55,63 @@ public enum Msg : byte
     /// threw near that client — deaths, hits, footfalls, laid smoke — so a client that runs no
     /// combat still sees the debris. Unreliable; a missed burst is a spray gone by the next tick.</summary>
     Effect = 15,
+
+    /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: the damaged buildings near
+    /// that client — which cells of each cut tower still stand, what is coming down, what is
+    /// gone. Keep-last like the field: the city's layout is identical everywhere and only the
+    /// <em>damage</em> has to cross, so this is the packet that stops two players standing in
+    /// front of the same tower and disagreeing about whether it exists.</summary>
+    Structures = 16,
+
+    /// <summary>Host → one client, reliable, whenever it changes: that seat's own pack. Reliable
+    /// because an inventory is not a picture — a lost salvage pickup would simply never appear,
+    /// and there is no next packet to correct it until something else changes.</summary>
+    Inventory = 17,
+
+    /// <summary>Client → host, reliable: one thing the player did in their inventory panel. The
+    /// host replays it against the real pack and the echo above settles it.</summary>
+    InvAct = 18,
+
+    /// <summary>Host → clients, at <see cref="Session.SnapshotHz"/>: the transient combat light
+    /// around that client — grapple cables, the VIRUS's stolen lance, the SPIDER's charged beam.
+    /// Purely cosmetic and keep-nothing; a missed one costs a frame of light.</summary>
+    Rigs = 19,
+
+    /// <summary>Host → one client, reliable: there is no seat for you. A joiner has to be
+    /// <em>told</em> it was refused — before this a full match simply ignored the hello, and
+    /// the dial sat on CONNECTING for ever with nothing ever coming to say why.</summary>
+    Full = 20,
+
+    /// <summary>
+    /// Host → all, reliable, whenever the roster changes: one seat's display name.
+    ///
+    /// The room's names only ever reached the match by being copied onto the world at LAUNCH,
+    /// which means everyone who arrives <em>after</em> that — every rejoin, every late joiner —
+    /// is a nameless craft on every screen but the host's, for the rest of the match. This is
+    /// the packet that keeps the roster honest once the lobby is gone.
+    /// </summary>
+    SeatName = 21,
+
+    /// <summary>
+    /// Host → all, unreliable, about once a second: every seat's kills, deaths and round trip.
+    ///
+    /// Its own packet and its own slow clock because a scoreboard is not the world: nobody
+    /// reads it sixty times a second, nothing about it has to be smooth, and a lost one is
+    /// corrected a second later. The ping it carries is the same measurement the rewind buffer
+    /// already makes from each client's acknowledgement, rather than a second timing channel
+    /// that could only ever disagree with the first.
+    /// </summary>
+    Scores = 22,
+
+    /// <summary>
+    /// A mark on the world. Client → host it is a request ("I pointed here"); host → all it is
+    /// the fact ("seat N pointed here"), which is why one id serves both directions — the
+    /// payload differs by exactly the seat byte the host is the only one entitled to write.
+    ///
+    /// Reliable. It is a person trying to say something to nineteen other people, it happens
+    /// perhaps once every few seconds, and there is no next packet to correct a lost one.
+    /// </summary>
+    Mark = 23,
 }
 
 /// <summary>
@@ -85,6 +142,13 @@ public sealed class Session
     private readonly byte[] _sound = new byte[1200];
     private readonly byte[] _bosses = new byte[512];
     private readonly byte[] _effect = new byte[1200];
+    private readonly byte[] _structures = new byte[Snapshot.MaxStructureSize + 8];
+    private readonly byte[] _rigs = new byte[Snapshot.MaxRigSize + 8];
+    private readonly byte[] _inv = new byte[Core.Inventory.WireSize + 8];
+
+    /// <summary>The digest of each seat's pack the last time it was mirrored to its owner, so
+    /// the reliable echo only goes out when something actually changed. Host-side.</summary>
+    private readonly Dictionary<int, int> _invSent = new();
     private uint _tick;
     private int _sinceSnapshot;
 
@@ -186,7 +250,7 @@ public sealed class Session
         {
             if (room.PickDirty && LocalSeat >= 0)
                 ApplyPick(LocalSeat, room.MyChassis ?? PlayerClass.Tank);
-            if (room.NameDirty) { LocalName = room.MyName; _nameOfSeat[LocalSeat] = room.MyName; }
+            if (room.NameDirty) { LocalName = room.MyName; Rename(LocalSeat, room.MyName); }
             if (room.RulesDirty) BroadcastRules(room.Match);
             room.ClearDirty();
 
@@ -196,7 +260,12 @@ public sealed class Session
                 BroadcastRoomState(room);
             }
         }
-        else if (LocalSeat >= 0)
+        else if (LocalSeat < 0)
+        {
+            // Still waiting on a seat: keep asking. Everything below needs one.
+            RetryHello();
+        }
+        else
         {
             if (room.PickDirty)
             {
@@ -213,18 +282,38 @@ public sealed class Session
             }
             if (room.NameDirty) SendName(room.MyName);
             room.ClearDirty();
-            SendRoomMove(room.Position, room.Heading, room.Pitch, room.Height);
+            // At the same rate the host describes the room back, rather than sixty times a
+            // second. The room is people strolling about a floor; twenty transforms a second
+            // is already more than the renderer can show, and the old per-tick send was three
+            // times the traffic of the match itself for a screen nobody is playing on.
+            if (++_sinceRoom >= TicksPerSnapshot)
+            {
+                _sinceRoom = 0;
+                SendRoomMove(room.Position, room.Heading, room.Pitch, room.Height);
+            }
         }
     }
 
-    /// <summary>Host-side: records a seat's chosen chassis, marks it ready, and rebuilds that
-    /// seat's craft in the world it is holding so the eventual match opens with the right one.</summary>
+    /// <summary>
+    /// Host-side: records a seat's chosen chassis, marks it ready, and rebuilds that seat's
+    /// craft in the world it is holding so the eventual match opens with the right one.
+    ///
+    /// Deliberately not gated on the lobby: a pick that lands mid-match is honoured too, and
+    /// the next players packet carries the new chassis to every other machine. That is what
+    /// lets somebody who joined a match already in progress choose a craft at all, rather than
+    /// being stuck for ever in the placeholder tank they were seated as.
+    /// </summary>
     private void ApplyPick(int seat, PlayerClass chassis)
     {
+        if (!Enum.IsDefined(chassis)) return;   // a malformed byte is not a chassis
         _pickOfSeat[seat] = (chassis, true);
         Room?.ApplyPick(seat, chassis, ready: true);
-        if (World is { } w && seat >= 0 && seat < w.Players.Count && w.Players[seat].Class != chassis)
-            w.ReplacePlayer(seat, chassis);
+        if (World is not { } w || seat < 0 || seat >= w.Players.Count) return;
+        if (w.Players[seat].Class == chassis) return;
+        // The host's own seat keeps its full hangar build — paint and points, not just the
+        // chassis. Everyone else's paint does not cross the wire, so they get a clean one.
+        if (seat == LocalSeat) { w.Loadout.Class = chassis; w.ReplacePlayer(seat, w.Loadout); }
+        else w.ReplacePlayer(seat, chassis);
     }
 
     private void SendPick(PlayerClass chassis)
@@ -347,7 +436,11 @@ public sealed class Session
         World.LocalIndex = 0;
         World.CollectSoundCues = true;   // the host gathers cues to broadcast; solo runs do not
         LocalSeat = 0;
-        _nameOfSeat[0] = LocalName;       // the host's own name, for the roster and the tags
+        Rename(0, LocalName);             // the host's own name, for the roster and the tags
+        // The combat feed. The sim raises a line; the feed is already mirrored to every
+        // client, so a kill announced on the host is a kill everybody reads — no new packet
+        // and no second formatting of the same sentence.
+        World.Announce = Announce;
     }
 
     /// <summary>Every seat's name the host knows, for the loop to copy onto the world at launch
@@ -360,17 +453,71 @@ public sealed class Session
     /// </summary>
     public void JoinMatch(World.World world) => World = world;
 
-    /// <summary>Client-side: announces the chassis this player picked and their name. Reliable
-    /// — a lost hello would seat somebody as a tank they did not choose.</summary>
+    /// <summary>
+    /// Client-side: announces the chassis this player picked and their name.
+    ///
+    /// This used to be a single send, made the instant <c>ConnectP2P</c> handed back a
+    /// connection handle — which is long before that connection exists. A handle is not a
+    /// link: Steam is still punching through to the other machine, and a message pushed into
+    /// a socket in that state has nowhere to go. When it went nowhere there was nothing to
+    /// notice it and nothing to try again, so the joiner sat on CONNECTING for ever and the
+    /// only cure was to back out and re-dial. So the hello is now <em>repeated</em> until the
+    /// host answers with a seat — see <see cref="RetryHello"/>, which the lobby tick drives.
+    /// </summary>
     public void SendHello(PlayerClass chassis)
+    {
+        _helloChassis = chassis;
+        _helloWanted = true;
+        _sinceHello = 0;
+        _helloTicks = 0;
+        PushHello();
+    }
+
+    private void PushHello()
     {
         byte[] name = Encode(LocalName);
         Span<byte> p = stackalloc byte[3 + 32];
         p[0] = (byte)Msg.Hello;
-        p[1] = (byte)chassis;
+        p[1] = (byte)_helloChassis;
         p[2] = (byte)name.Length;
         name.CopyTo(p.Slice(3, name.Length));
         _net.Send(0, p.Slice(0, 3 + name.Length), reliable: true);
+    }
+
+    private PlayerClass _helloChassis;
+    private bool _helloWanted;
+    private int _sinceHello;
+    private int _helloTicks;
+
+    /// <summary>How often an unanswered hello is repeated, in lobby ticks (60 = once a
+    /// second). Slow enough to be nothing on the wire, fast enough that a joiner whose first
+    /// attempt landed on a half-open socket is seated well inside the time it takes them to
+    /// wonder whether it worked.</summary>
+    private const int HelloEvery = 45;
+
+    /// <summary>How long a dial is given before it is called a failure, in lobby ticks. Ten
+    /// seconds is comfortably past Steam's own relay handshake and well short of the point a
+    /// person decides the game is broken.</summary>
+    private const int HelloPatience = 60 * 10;
+
+    /// <summary>Why the join failed, for the room to show instead of the CONNECTING banner:
+    /// the host refused us (no seat), or nobody ever answered. Null while all is well.</summary>
+    public string? Rejected { get; private set; }
+
+    /// <summary>Client-side: repeats an unanswered hello, and gives up eventually. Called from
+    /// the lobby tick, which is the only place a client is ever waiting to be seated.</summary>
+    private void RetryHello()
+    {
+        if (!_helloWanted || LocalSeat >= 0) { _helloWanted = false; return; }
+        if (++_helloTicks > HelloPatience)
+        {
+            _helloWanted = false;
+            Rejected ??= "NO ANSWER FROM THAT CODE";
+            return;
+        }
+        if (++_sinceHello < HelloEvery) return;
+        _sinceHello = 0;
+        PushHello();
     }
 
     /// <summary>A display name as at most 31 bytes of UTF-8 — long enough for any real Steam
@@ -383,6 +530,119 @@ public sealed class Session
 
     private static string DecodeName(ReadOnlySpan<byte> src)
         => System.Text.Encoding.UTF8.GetString(src).Trim();
+
+    /// <summary>
+    /// Host-side: records one seat's display name and tells everybody — the room, the world
+    /// (so the craft wears the tag in-match), and every client.
+    ///
+    /// The names used to reach the match only by being copied off the room at LAUNCH, which
+    /// left everyone who arrived after that — every rejoin, every late joiner — a nameless
+    /// craft on every screen but this one, for the rest of the match.
+    /// </summary>
+    public void Rename(int seat, string name)
+    {
+        if (seat < 0) return;
+        if (_nameOfSeat.TryGetValue(seat, out var was) && was == name) return;
+        _nameOfSeat[seat] = name;
+        Room?.ApplyName(seat, name);
+        if (World is { } w) w.SeatNames[seat] = name;
+        if (!IsHost) return;
+        Span<byte> p = stackalloc byte[3 + 32];
+        int at = WriteSeatName(p, seat, name);
+        _net.Broadcast(p.Slice(0, at), reliable: true);
+    }
+
+    private static int WriteSeatName(Span<byte> p, int seat, string name)
+    {
+        byte[] text = Encode(name);
+        p[0] = (byte)Msg.SeatName;
+        p[1] = (byte)seat;
+        p[2] = (byte)text.Length;
+        text.CopyTo(p.Slice(3, text.Length));
+        return 3 + text.Length;
+    }
+
+    /// <summary>How many snapshots pass between scoreboards. About a second: nobody reads a
+    /// tally sixty times a second, and it is the one packet in the game that can be late
+    /// without anybody noticing.</summary>
+    private const int SnapshotsPerScoreboard = Session.SnapshotHz;
+
+    private int _sinceScores;
+
+    /// <summary>
+    /// Host → all: every seat's kills, deaths and round trip, on its own slow clock.
+    ///
+    /// Four bytes a seat, so twenty players is under a hundred bytes once a second — small
+    /// enough that it never has to be interest-culled or fitted around anything.
+    /// </summary>
+    private void BroadcastScores()
+    {
+        if (World == null) return;
+        if (++_sinceScores < SnapshotsPerScoreboard) return;
+        _sinceScores = 0;
+
+        int seats = World.Players.Count;
+        Span<byte> p = stackalloc byte[2 + MatchSettings.MaxSeats * 4];
+        p[0] = (byte)Msg.Scores;
+        p[1] = (byte)seats;
+        int at = 2;
+        for (int seat = 0; seat < seats; seat++)
+        {
+            p[at++] = (byte)Math.Clamp(World.KillsOf(seat), 0, 255);
+            p[at++] = (byte)Math.Clamp(World.DeathsOf(seat), 0, 255);
+            // Ping in tens of milliseconds. One byte reaches 2.5 seconds, which is far past
+            // the point at which the number stops being a number and becomes a diagnosis.
+            BitConverter.TryWriteBytes(p.Slice(at, 2),
+                (ushort)Math.Clamp(World.PingOf(seat), 0, ushort.MaxValue)); at += 2;
+        }
+        _net.Broadcast(p.Slice(0, at), reliable: false);
+    }
+
+    /// <summary>
+    /// This machine's player pointed at a place. On the host it plants at once and tells the
+    /// room; on a client it plants at once <em>and</em> asks — the mark is this player's own
+    /// statement about their own screen, so making them wait a round trip to see it would be
+    /// the one thing that stops a coordination tool feeling like one.
+    /// </summary>
+    public void Mark(System.Numerics.Vector2 at)
+    {
+        if (World == null) return;
+        World.PlaceMarker(LocalSeat, at);
+        if (IsHost) { BroadcastMark(LocalSeat, at); return; }
+
+        Span<byte> p = stackalloc byte[9];
+        p[0] = (byte)Msg.Mark;
+        BitConverter.TryWriteBytes(p.Slice(1, 4), at.X);
+        BitConverter.TryWriteBytes(p.Slice(5, 4), at.Y);
+        _net.Send(0, p, reliable: true);   // peer 0 is the host, on a client
+    }
+
+    /// <summary>Host-side: plants a client's mark and passes it on to everybody.</summary>
+    private void PlantMark(int seat, System.Numerics.Vector2 at)
+    {
+        World?.PlaceMarker(seat, at);
+        BroadcastMark(seat, at);
+    }
+
+    private void BroadcastMark(int seat, System.Numerics.Vector2 at)
+    {
+        Span<byte> p = stackalloc byte[10];
+        p[0] = (byte)Msg.Mark;
+        p[1] = (byte)seat;
+        BitConverter.TryWriteBytes(p.Slice(2, 4), at.X);
+        BitConverter.TryWriteBytes(p.Slice(6, 4), at.Y);
+        _net.Broadcast(p, reliable: true);
+    }
+
+    /// <summary>Host-side: the whole roster, by name, to one peer. What a late arrival needs —
+    /// they have missed every <see cref="Msg.SeatName"/> that went out before they existed.</summary>
+    private void SendRosterTo(int peer)
+    {
+        if (!IsHost) return;
+        Span<byte> p = stackalloc byte[3 + 32];
+        foreach (var kv in _nameOfSeat)
+            _net.Send(peer, p.Slice(0, WriteSeatName(p, kv.Key, kv.Value)), reliable: true);
+    }
 
     /// <summary>Posts a line to this machine's feed and, on the host, mirrors it to everyone
     /// else so the whole room sees the same comings and goings.</summary>
@@ -408,12 +668,34 @@ public sealed class Session
         {
             if (!_seatOfPeer.TryGetValue(peer, out int seat)) continue;
             _seatOfPeer.Remove(peer);   // the peer id is dead; the identity mapping is kept
-            if (seat >= 0 && seat < World.Players.Count) World.Players[seat].Away = true;
-            // In the room (before the match) a leaver simply vanishes from the floor and stops
-            // blocking the launch gate; mid-match the seat is held for a rejoin as before.
+            string name = _nameOfSeat.TryGetValue(seat, out var n) ? n : "A PLAYER";
+
+            if (MatchStarted)
+            {
+                // Mid-match: the craft is held exactly where it stood, frozen and unhurt, so
+                // a reconnection from the same Steam account steps straight back into it.
+                if (seat >= 0 && seat < World.Players.Count) World.Players[seat].Away = true;
+            }
+            else
+            {
+                // Before LAUNCH there is nothing worth holding — they had a spawn point and a
+                // chassis and no history — so the seat is genuinely given up and handed to the
+                // next person through the door. Holding it instead meant a lobby people came
+                // and went from opened its match with a row of abandoned craft on the grid,
+                // each one still counting against the seat limit.
+                World.VacateSeat(seat);
+                // Forget who held it, so a return through the front door is an ordinary
+                // join into whatever seat is free rather than a "rejoin" that would restore
+                // the emptied craft they just walked away from.
+                foreach (var kv in _seatOfIdentity)
+                    if (kv.Value == seat) { _seatOfIdentity.Remove(kv.Key); break; }
+                _nameOfSeat.Remove(seat);
+                World.SeatNames.Remove(seat);
+                _invSent.Remove(seat);
+            }
+
             _pickOfSeat.Remove(seat);
             Room?.Remove(seat);
-            string name = _nameOfSeat.TryGetValue(seat, out var n) ? n : "A PLAYER";
             Announce($"{name} LEFT");
         }
     }
@@ -452,15 +734,28 @@ public sealed class Session
             // Unreliable, every tick. A dropped input frame is a sixtieth of a second of
             // one player's intent and the next one supersedes it — retransmitting would
             // arrive too late to matter and block everything behind it.
-            Span<byte> p = stackalloc byte[1 + 4 + InputFrame.Size];
+            //
+            // The frame also carries the last snapshot tick this client applied. That one
+            // number is the whole of the host's ping measurement: the gap between it and the
+            // host's own tick when this packet lands is a full round trip, and it is what
+            // lets the host rewind the world to what this player could actually see when
+            // deciding whether their shot connected (see World.Rewound). Piggybacked rather
+            // than pinged separately because it costs four bytes on a packet already going.
+            Span<byte> p = stackalloc byte[1 + 4 + InputFrame.Size + 4];
             p[0] = (byte)Msg.Input;
             BitConverter.TryWriteBytes(p.Slice(1, 4), _tick);
             localInput.Write(p.Slice(5, InputFrame.Size));
+            BitConverter.TryWriteBytes(p.Slice(5 + InputFrame.Size, 4), LastAppliedTick);
             _net.Send(0, p, reliable: false);
 
             // A client still drives its own craft locally so the controls feel attached to
             // something; the host's next packet is what settles where it actually is.
             World.SetInput(LocalSeat, localInput);
+
+            // Anything the player did in their inventory panel this tick. Its own reliable
+            // messages, not folded into the input frame: a drag is an event that must arrive
+            // exactly once, which is the opposite of what the input channel promises.
+            SendInvIntents();
         }
     }
 
@@ -472,6 +767,8 @@ public sealed class Session
     /// </summary>
     private void Broadcast()
     {
+        BroadcastScores();
+
         // The players packet is the same for everyone, so it is written once.
         _out[0] = (byte)Msg.State;
         int np = Snapshot.WritePlayers(World!, _tick, _out.AsSpan(1));
@@ -510,12 +807,67 @@ public sealed class Session
                 int nx = WriteEffects(seat, _effect.AsSpan(1));
                 _net.Send(peer, _effect.AsSpan(0, nx + 1), reliable: false);
             }
+
+            // The damaged skyline near this client. Its own packet for the same reason the
+            // bosses are: a busy field must never cost a client the fact that the tower it is
+            // taking cover behind is no longer there. Both of the next two write nothing at
+            // all when there is nothing to say, which is most of a match.
+            _structures[0] = (byte)Msg.Structures;
+            // The start index walks with the tick, so a district holding more ruins than one
+            // packet can carry is described in full over a few snapshots instead of the first
+            // twenty being repeated for ever while the rest are never mentioned at all.
+            int nst = Snapshot.WriteStructures(World!, seat, _tick, _structures.AsSpan(1),
+                rotation: (int)(_tick * (uint)Snapshot.MaxStructuresPerPacket));
+            if (nst > 0) _net.Send(peer, _structures.AsSpan(0, nst + 1), reliable: false);
+
+            // The cables and beams around this client — the light a fight throws off.
+            _rigs[0] = (byte)Msg.Rigs;
+            int nrg = Snapshot.WriteRigs(World!, seat, _tick, _rigs.AsSpan(1));
+            if (nrg > 0) _net.Send(peer, _rigs.AsSpan(0, nrg + 1), reliable: false);
+
+            // And this seat's own pack, when and only when it has changed. Reliable: salvage
+            // that fell off the wire would simply never arrive, since nothing re-sends it.
+            SendInventoryIfChanged(peer, seat);
         }
 
         // The cues are spent once described to everyone — clear them whether or not anyone was
         // listening, so a host alone in a room never lets either list grow.
         World!.SoundCues.Clear();
         World!.EffectCues.Clear();
+    }
+
+    /// <summary>
+    /// Host-side: mirrors one seat its own pack, if anything in it has moved since the last
+    /// time. Reliable and change-driven rather than streamed — an inventory is small, it
+    /// changes a handful of times a minute, and every one of those changes matters exactly
+    /// once, which is the opposite of the keep-last packets around it.
+    /// </summary>
+    private void SendInventoryIfChanged(int peer, int seat)
+    {
+        Core.Inventory pack = World!.InventoryOf(seat);
+        int digest = pack.Fingerprint();
+        if (_invSent.TryGetValue(seat, out int was) && was == digest) return;
+        _invSent[seat] = digest;
+
+        _inv[0] = (byte)Msg.Inventory;
+        pack.Write(_inv.AsSpan(1, Core.Inventory.WireSize));
+        _net.Send(peer, _inv.AsSpan(0, 1 + Core.Inventory.WireSize), reliable: true);
+    }
+
+    /// <summary>Client-side: sends everything the player has done to their pack since the last
+    /// tick. Reliable and in order — a dropped move would leave the client's mirror and the
+    /// host's pack permanently disagreeing until something else happened to change it.</summary>
+    private void SendInvIntents()
+    {
+        if (World!.InvIntents.Count == 0) return;
+        Span<byte> p = stackalloc byte[1 + Core.InvIntent.Size];
+        p[0] = (byte)Msg.InvAct;
+        foreach (var intent in World.InvIntents)
+        {
+            intent.Write(p.Slice(1, Core.InvIntent.Size));
+            _net.Send(0, p, reliable: true);
+        }
+        World.InvIntents.Clear();
     }
 
     /// <summary>How many cues one sound packet carries at most — plenty for a busy fight, and
@@ -604,32 +956,55 @@ public sealed class Session
                 if (identity != 0 && _seatOfIdentity.TryGetValue(identity, out int kept)
                     && kept < World.Players.Count)
                 {
+                    bool wasHere = _seatOfPeer.ContainsValue(kept);
                     _seatOfPeer[from] = kept;
-                    _nameOfSeat[kept] = name;
+                    Rename(kept, name);
                     World.Players[kept].Away = false;
-                    Announce($"{name} REJOINED");
+                    // Their pack has to be told again from scratch: the machine coming back is
+                    // holding an empty mirror, and the change-driven echo would say nothing at
+                    // all because the pack itself has not moved since they left.
+                    _invSent.Remove(kept);
+                    if (!wasHere) Announce($"{name} REJOINED");
                     SendWelcome(from, kept);
+                    SendRosterTo(from);
                     if (MatchStarted) SendStartTo(from);
                     break;
                 }
 
                 // Otherwise a new player. A repeat hello from a peer already seated (its Welcome
-                // was lost and it asked again) just gets another Welcome, not a second seat.
+                // was lost, or it was sent again while the link was still coming up) just gets
+                // another Welcome, not a second seat.
                 if (_seatOfPeer.TryGetValue(from, out int have))
                 {
+                    Rename(have, name);
                     SendWelcome(from, have);
+                    SendRosterTo(from);
+                    if (MatchStarted) SendStartTo(from);
                     break;
                 }
 
                 var craft = World.AddPlayer(new Loadout { Class = chassis });
-                if (craft is null) return;   // match full — they stay out
+                if (craft is null)
+                {
+                    // No seat for them. Say so: a joiner that is merely ignored waits on the
+                    // CONNECTING banner until they give up, with nothing to tell them the room
+                    // was simply full.
+                    Span<byte> no = stackalloc byte[1];
+                    no[0] = (byte)Msg.Full;
+                    _net.Send(from, no, reliable: true);
+                    break;
+                }
 
                 int seat = World.Seat(craft);
                 _seatOfPeer[from] = seat;
                 if (identity != 0) _seatOfIdentity[identity] = seat;
-                _nameOfSeat[seat] = name;
+                _invSent.Remove(seat);
+                Rename(seat, name);
                 Announce($"{name} JOINED");
                 SendWelcome(from, seat);
+                // Everyone already here, by name — a late arrival has missed every roster
+                // update the room ever sent.
+                SendRosterTo(from);
                 // A player who arrives after LAUNCH is dropped straight into the running match.
                 if (MatchStarted) SendStartTo(from);
                 break;
@@ -640,15 +1015,31 @@ public sealed class Session
                 const int fixedLen = 2 + MatchSettings.Size + 12;
                 if (payload.Length < fixedLen) return;
                 int at = 1;
-                LocalSeat = payload[at++];
+                int given = payload[at++];
+                if (given < 0 || given >= MatchSettings.MaxSeats) return;
+                // Everything below rebuilds our craft from scratch and puts it where the host
+                // says. That is exactly right for a seating and for a rejoin, and exactly
+                // wrong for the extra Welcomes a repeated hello earns (see SendHello): once
+                // seated, another one would tear down the craft we are driving and snap it
+                // back to a transform from a hundred milliseconds ago. So it applies only when
+                // we were actually asking — which a rejoin is, since it sends a fresh hello.
+                bool asked = _helloWanted || LocalSeat != given;
+                LocalSeat = given;
+                _helloWanted = false;
+                Rejected = null;
                 World.Match = MatchSettings.Read(payload.AsSpan(at, MatchSettings.Size));
                 at += MatchSettings.Size;
+                // The rules the host is actually holding, onto the lobby's own copy — so a
+                // player who joins after the host has finished at the console sees the map,
+                // seats and revives they will really be playing with, rather than the
+                // defaults they started the room with.
+                Room?.AdoptRules(World.Match);
+                if (!asked) break;
 
                 // Fill the roster out to our own seat with placeholders the host's snapshots
                 // will overwrite, then install our own chosen craft — full build, not a
                 // placeholder tank — at the seat we were actually given.
-                while (World.Players.Count <= LocalSeat && World.AddPlayer() != null) { }
-                if (LocalSeat < 0 || LocalSeat >= World.Players.Count) return;
+                if (!World.EnsureSeat(LocalSeat)) return;
                 World.ReplacePlayer(LocalSeat, World.Loadout);
                 World.LocalIndex = LocalSeat;
 
@@ -686,6 +1077,15 @@ public sealed class Session
                 if (payload.Length < 5 + InputFrame.Size) return;
                 if (!_seatOfPeer.TryGetValue(from, out int seat)) return;
                 World.SetInput(seat, InputFrame.Read(payload.AsSpan(5, InputFrame.Size)));
+
+                // The acknowledgement riding on the back of the frame: how far behind this
+                // client's view of the world runs, in ticks. A frame from a build that does
+                // not carry one simply leaves the seat's lag as it was — worst case zero,
+                // which is the uncompensated behaviour this replaces.
+                if (payload.Length < 9 + InputFrame.Size) break;
+                uint ack = BitConverter.ToUInt32(payload.AsSpan(5 + InputFrame.Size, 4));
+                if (ack == 0 || ack > _tick) break;   // not seen a snapshot yet, or nonsense
+                World.SetSeatLag(seat, (int)(_tick - ack));
                 break;
             }
 
@@ -712,6 +1112,37 @@ public sealed class Session
             case Msg.Bosses when !IsHost:
                 Snapshot.ApplyBosses(World, payload.AsSpan(1));
                 break;
+
+            case Msg.Structures when !IsHost:
+                Snapshot.ApplyStructures(World, payload.AsSpan(1));
+                break;
+
+            case Msg.Rigs when !IsHost:
+                Snapshot.ApplyRigs(World, payload.AsSpan(1));
+                break;
+
+            case Msg.Inventory when !IsHost:
+            {
+                if (payload.Length < 1 + Core.Inventory.WireSize) return;
+                if (LocalSeat < 0) return;
+                // Straight over the mirror. Whatever the panel optimistically did to it, this
+                // is what the player actually has.
+                World.InventoryOf(LocalSeat).Read(payload.AsSpan(1, Core.Inventory.WireSize));
+                break;
+            }
+
+            case Msg.InvAct when IsHost:
+            {
+                if (payload.Length < 1 + Core.InvIntent.Size) return;
+                if (!_seatOfPeer.TryGetValue(from, out int seat)) return;
+                World.ApplyInvIntent(seat, Core.InvIntent.Read(payload.AsSpan(1, Core.InvIntent.Size)));
+                // Every intent gets an answer, including the ones the host threw out. A
+                // refused move leaves the pack byte-for-byte identical, so the change-driven
+                // echo would say nothing — and the client would be left holding the item it
+                // invented, with nothing ever coming along to take it back.
+                _invSent.Remove(seat);
+                break;
+            }
 
             case Msg.Effect when !IsHost:
             {
@@ -768,8 +1199,7 @@ public sealed class Session
                 if (payload.Length < 2 + len) break;
                 string name = DecodeName(payload.AsSpan(2, len));
                 if (name.Length == 0) name = "A PLAYER";
-                _nameOfSeat[seat] = name;
-                Room?.ApplyName(seat, name);
+                Rename(seat, name);
                 break;
             }
 
@@ -789,9 +1219,78 @@ public sealed class Session
             }
 
             case Msg.Rules when !IsHost:
-                if (payload.Length >= 1 + MatchSettings.Size)
-                    Room?.AdoptRules(MatchSettings.Read(payload.AsSpan(1, MatchSettings.Size)));
+            {
+                if (payload.Length < 1 + MatchSettings.Size) break;
+                MatchSettings rules = MatchSettings.Read(payload.AsSpan(1, MatchSettings.Size));
+                Room?.AdoptRules(rules);
+                // And onto the world, not only the lobby's readout. The seat count in
+                // particular is load-bearing: a client's roster refuses to grow past its own
+                // MaxPlayers, so a host who widened the room after this client joined would
+                // have had every player past the old limit be named by the snapshot and
+                // created by none — invisible, on that machine alone.
+                World.Match = rules;
                 break;
+            }
+
+            case Msg.Full when !IsHost:
+                Rejected = "THAT MATCH IS FULL";
+                _helloWanted = false;
+                break;
+
+            // Client → host: somebody pointed at something. The host is the only thing that
+            // may say which seat did it — a payload naming its own seat is a payload that
+            // could name somebody else's.
+            case Msg.Mark when IsHost:
+            {
+                if (World == null || payload.Length < 9) break;
+                if (!_seatOfPeer.TryGetValue(from, out int seat)) break;
+                float mx = BitConverter.ToSingle(payload.AsSpan(1, 4));
+                float mz = BitConverter.ToSingle(payload.AsSpan(5, 4));
+                PlantMark(seat, new System.Numerics.Vector2(mx, mz));
+                break;
+            }
+
+            // Host → all: seat N pointed here. Our own comes back to us and is dropped — we
+            // planted it the instant we pressed the key.
+            case Msg.Mark when !IsHost:
+            {
+                if (World == null || payload.Length < 10) break;
+                int seat = payload[1];
+                if (seat == LocalSeat) break;
+                float mx = BitConverter.ToSingle(payload.AsSpan(2, 4));
+                float mz = BitConverter.ToSingle(payload.AsSpan(6, 4));
+                World.PlaceMarker(seat, new System.Numerics.Vector2(mx, mz));
+                break;
+            }
+
+            case Msg.Scores when !IsHost:
+            {
+                if (World == null || payload.Length < 2) break;
+                int seats = payload[1];
+                if (payload.Length < 2 + seats * 4) break;
+                int at = 2;
+                for (int seat = 0; seat < seats; seat++)
+                {
+                    int kills = payload[at++];
+                    int deaths = payload[at++];
+                    int ping = BitConverter.ToUInt16(payload.AsSpan(at, 2)); at += 2;
+                    World.SetScore(seat, kills, deaths, ping);
+                }
+                break;
+            }
+
+            case Msg.SeatName when !IsHost:
+            {
+                if (payload.Length < 3) break;
+                int seat = payload[1];
+                int len = payload[2];
+                if (payload.Length < 3 + len) break;
+                string who = DecodeName(payload.AsSpan(3, len));
+                if (who.Length == 0) who = "A PLAYER";
+                World.SeatNames[seat] = who;
+                Room?.ApplyName(seat, who);
+                break;
+            }
 
             case Msg.RoomState when !IsHost:
             {

@@ -1,15 +1,16 @@
+using System.Numerics;
+using VoidTanks.Acoustics;
+
 namespace VoidTanks.Core;
 
 /// <summary>
 /// A one-shot sound the simulation asks for, named rather than played directly. Every combat
-/// noise in the game goes out as one of these through <see cref="World.World.Cue"/>, which is
+/// noise in the game goes out as one of these through <see cref="World.World.Emit"/>, which is
 /// what makes multiplayer audio possible: the host records the cue with a world position and
-/// broadcasts it, and every machine plays it back attenuated to <em>its own</em> craft — so a
-/// firefight two players are both near sounds right to both of them.
+/// broadcasts it, and every machine plays it back placed against <em>its own</em> listener — so
+/// a firefight two players are both near sounds right to both of them, and different to each.
 ///
-/// Only one-shots live here. The continuous beds (the crab's rotor, the soldier's wind, the
-/// lance charge) stay local on every machine, driven from the state the snapshots already
-/// carry — there is nothing to "fire", so nothing to send.
+/// The ids are wire vocabulary. Append new ones at the end; never renumber.
 /// </summary>
 public enum Cue : byte
 {
@@ -20,7 +21,7 @@ public enum Cue : byte
     Laser,          // a SPIDER laser leaving the emitter
     RifleShot,      // a SOLDIER rifle round
     RocketLaunch,   // a rocket leaving the tube
-    RocketBlast,    // a rocket going off (dist)
+    RocketBlast,    // a rocket going off
     LanceFire,      // the SPIDER lance discharging
     UnstableLance,  // a worn/corrupted lance
     CrabCoreBlast,  // a thrown CRAB CORE going off
@@ -28,11 +29,15 @@ public enum Cue : byte
     FishSpit,       // the FISH's spit
     FishStrike,     // the FISH's lunge connecting
     FishImpact,     // the FISH meeting a wall / round
-    MawSpit,        // one of the mouth's little lasers (dist)
+    FishBeach,      // the FISH meeting the seabed (param = how hard, 0..1)
+    FishCoil,       // the FISH winding a strike
+    TailBeat,       // one beat of the FISH's tail, swimming (param = starvation 0..1)
+    TailFlop,       // the same beat beached — a body flopping on the grid (param = starvation)
+    MawSpit,        // one of the mouth's little lasers
 
     // Impacts and deaths.
     Explosion,      // a craft or hunter destroyed, up close
-    ExplosionAt,    // a detonation heard from range (dist)
+    ExplosionAt,    // a detonation heard from range — the one cue that takes time to arrive
     Hit,            // a craft absorbing a hit
     Warning,        // shield crossing the low line
     CoreHit,        // a shot threading the crab's gem (param = severity 0..1)
@@ -44,8 +49,8 @@ public enum Cue : byte
     // The Crab-Core's protocol.
     Clamp,          // a claw-plate snapping / tracks locking
     Alarm,          // the threat-display lurch
-    Footstep,       // a leg planting (param = leg index; dist)
-    HuntCall,       // the hunting groan (dist)
+    Footstep,       // a leg planting (param = leg index)
+    HuntCall,       // the hunting groan
     CrabScream,     // the seizure scream
     ClawSlam,       // the free claw's blow
     BeamCharge,     // the crystal spinning up
@@ -56,81 +61,306 @@ public enum Cue : byte
     MawSwallow,     // the throat closing on a craft
     MawDive,        // the mouth dropping
     MawRelease,     // the jaw throwing a craft clear
+    MawTeeth,       // the teeth working over each other
+    MawCrystal,     // the crystal ringing (param = agitation 0..1)
 
     // The SOLDIER's rig.
     GasJump,        // the gas kick of a jump (param = starvation 0..1)
     CableFire,      // a hook leaving the launcher
     CableZip,       // a cable coming home / a miss
-    AnchorBite,     // steel biting in (dist)
+    AnchorBite,     // steel biting in
     AnchorTear,     // an anchor tearing out
 
     // Structures.
-    StructureGroan, // a support giving way (dist)
-    StructureCrack, // masonry shearing where a beam bites (dist)
+    StructureGroan, // a support giving way
+    StructureCrack, // masonry shearing where a beam bites
+
+    // --- Beds ---------------------------------------------------------------------
+    // Never sent over the wire and never raised by Emit: a bed has nothing to "fire", so
+    // there is nothing to broadcast. Every machine drives its own from the state the
+    // snapshots already carry. They live in this enum only so they can own a row in the
+    // cue table and be placed in the world like everything else.
+    BossHum,        // the Crab-Core's internal rotor
+    MawHover,       // the Maw-Core holding itself up
+    LanceCharge,    // the SPIDER's lance winding up (on your own hull)
+    ReelJet,        // the SOLDIER's reel (on your own hull)
+    Wind,           // the air past your ears (on your own hull)
+    CableStrain,    // steel under load (on your own hull)
+
+    // Two of the mouth's own noises that used to be played straight at the host's speaker
+    // from inside the entity, and so were heard by exactly one of the twenty players in the
+    // room. They are their own ids rather than shades of MawTeeth because they are their
+    // own recipes: a bite is not a grind, and a drip is neither.
+    MawDigest,      // one bite while it chews somebody
+    MawDrip,        // a bead of the black stuff letting go
+
+    /// <summary>Somebody dropped a mark on the world. Placed at the mark, not at the player
+    /// who dropped it, so a team-mate facing the other way still hears <em>where</em>.</summary>
+    Marker,
 }
 
 /// <summary>
-/// Turns a <see cref="Cue"/> back into the right call on <see cref="Audio"/>, given how far it
-/// is from the listener and its one packed parameter. The single place cue ids and the sound
-/// bank meet, on both ends of the wire.
+/// A cue an entity raised, with the place it happened.
+///
+/// <para>Entities have no world reference, so for a long time the bosses and the two
+/// cinematics reached for the sound bank directly — which meant every noise they made
+/// existed on the host's machine and nowhere else. Naming a cue into a buffer instead lets
+/// the world drain it after the step and <c>Emit</c> it, which is what puts it on the wire.
+/// The position rides along because a seizure is two places at once: the machine doing the
+/// gripping and the craft being gripped.</para>
+/// </summary>
+public readonly record struct EntityCue(Cue Id, Vector2 At, float Param = 0f);
+
+/// <summary>
+/// Where cue ids meet the sound bank, on both ends of the wire — and where each cue's
+/// <em>acoustics</em> are declared: how far it carries, how sharply it fades, how many of it
+/// may sound at once, whether the city can get in the way of it.
+///
+/// <para>The table below is the single most tunable thing in the game's audio, so it can be
+/// overridden at runtime by <c>Assets/Audio/cues.cfg</c> without a rebuild — see
+/// <see cref="ApplyOverrideFile"/>.</para>
 /// </summary>
 public static class CueBank
 {
-    /// <summary>Whether a cue's parameter is a 0..1 fraction (severity, starvation) rather than
-    /// a small whole number (a leg index, a warning step). The wire packs it to one byte either
-    /// way; this decides whether to scale it by 255 on the way through.</summary>
-    public static bool IsFraction(Cue id) => id is Cue.CoreHit or Cue.MawHurt or Cue.GasJump;
+    /// <summary>Whether a cue's parameter is a 0..1 fraction (severity, starvation) rather
+    /// than a small whole number (a leg index, a warning step). The wire packs it to one byte
+    /// either way; this decides whether to scale it by 255 on the way through.</summary>
+    public static bool IsFraction(Cue id)
+        => id is Cue.CoreHit or Cue.MawHurt or Cue.GasJump or Cue.FishBeach
+              or Cue.TailBeat or Cue.TailFlop or Cue.MawCrystal;
 
-    public static void Play(Cue id, float distance, float param)
+    /// <summary>
+    /// Whether only the host can ever raise this cue. Nearly every noise in the game is
+    /// raised by the machine that caused it — a client fires and hears its own shot at once,
+    /// and then ignores the host's echo of it. Salvage is the exception: clients deliberately
+    /// do not predict pickups, so a collect chime is decided on the host and nowhere else,
+    /// and the owner has to be allowed to hear the echo or they never hear it at all.
+    /// </summary>
+    public static bool RaisedOnlyByHost(Cue id) => id is Cue.Pickup;
+
+    /// <summary>
+    /// Builds the acoustic table. Read it as a description of the world: a rifle is a sharp
+    /// thing that does not carry and there may be four of them; a boss coming apart carries
+    /// across the whole arena, is never culled and is never dropped for anything.
+    ///
+    /// <para><c>Max</c> is the radius past which a cue is silent — and therefore the radius
+    /// past which it is never even given a voice, so these numbers are the game's audio
+    /// budget as much as its sound design. <c>Rolloff</c> above 1 dies away near you;
+    /// below 1 stays present most of the way out.</para>
+    /// </summary>
+    public static SpecTable BuildTable()
+    {
+        int count = Enum.GetValues<Cue>().Length;
+        var t = new SpecTable(count);
+
+        // A world sound, with the knobs most cues want. Everything below is this with
+        // reasons attached.
+        static SoundSpec S(float gain, float max, float rolloff, byte priority, byte cap,
+            float reverb = 0.30f, float air = 0.7f, float jitter = 0.03f,
+            bool occludes = true, bool delay = false, float min = 5f)
+            => new(Bus.Sfx, gain, min, max, rolloff, priority, cap, Spatial: true,
+                   Occludes: occludes, ReverbSend: reverb, AirAbsorb: air,
+                   PitchJitter: jitter, TravelDelay: delay);
+
+        // A bed: quiet, long-ranged, dry, one instance, never stolen.
+        static SoundSpec Bed(float gain, float max, float rolloff, float reverb = 0.10f,
+            float air = 0.5f)
+            => new(Bus.Sfx, gain, MinDistance: 4f, MaxDistance: max, Rolloff: rolloff,
+                   Priority: 240, MaxInstances: 1, Spatial: true, Occludes: true,
+                   ReverbSend: reverb, AirAbsorb: air, PitchJitter: 0f, TravelDelay: false);
+
+        // Something on your own panel: centred, dry, unmissable.
+        static SoundSpec Panel(float gain, byte priority = 220)
+            => SoundSpec.Flat with { Gain = gain, Priority = priority, MaxInstances = 2 };
+
+        // --- Guns -------------------------------------------------------------------
+        // Caps matter more here than anywhere. Twenty players on full auto is the case
+        // that decides whether a firefight is legible or a wall of noise.
+        t.Set((int)Cue.Detonation, "Detonation", S(0.85f, 150f, 1.5f, 120, 6, air: 0.75f, jitter: 0.05f));
+        t.Set((int)Cue.Laser, "Laser", S(0.55f, 110f, 1.8f, 90, 5, reverb: 0.22f, air: 0.85f, jitter: 0.07f));
+        t.Set((int)Cue.RifleShot, "RifleShot", S(0.62f, 130f, 1.9f, 95, 4, reverb: 0.38f, air: 0.9f, jitter: 0.06f));
+        t.Set((int)Cue.RocketLaunch, "RocketLaunch", S(0.85f, 155f, 1.4f, 130, 3, air: 0.6f));
+        t.Set((int)Cue.RocketBlast, "RocketBlast", S(1.0f, 175f, 1.2f, 170, 4, reverb: 0.45f, air: 0.5f));
+        t.Set((int)Cue.LanceFire, "LanceFire", S(0.9f, 160f, 1.3f, 140, 3, reverb: 0.35f, air: 0.6f));
+        t.Set((int)Cue.UnstableLance, "UnstableLance", S(0.95f, 165f, 1.3f, 145, 3, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.CrabCoreBlast, "CrabCoreBlast", S(1.0f, 190f, 1.1f, 180, 2, reverb: 0.5f, air: 0.5f));
+        t.Set((int)Cue.ThrowWhoosh, "ThrowWhoosh", S(0.6f, 90f, 1.7f, 70, 4, reverb: 0.2f, air: 0.8f));
+        t.Set((int)Cue.FishSpit, "FishSpit", S(0.5f, 100f, 1.9f, 80, 5, reverb: 0.25f, air: 0.85f, jitter: 0.08f));
+        t.Set((int)Cue.FishStrike, "FishStrike", S(1.0f, 150f, 1.2f, 160, 2, reverb: 0.35f, air: 0.55f));
+        t.Set((int)Cue.FishImpact, "FishImpact", S(0.9f, 130f, 1.4f, 150, 3, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.FishBeach, "FishBeach", S(0.8f, 120f, 1.5f, 120, 2, reverb: 0.35f));
+        t.Set((int)Cue.FishCoil, "FishCoil", S(0.5f, 70f, 1.8f, 70, 2, reverb: 0.15f, air: 0.9f));
+        t.Set((int)Cue.TailBeat, "TailBeat", S(0.45f, 80f, 1.8f, 60, 4, reverb: 0.2f, air: 0.85f, jitter: 0.06f));
+        t.Set((int)Cue.TailFlop, "TailFlop", S(0.55f, 85f, 1.7f, 65, 3, reverb: 0.3f));
+        t.Set((int)Cue.MawSpit, "MawSpit", S(0.6f, 110f, 1.6f, 100, 5, reverb: 0.25f, air: 0.8f));
+
+        // --- Impacts and deaths -----------------------------------------------------
+        t.Set((int)Cue.Explosion, "Explosion", S(1.0f, 200f, 1.1f, 190, 4, reverb: 0.45f, air: 0.5f));
+        // The one cue that travels. Long reach, slow rolloff, heavy absorption — a blast
+        // across the map should be a dull roll that arrives after the flash.
+        t.Set((int)Cue.ExplosionAt, "ExplosionAt",
+            S(0.9f, 260f, 0.85f, 175, 4, reverb: 0.55f, air: 1f, delay: true, min: 30f));
+        t.Set((int)Cue.Hit, "Hit", S(0.75f, 90f, 1.7f, 110, 5, reverb: 0.2f, air: 0.8f));
+        t.Set((int)Cue.Warning, "Warning", Panel(0.75f, 235));
+        t.Set((int)Cue.CoreHit, "CoreHit", S(0.9f, 140f, 1.4f, 165, 3, reverb: 0.35f, air: 0.7f));
+        t.Set((int)Cue.MawHurt, "MawHurt", S(0.9f, 140f, 1.4f, 165, 3, reverb: 0.4f, air: 0.7f));
+        // Never culled, never stolen. A boss dying is the loudest event in the game and
+        // the player must hear all of it wherever they are standing.
+        t.Set((int)Cue.BossDeath, "BossDeath",
+            S(1.0f, 300f, 0.8f, 250, 8, reverb: 0.6f, air: 0.55f, min: 20f));
+        t.Set((int)Cue.CrashLanding, "CrashLanding", S(0.8f, 110f, 1.6f, 120, 3, reverb: 0.35f));
+        t.Set((int)Cue.Pickup, "Pickup", Panel(0.55f, 200));
+
+        // --- The Crab-Core ----------------------------------------------------------
+        t.Set((int)Cue.Clamp, "Clamp", S(0.7f, 120f, 1.5f, 110, 4, reverb: 0.35f, air: 0.75f));
+        t.Set((int)Cue.Alarm, "Alarm", S(0.9f, 180f, 1.1f, 200, 2, reverb: 0.5f, air: 0.6f));
+        // Six legs on a tripod gait: three land on the same tick, so the cap is generous
+        // and the level is not.
+        t.Set((int)Cue.Footstep, "Footstep", S(0.85f, 100f, 1.5f, 85, 8, reverb: 0.4f, air: 0.7f, jitter: 0f));
+        // Carries a long way and stays present in the middle distance — it should feel
+        // like it is following you, not switching off.
+        t.Set((int)Cue.HuntCall, "HuntCall", S(0.75f, 145f, 0.75f, 150, 2, reverb: 0.45f, air: 0.85f, min: 10f));
+        t.Set((int)Cue.CrabScream, "CrabScream", S(1.0f, 120f, 1.3f, 245, 2, reverb: 0.3f, air: 0.5f));
+        t.Set((int)Cue.ClawSlam, "ClawSlam", S(1.0f, 140f, 1.3f, 210, 2, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.BeamCharge, "BeamCharge", S(0.9f, 200f, 1.0f, 215, 2, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.BeamWarning, "BeamWarning", S(0.9f, 210f, 0.9f, 225, 3, reverb: 0.35f, air: 0.6f, jitter: 0f));
+        t.Set((int)Cue.BeamFire, "BeamFire", S(1.0f, 240f, 0.85f, 240, 2, reverb: 0.5f, air: 0.55f));
+
+        // --- The Maw-Core -----------------------------------------------------------
+        t.Set((int)Cue.MawSwallow, "MawSwallow", S(1.0f, 130f, 1.3f, 235, 2, reverb: 0.4f, air: 0.6f));
+        t.Set((int)Cue.MawDive, "MawDive", S(0.95f, 150f, 1.2f, 200, 2, reverb: 0.45f, air: 0.6f));
+        t.Set((int)Cue.MawRelease, "MawRelease", S(0.9f, 130f, 1.3f, 195, 2, reverb: 0.4f));
+        t.Set((int)Cue.MawTeeth, "MawTeeth", S(0.6f, 95f, 1.6f, 75, 4, reverb: 0.5f, air: 0.85f, jitter: 0.06f));
+        t.Set((int)Cue.MawCrystal, "MawCrystal", S(0.55f, 105f, 1.5f, 80, 2, reverb: 0.5f, air: 0.8f));
+        // A bite lands on somebody, so it carries; a drip is a detail of the weather under
+        // the mouth and is not meant to be heard from anywhere but under it.
+        t.Set((int)Cue.MawDigest, "MawDigest", S(0.85f, 120f, 1.4f, 190, 2, reverb: 0.45f, air: 0.7f));
+        t.Set((int)Cue.MawDrip, "MawDrip", S(0.5f, 45f, 1.6f, 40, 3, reverb: 0.45f, air: 0.9f, jitter: 0.1f));
+
+        // A mark is information, so it carries a very long way and is barely attenuated by
+        // anything: the whole point is that a player anywhere in the match hears WHERE.
+        t.Set((int)Cue.Marker, "Marker", S(0.7f, 300f, 0.5f, 245, 3, reverb: 0.1f, air: 0.25f, jitter: 0f, occludes: false, min: 20f));
+
+        // --- The SOLDIER's rig ------------------------------------------------------
+        // These are things happening to a person. Generous ranges — a team-mate's grapple
+        // firing somewhere behind you is information — and light absorption.
+        t.Set((int)Cue.GasJump, "GasJump", S(0.8f, 120f, 1.5f, 115, 4, reverb: 0.25f, air: 0.8f));
+        t.Set((int)Cue.CableFire, "CableFire", S(0.7f, 105f, 1.6f, 100, 4, reverb: 0.25f, air: 0.8f));
+        t.Set((int)Cue.CableZip, "CableZip", S(0.6f, 95f, 1.7f, 85, 4, reverb: 0.25f, air: 0.85f));
+        t.Set((int)Cue.AnchorBite, "AnchorBite", S(0.85f, 125f, 1.3f, 145, 4, reverb: 0.45f, air: 0.7f));
+        t.Set((int)Cue.AnchorTear, "AnchorTear", S(0.85f, 115f, 1.4f, 150, 3, reverb: 0.4f, air: 0.7f));
+
+        // --- Structures -------------------------------------------------------------
+        // A tower failing is heard through the city, so occlusion is left ON but the reach
+        // is long: it is the loudest warning the world gives.
+        t.Set((int)Cue.StructureGroan, "StructureGroan", S(0.85f, 200f, 1.0f, 185, 3, reverb: 0.55f, air: 0.6f));
+        t.Set((int)Cue.StructureCrack, "StructureCrack", S(0.55f, 140f, 1.7f, 90, 5, reverb: 0.5f, air: 0.85f, jitter: 0.08f));
+
+        // --- Beds -------------------------------------------------------------------
+        // Long, slow rolloffs so a monster is a presence in the middle distance rather
+        // than an on/off switch, and low sends so the room does not turn to soup.
+        t.Set((int)Cue.BossHum, "BossHum", Bed(0.42f, 130f, 0.9f, reverb: 0.15f));
+        t.Set((int)Cue.MawHover, "MawHover", Bed(0.38f, 150f, 0.85f, reverb: 0.12f));
+        // The four on your own hull. Flat, dry, unoccluded — a bed cannot be muffled by a
+        // wall it is standing inside with you.
+        t.Set((int)Cue.LanceCharge, "LanceCharge", SoundSpec.Flat with { Bus = Bus.Sfx, Gain = 0.5f, MaxInstances = 1, Priority = 240 });
+        t.Set((int)Cue.ReelJet, "ReelJet", SoundSpec.Flat with { Bus = Bus.Sfx, Gain = 0.45f, MaxInstances = 1, Priority = 240 });
+        t.Set((int)Cue.Wind, "Wind", SoundSpec.Flat with { Bus = Bus.Sfx, Gain = 0.55f, MaxInstances = 1, Priority = 240 });
+        t.Set((int)Cue.CableStrain, "CableStrain", SoundSpec.Flat with { Bus = Bus.Sfx, Gain = 0.3f, MaxInstances = 1, Priority = 240 });
+
+        return t;
+    }
+
+    /// <summary>Where a tuning file may sit. Absent by default — the compiled table is the
+    /// game's real answer, and this exists so a number can be changed and heard without a
+    /// rebuild.</summary>
+    public const string OverridePath = "Assets/Audio/cues.cfg";
+
+    /// <summary>How many fields the last override load actually applied. Reported by the
+    /// debug overlay so a file that silently did nothing is visible.</summary>
+    public static int OverridesApplied { get; private set; }
+
+    /// <summary>Folds <see cref="OverridePath"/> over a table, if it exists. Never throws:
+    /// a tuning aid must not be able to take the game's audio down.</summary>
+    public static void ApplyOverrideFile(SpecTable table)
+    {
+        try
+        {
+            if (!File.Exists(OverridePath)) { OverridesApplied = 0; return; }
+            OverridesApplied = table.ApplyOverrides(File.ReadAllLines(OverridePath));
+        }
+        catch { OverridesApplied = 0; }
+    }
+
+    /// <summary>
+    /// Plays a cue at a place in the world. The one door between the simulation's vocabulary
+    /// and the sound bank; everything about how it will actually sound is decided downstream
+    /// of here, from the table above and from where the listener happens to be standing.
+    /// </summary>
+    public static void Play(Cue id, Vector2 at, float param)
     {
         switch (id)
         {
-            case Cue.Detonation: Audio.PlayDetonation(); break;
-            case Cue.Laser: Audio.PlayLaser(); break;
-            case Cue.RifleShot: Audio.PlayRifleShot(); break;
-            case Cue.RocketLaunch: Audio.PlayRocketLaunch(); break;
-            case Cue.RocketBlast: Audio.PlayRocketBlast(distance); break;
-            case Cue.LanceFire: Audio.PlayLanceFire(); break;
-            case Cue.UnstableLance: Audio.PlayUnstableLance(); break;
-            case Cue.CrabCoreBlast: Audio.PlayCrabCoreBlast(); break;
-            case Cue.ThrowWhoosh: Audio.PlayThrowWhoosh(); break;
-            case Cue.FishSpit: Audio.PlayFishSpit(); break;
-            case Cue.FishStrike: Audio.PlayFishStrike(); break;
-            case Cue.FishImpact: Audio.PlayFishImpact(); break;
-            case Cue.MawSpit: Audio.PlayMawSpit(distance); break;
+            case Cue.Detonation: Audio.PlayDetonation(at); break;
+            case Cue.Laser: Audio.PlayLaser(at); break;
+            case Cue.RifleShot: Audio.PlayRifleShot(at); break;
+            case Cue.RocketLaunch: Audio.PlayRocketLaunch(at); break;
+            case Cue.RocketBlast: Audio.PlayRocketBlast(at); break;
+            case Cue.LanceFire: Audio.PlayLanceFire(at); break;
+            case Cue.UnstableLance: Audio.PlayUnstableLance(at); break;
+            case Cue.CrabCoreBlast: Audio.PlayCrabCoreBlast(at); break;
+            case Cue.ThrowWhoosh: Audio.PlayThrowWhoosh(at); break;
+            case Cue.FishSpit: Audio.PlayFishSpit(at); break;
+            case Cue.FishStrike: Audio.PlayFishStrike(at); break;
+            case Cue.FishImpact: Audio.PlayFishImpact(at); break;
+            case Cue.FishBeach: Audio.PlayFishBeach(at, param); break;
+            case Cue.FishCoil: Audio.PlayFishCoil(at); break;
+            // One clip with a flag rather than two cues would need a second parameter the
+            // wire does not carry, so the beached beat is simply its own id.
+            case Cue.TailBeat: Audio.PlayTailBeat(at, param, beached: false); break;
+            case Cue.TailFlop: Audio.PlayTailBeat(at, param, beached: true); break;
+            case Cue.MawSpit: Audio.PlayMawSpit(at); break;
 
-            case Cue.Explosion: Audio.PlayExplosion(); break;
-            case Cue.ExplosionAt: Audio.PlayExplosionAt(distance); break;
-            case Cue.Hit: Audio.PlayHit(); break;
-            case Cue.Warning: Audio.PlayWarning(); break;
-            case Cue.CoreHit: Audio.PlayCoreHit(param); break;
-            case Cue.MawHurt: Audio.PlayMawHurt(param); break;
-            case Cue.BossDeath: Audio.PlayBossDeath(); break;
-            case Cue.CrashLanding: Audio.PlayCrashLanding(); break;
-            case Cue.Pickup: Audio.PlayPickup(); break;
+            case Cue.Explosion: Audio.PlayExplosion(at); break;
+            case Cue.ExplosionAt: Audio.PlayExplosionAt(at); break;
+            case Cue.Hit: Audio.PlayHit(at); break;
+            case Cue.Warning: Audio.PlayWarning(at); break;
+            case Cue.CoreHit: Audio.PlayCoreHit(at, param); break;
+            case Cue.MawHurt: Audio.PlayMawHurt(at, param); break;
+            case Cue.BossDeath: Audio.PlayBossDeath(at); break;
+            case Cue.CrashLanding: Audio.PlayCrashLanding(at); break;
+            case Cue.Pickup: Audio.PlayPickup(at); break;
 
-            case Cue.Clamp: Audio.PlayClamp(); break;
-            case Cue.Alarm: Audio.PlayAlarm(); break;
-            case Cue.Footstep: Audio.PlayFootstep((int)param, distance); break;
-            case Cue.HuntCall: Audio.PlayHuntCall(distance); break;
-            case Cue.CrabScream: Audio.PlayCrabScream(); break;
-            case Cue.ClawSlam: Audio.PlayClawSlam(); break;
-            case Cue.BeamCharge: Audio.PlayBeamCharge(); break;
-            case Cue.BeamWarning: Audio.PlayBeamWarning((int)param); break;
-            case Cue.BeamFire: Audio.PlayBeamFire(); break;
+            case Cue.Clamp: Audio.PlayClamp(at); break;
+            case Cue.Alarm: Audio.PlayAlarm(at); break;
+            case Cue.Footstep: Audio.PlayFootstep(at, (int)param); break;
+            case Cue.HuntCall: Audio.PlayHuntCall(at); break;
+            case Cue.CrabScream: Audio.PlayCrabScream(at); break;
+            case Cue.ClawSlam: Audio.PlayClawSlam(at); break;
+            case Cue.BeamCharge: Audio.PlayBeamCharge(at); break;
+            case Cue.BeamWarning: Audio.PlayBeamWarning(at, (int)param); break;
+            case Cue.BeamFire: Audio.PlayBeamFire(at); break;
 
-            case Cue.MawSwallow: Audio.PlayMawSwallow(); break;
-            case Cue.MawDive: Audio.PlayMawDive(); break;
-            case Cue.MawRelease: Audio.PlayMawRelease(); break;
+            case Cue.MawSwallow: Audio.PlayMawSwallow(at); break;
+            case Cue.MawDive: Audio.PlayMawDive(at); break;
+            case Cue.MawRelease: Audio.PlayMawRelease(at); break;
+            // The one cue whose parameter is a mode rather than a level: a grind heard from
+            // outside and a grind heard from inside a mouth are the same teeth doing very
+            // different things, and the wire's single byte is enough to say which.
+            case Cue.MawTeeth: Audio.PlayMawTeeth(at, grinding: param > 0.5f); break;
+            case Cue.MawCrystal: Audio.PlayMawCrystal(at, param); break;
+            case Cue.MawDigest: Audio.PlayMawDigest(at); break;
+            case Cue.MawDrip: Audio.PlayMawDrip(at); break;
 
-            case Cue.GasJump: Audio.PlayGasJump(param); break;
-            case Cue.CableFire: Audio.PlayCableFire(); break;
-            case Cue.CableZip: Audio.PlayCableZip(); break;
-            case Cue.AnchorBite: Audio.PlayAnchorBite(distance); break;
-            case Cue.AnchorTear: Audio.PlayAnchorTear(); break;
+            case Cue.GasJump: Audio.PlayGasJump(at, param); break;
+            case Cue.CableFire: Audio.PlayCableFire(at); break;
+            case Cue.CableZip: Audio.PlayCableZip(at); break;
+            case Cue.AnchorBite: Audio.PlayAnchorBite(at); break;
+            case Cue.AnchorTear: Audio.PlayAnchorTear(at); break;
 
-            case Cue.StructureGroan: Audio.PlayStructureGroan(distance); break;
-            case Cue.StructureCrack: Audio.PlayStructureCrack(distance); break;
+            case Cue.StructureGroan: Audio.PlayStructureGroan(at); break;
+            case Cue.StructureCrack: Audio.PlayStructureCrack(at); break;
+            case Cue.Marker: Audio.PlayMarker(at); break;
         }
     }
 }

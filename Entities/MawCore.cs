@@ -110,6 +110,21 @@ public sealed class MawCore
     private float _teethAudioTimer;
     private readonly Random _rng = new();
 
+    /// <summary>
+    /// One-shot sounds the mouth raised this tick, each with the place it happened. Drained
+    /// and cleared by the world after <see cref="Update"/>.
+    ///
+    /// <para>The monster has no world reference, so its dive, its grinding teeth and its
+    /// dripping used to be played straight at the audio device — which meant they were heard
+    /// on the host's machine only, and a mouth hanging over a team-mate on the far side of a
+    /// twenty-player match made no sound at all for anybody but one person.</para>
+    /// </summary>
+    public IReadOnlyList<EntityCue> Cues => _cues;
+    private readonly List<EntityCue> _cues = new();
+
+    /// <summary>Called by the world once it has emitted them.</summary>
+    public void ClearCues() => _cues.Clear();
+
     // Crystal spin rates: idle turn, agitated once it has seen you, and a hard wind-up
     // while it is grinding — the spin is how the thing shows effort.
     private const float IdleSpin = 1.4f;
@@ -400,7 +415,7 @@ public sealed class MawCore
         {
             _columnTime = 0f;
             Enter(State.Lunge);
-            Audio.PlayMawDive();
+            _cues.Add(new EntityCue(Cue.MawDive, Position));
         }
         return spat;
     }
@@ -517,7 +532,7 @@ public sealed class MawCore
         if (_teethAudioTimer <= 0f)
         {
             _teethAudioTimer = 0.42f;
-            Audio.PlayMawTeeth(0f, grinding: true);
+            _cues.Add(new EntityCue(Cue.MawTeeth, Position, 1f));
         }
     }
 
@@ -634,7 +649,7 @@ public sealed class MawCore
             MaxLife = 2.2f,
         };
         _drips[slot].Life = _drips[slot].MaxLife;
-        Audio.PlayMawDrip();
+        _cues.Add(new EntityCue(Cue.MawDrip, Position));
     }
 
     // --- Helpers --------------------------------------------------------------
