@@ -3,53 +3,63 @@ using System.Numerics;
 namespace VoidTanks.Core;
 
 /// <summary>
-/// Every physical control the simulation can read, as one bit each.
+/// Every control the simulation can read, as one bit each.
 ///
-/// These are <em>keys</em>, not actions. The game has always let one physical key mean a
-/// different thing on every chassis — Q is the tank's lurch and the soldier's left hook,
-/// E is the smoke vent and the right hook, the left mouse button is a rifle or a spit or
-/// a virus round depending on who is holding it — and that arrangement is deliberate.
-/// Naming the actions here instead would need thirty bits where twenty-two do, and would
-/// quietly move the "which chassis am I?" decision out of the world and into the sampler,
-/// which is the one place that must not know.
+/// <para>These are <em>actions</em>, not keys. They used to be keys — Q and E and the left
+/// mouse button arrived here raw, and each chassis decided what they meant — on the argument
+/// that one physical key legitimately means three different things depending on what you are
+/// driving, and that naming actions here would drag the "which chassis am I?" question into
+/// the sampler. The first half of that is still true and is still how the game feels. The
+/// second half turned out to be backwards: the sampler does not have to know which chassis is
+/// reading, because <em>every</em> action is resolved every tick and the chassis picks the
+/// ones it cares about, exactly as it always did with the keys. What changed is that the
+/// player can now say which button raises which bit, and a bit named <c>Q</c> cannot be
+/// rebound to anything without becoming a lie.</para>
 ///
-/// The four drive bits and the four trigger bits below them are the exception: those are
-/// rebindable from the settings screen, so the sampler resolves them through
-/// <see cref="Settings"/> and what lands here is already the answer, not the key.
+/// <para>Twenty-two bits, same as the keys they replace, and the frame is the same twelve
+/// bytes on the wire. Bit positions are the wire vocabulary: append at the end, never
+/// renumber.</para>
 /// </summary>
 [Flags]
 public enum Btn : uint
 {
     None = 0,
 
-    // --- Rebindable: resolved through Settings at sample time --------------------
-    Forward    = 1u << 0,
+    // --- Shared: read on every chassis -------------------------------------------
+    Forward    = 1u << 0,   // and, on a body, walking forward
     Back       = 1u << 1,
-    TurnLeft   = 1u << 2,
+    TurnLeft   = 1u << 2,   // and, on a body, stepping left; on the fish, rolling left
     TurnRight  = 1u << 3,
     Jump       = 1u << 4,   // the tank's plant rides this too — see InputFrame.TankPlant
-    Fire       = 1u << 5,
-    Grenade    = 1u << 6,
+    Fire       = 1u << 5,   // cannon, rifle, spit, claw, virus round — the primary trigger
+    Secondary  = 1u << 6,   // grenade, rocket, strike, emitter, overload
     Hyperspace = 1u << 7,
 
-    // --- Fixed physical keys -----------------------------------------------------
-    Q = 1u << 8,
-    E = 1u << 9,
-    R = 1u << 10,
-    T = 1u << 11,
-    Y = 1u << 12,
-    U = 1u << 13,
+    // --- The TANK's siege kit ------------------------------------------------------
+    TankLurch  = 1u << 8,
+    TankSmoke  = 1u << 9,
+    TankSlug   = 1u << 10,
 
-    W = 1u << 14,
-    A = 1u << 15,
-    S = 1u << 16,
-    D = 1u << 17,
+    // --- The SPIDER ----------------------------------------------------------------
+    SpiderPounce = 1u << 11,
 
-    Space = 1u << 18,
-    Enter = 1u << 19,
+    // --- The SOLDIER ---------------------------------------------------------------
+    LeftHook   = 1u << 12,
+    RightHook  = 1u << 13,  // the virus's lunge rides this too
+    HighJump   = 1u << 14,
 
-    MouseL = 1u << 20,
-    MouseR = 1u << 21,
+    // --- The FISH -------------------------------------------------------------------
+    Beat       = 1u << 15,
+    Brake      = 1u << 16,
+
+    // --- Equip slots ------------------------------------------------------------------
+    Slot1      = 1u << 17,
+    Slot2      = 1u << 18,
+    Slot3      = 1u << 19,
+    Slot4      = 1u << 20,
+
+    /// <summary>Use the thing in front of you. Only the multiplayer room reads it.</summary>
+    Interact   = 1u << 21,
 }
 
 /// <summary>
@@ -127,8 +137,10 @@ public readonly struct InputFrame
     /// </summary>
     public InputFrame WithoutCombat()
     {
-        const Btn combat = Btn.Fire | Btn.Grenade | Btn.Hyperspace | Btn.MouseL | Btn.MouseR
-                         | Btn.Q | Btn.E | Btn.R | Btn.T | Btn.Y | Btn.U;
+        const Btn combat = Btn.Fire | Btn.Secondary | Btn.Hyperspace
+                         | Btn.TankLurch | Btn.TankSmoke | Btn.TankSlug | Btn.SpiderPounce
+                         | Btn.LeftHook | Btn.RightHook
+                         | Btn.Slot1 | Btn.Slot2 | Btn.Slot3 | Btn.Slot4;
         return new(Down & ~combat, Pressed & ~combat, LookX, LookY);
     }
 
@@ -144,53 +156,61 @@ public readonly struct InputFrame
     public bool TurnRight => this[Btn.TurnRight];
     public bool JumpPressed => Hit(Btn.Jump);
     public bool Fire => this[Btn.Fire];
-    public bool Grenade => this[Btn.Grenade];
+    public bool Grenade => this[Btn.Secondary];
     public bool HyperspacePressed => Hit(Btn.Hyperspace);
 
-    /// <summary>Dig in / stand up: the freed jump key. The treads never leave the grid now.</summary>
+    /// <summary>Dig in / stand up: the jump binding. The treads never leave the grid now.</summary>
     public bool TankPlantPressed => Hit(Btn.Jump);
-    /// <summary>Q: the lurch — a track-boost dodge, paid out of the Hyper reserve.</summary>
-    public bool TankLurchPressed => Hit(Btn.Q);
-    /// <summary>E: vent the smoke dischargers to blind the field.</summary>
-    public bool TankSmokePressed => Hit(Btn.E);
-    /// <summary>R: the AP slug — a heavy round that punches through a line and through cover.</summary>
-    public bool TankSlugPressed => Hit(Btn.R);
-    /// <summary>Q: the pounce — a kick off a wall, on the key the heavy chassis dodges with.</summary>
-    public bool SpiderPouncePressed => Hit(Btn.Q);
+    /// <summary>The lurch — a track-boost dodge, paid out of the Hyper reserve.</summary>
+    public bool TankLurchPressed => Hit(Btn.TankLurch);
+    /// <summary>Vent the smoke dischargers to blind the field.</summary>
+    public bool TankSmokePressed => Hit(Btn.TankSmoke);
+    /// <summary>The AP slug — a heavy round that punches through a line and through cover.</summary>
+    public bool TankSlugPressed => Hit(Btn.TankSlug);
+    /// <summary>The pounce — a kick off a wall.</summary>
+    public bool SpiderPouncePressed => Hit(Btn.SpiderPounce);
 
-    // The SOLDIER: a person in first person.
-    public bool RightHookPressed => Hit(Btn.E);
-    public bool LeftHookPressed => Hit(Btn.Q);
-    public bool HighJumpPressed => Hit(Btn.Enter) || Hit(Btn.Space);
-    public bool RifleDown => this[Btn.MouseL];
-    public bool RocketPressed => Hit(Btn.MouseR);
+    // The SOLDIER: a person in first person. Its rifle and its rocket are the primary and
+    // secondary triggers rather than bits of their own — they are what this chassis has in
+    // the same two hands the tank puts on a cannon and a grenade, and giving them separate
+    // bindings would mean a player who moves FIRE off the mouse discovers the soldier alone
+    // never got the message.
+    public bool RightHookPressed => Hit(Btn.RightHook);
+    public bool LeftHookPressed => Hit(Btn.LeftHook);
+    public bool HighJumpPressed => Hit(Btn.HighJump);
+    public bool RifleDown => this[Btn.Fire];
+    public bool RocketPressed => Hit(Btn.Secondary);
 
-    /// <summary>Raw WASD as (strafe, forward), each -1..1. A body, not a vehicle.</summary>
+    /// <summary>Movement as (strafe, forward), each -1..1. A body, not a vehicle: the turn
+    /// bindings step sideways here, since the mouse is already doing the turning.</summary>
     public Vector2 SoldierMove => new(
-        (this[Btn.D] ? 1f : 0f) - (this[Btn.A] ? 1f : 0f),
-        (this[Btn.W] ? 1f : 0f) - (this[Btn.S] ? 1f : 0f));
+        (this[Btn.TurnRight] ? 1f : 0f) - (this[Btn.TurnLeft] ? 1f : 0f),
+        (this[Btn.Forward] ? 1f : 0f) - (this[Btn.Back] ? 1f : 0f));
 
-    // The FISH: no held movement key at all. W is an event, not a state.
-    public bool BeatPressed => Hit(Btn.W) || Hit(Btn.Space);
-    public float RollInput => (this[Btn.D] ? 1f : 0f) - (this[Btn.A] ? 1f : 0f);
-    public bool BrakeDown => this[Btn.S];
-    public bool SpitDown => this[Btn.MouseL];
-    public bool StrikePressed => Hit(Btn.MouseR);
+    // The FISH: no held movement key at all. The beat is an event, not a state.
+    public bool BeatPressed => Hit(Btn.Beat);
+    public float RollInput => (this[Btn.TurnRight] ? 1f : 0f) - (this[Btn.TurnLeft] ? 1f : 0f);
+    public bool BrakeDown => this[Btn.Brake];
+    public bool SpitDown => this[Btn.Fire];
+    public bool StrikePressed => Hit(Btn.Secondary);
 
     // The VIRUS: the soldier's hand, flying.
     public Vector2 VirusMove => SoldierMove;
-    public bool VirusFireDown => this[Btn.MouseL];
-    public bool VirusOverloadPressed => Hit(Btn.MouseR);
+    public bool VirusFireDown => this[Btn.Fire];
+    public bool VirusOverloadPressed => Hit(Btn.Secondary);
 
-    /// <summary>The four equip slots on the R/T/Y/U row. Which one was just pressed, or -1.</summary>
+    /// <summary>The four equip slots. Which one was just pressed, or -1.</summary>
     public int WeaponSlotPressed()
     {
-        if (Hit(Btn.R)) return 0;
-        if (Hit(Btn.T)) return 1;
-        if (Hit(Btn.Y)) return 2;
-        if (Hit(Btn.U)) return 3;
+        if (Hit(Btn.Slot1)) return 0;
+        if (Hit(Btn.Slot2)) return 1;
+        if (Hit(Btn.Slot3)) return 2;
+        if (Hit(Btn.Slot4)) return 3;
         return -1;
     }
+
+    /// <summary>Use the thing in front of you. Only the multiplayer room reads it.</summary>
+    public bool InteractPressed => Hit(Btn.Interact);
 
     // --- Wire format --------------------------------------------------------------
     // Fixed twelve bytes, little-endian, no version tag. The tag belongs on the packet

@@ -13,7 +13,8 @@ public enum GameState
     Test,        // hidden bestiary reached by the secret 'L' hatch
     LevelIntro,
     Playing,     // the inventory/crafting panel (E) is a live overlay on this state, not its own
-    Paused,      // world frozen behind a pixel-blur while the pause panel is up
+    Paused,      // the pause panel is up over a dimmed world — frozen in single player,
+                 // still running in a match, since a room cannot be held still for one person
     Dead,
     LevelClear,
 }

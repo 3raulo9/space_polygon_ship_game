@@ -76,8 +76,10 @@ public sealed class Game : IDisposable
     /// <summary>True while a match is running, so the loop knows to pump the wire.</summary>
     private bool InMatch => _session != null;
 
-    // Pause pixel-blur amount: 0 clean, 1 fully coarsened/dimmed. Eases in when
-    // pausing, out when resuming. Seconds for a full sweep set by PauseFade.
+    // How far the pause dim has come in: 0 clean, 1 fully dimmed. Eases in when pausing, out
+    // when resuming. Seconds for a full sweep set by PauseFade. Also handed to BeginFade on
+    // the way out to the menu, so the darkening the panel has already done carries into the
+    // dissolve instead of being thrown away and redone.
     private float _pauseBlur;
     private bool _resuming;
     private const float PauseFade = 0.28f;
@@ -101,10 +103,14 @@ public sealed class Game : IDisposable
     // a human at the window. No effect on normal play.
     private readonly string? _capturePath = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE");
     // When set, capture grabs a UI screen instead of the world: "menu" or "settings".
+    // "controls" and "sound" are the settings screen's two sub-pages, which are worth their
+    // own names — they are the densest layouts in the game and the only ones a human would
+    // otherwise have to reach by hand to look at.
     private readonly string? _captureScreen =
         Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_MENU");
     private bool _captureMenu =>
-        _captureScreen is "1" or "menu" or "settings" or "test" or "class" or "lobby" or "room";
+        _captureScreen is "1" or "menu" or "settings" or "controls" or "sound"
+                       or "test" or "class" or "lobby" or "room";
     private int _frame;
 
     /// <summary>Capture-only: the harness is holding the SPIDER's lance charge, so no
@@ -284,14 +290,26 @@ public sealed class Game : IDisposable
                 continue;
             }
 
-            // Paused: world frozen behind the pixel-blur, pause panel driving.
+            // Paused: the panel is up over the dimmed world.
+            //
+            // Single player freezes the run behind it. A networked match does not, and must
+            // not: a room of twenty cannot be held still because one of them went looking for
+            // the volume. The match runs on, this machine keeps talking to it, and the craft
+            // sitting under the panel is exactly as killable as it was a second ago — which
+            // is the price of opening it, and is meant to be felt.
             if (_state == GameState.Paused)
             {
                 UpdatePaused();
-                // "Back to menu" tears the world down inside UpdatePaused, so only
-                // draw the paused frame while we're actually still paused — next
-                // iteration draws whatever state we left for (menu or resumed play).
-                if (_state == GameState.Paused) DrawPaused();
+
+                // "Back to menu" tears the world down inside UpdatePaused, so only carry on
+                // while we're actually still paused — the next iteration draws whatever
+                // state we left for (menu or resumed play).
+                if (_state != GameState.Paused) continue;
+
+                if (_session != null) StepSim(readInput: false);
+                else _accumulator = 0;   // don't fast-forward the frozen gap on resume
+
+                DrawPaused();
                 continue;
             }
 
@@ -367,34 +385,48 @@ public sealed class Game : IDisposable
                     _world!.SpawnSoldierSquad();
             }
 
-            // Accumulate real elapsed time and step the sim in fixed increments,
-            // so a fast or slow display never changes the physics.
-            _accumulator += Raylib.GetFrameTime();
-            // Guard against spiral-of-death after a stall.
-            if (_accumulator > 0.25) _accumulator = 0.25;
-
-            while (_accumulator >= Config.FixedDt)
-            {
-                InputFrame frame = _input.Next();
-
-                // The wire turns before the world does: a client's frame goes up and the
-                // host's account comes down, so the step that follows runs on the freshest
-                // thing either machine knows.
-                if (_session is { } net && _state == GameState.Playing)
-                {
-                    // A crafting panel is this machine's business — clear the combat bits
-                    // before they are sent rather than making the host reason about it.
-                    if (_inventoryOpen) frame = frame.WithoutCombat();
-                    net.Pump(frame);
-                }
-
-                Update((float)Config.FixedDt, frame);
-                _accumulator -= Config.FixedDt;
-            }
+            StepSim(readInput: true);
 
             // The live world, with the crafting panel laid over it when it's open.
             if (_inventoryOpen) DrawInventory();
             else Draw();
+        }
+    }
+
+    /// <summary>
+    /// Accumulates real elapsed time and steps the sim in fixed increments, so a fast or
+    /// slow display never changes the physics.
+    ///
+    /// <para><paramref name="readInput"/> is false while the pause panel is up in a networked
+    /// match. Everything else still runs — the wire turns, the world advances, the enemies
+    /// keep walking — but this seat sends a frame with nothing held in it. That is the honest
+    /// account of what is happening: the player's hands are off the keys. It also has to be
+    /// an <em>empty</em> frame rather than no frame at all, because a seat that stops
+    /// speaking is a seat the host reads as a dead connection.</para>
+    /// </summary>
+    private void StepSim(bool readInput)
+    {
+        _accumulator += Raylib.GetFrameTime();
+        // Guard against spiral-of-death after a stall.
+        if (_accumulator > 0.25) _accumulator = 0.25;
+
+        while (_accumulator >= Config.FixedDt)
+        {
+            InputFrame frame = readInput ? _input.Next() : InputFrame.Empty;
+
+            // The wire turns before the world does: a client's frame goes up and the
+            // host's account comes down, so the step that follows runs on the freshest
+            // thing either machine knows.
+            if (_session is { } net && _state is GameState.Playing or GameState.Paused)
+            {
+                // A crafting panel is this machine's business — clear the combat bits
+                // before they are sent rather than making the host reason about it.
+                if (_inventoryOpen) frame = frame.WithoutCombat();
+                net.Pump(frame);
+            }
+
+            Update((float)Config.FixedDt, frame);
+            _accumulator -= Config.FixedDt;
         }
     }
 
@@ -486,6 +518,10 @@ public sealed class Game : IDisposable
                 BeginFade(() => _state = GameState.Lobby);
                 break;
             case Menu.Action.OpenSettings:
+                // Reopens on the front page, the same as it does from the pause panel. The
+                // screen is one instance shared by both doors, and arriving on whichever
+                // sub-page somebody was last looking at is disorienting from either.
+                _settingsScreen.Reset();
                 _state = GameState.Settings;
                 break;
             case Menu.Action.OpenTestScreen:
@@ -532,8 +568,8 @@ public sealed class Game : IDisposable
     }
 
     /// <summary>
-    /// Advances the controls screen. Leaving it saves the (already-live) settings
-    /// to disk so the choices — including the launch-time turn swap — persist.
+    /// Advances the settings screen off the title menu. Leaving it saves the (already-live)
+    /// settings to disk so the choices persist.
     /// </summary>
     private void UpdateSettings()
     {
@@ -559,28 +595,36 @@ public sealed class Game : IDisposable
     }
 
     /// <summary>
-    /// Freezes the run and opens the pause panel. The blur starts clean and eases
-    /// in over the next few frames; the sim stops stepping until it resumes.
+    /// Opens the pause panel. The dim starts clean and eases in over the next few frames.
+    /// Whether the sim keeps stepping behind it is the loop's business, not this method's —
+    /// see the Paused branch in <see cref="Run"/>.
     /// </summary>
     private void EnterPause()
     {
         _pauseMenu.Reset();
+        _pauseSettings = false;
         _resuming = false;
         _state = GameState.Paused;
         Audio.PlayBlip();
     }
 
+    /// <summary>True while the settings screen is open <em>over</em> the pause panel. Not a
+    /// game state of its own: everything about being paused still holds, and in a match the
+    /// world is still running underneath — which is exactly why the settings have to be
+    /// reachable from here rather than only from the title.</summary>
+    private bool _pauseSettings;
+
     /// <summary>
-    /// Advances the pause panel and its blur. Entering, the blur eases toward full;
-    /// once the player asks to resume it eases back out, and only when it has fully
-    /// cleared do we hand control back to the sim (so the world un-blurs before it
-    /// moves again). "Back to menu" abandons the run outright.
+    /// Advances the pause panel and its dim. Entering, the dim eases toward full; once the
+    /// player asks to resume it eases back out, and only when it has fully cleared do we hand
+    /// control back (so the world comes back up before it is theirs again). "Back to menu"
+    /// abandons the run outright.
     /// </summary>
     private void UpdatePaused()
     {
         _menuTime += Raylib.GetFrameTime();
 
-        // Ease the blur toward its target: in while paused, out while resuming.
+        // Ease the dim toward its target: in while paused, out while resuming.
         float step = Raylib.GetFrameTime() / PauseFade;
         _pauseBlur = Math.Clamp(_pauseBlur + (_resuming ? -step : step), 0f, 1f);
 
@@ -595,15 +639,33 @@ public sealed class Game : IDisposable
             return; // panel is closing — ignore navigation while it clears
         }
 
+        // The settings page owns the panel while it is open. Backing out of it saves, the
+        // same as backing out of it from the title menu does — a control the player rebound
+        // mid-match should still be rebound tomorrow.
+        if (_pauseSettings)
+        {
+            if (_settingsScreen.Update() == SettingsScreen.Action.Back)
+            {
+                _settings.Save();
+                _pauseSettings = false;
+            }
+            return;
+        }
+
         switch (_pauseMenu.Update())
         {
             case PauseMenu.Action.Resume:
                 _resuming = true;
                 break;
+            case PauseMenu.Action.OpenSettings:
+                _settingsScreen.Reset();
+                _pauseSettings = true;
+                Audio.PlayBlip();
+                break;
             case PauseMenu.Action.BackToMenu:
-                // Carry the pause blur straight into the fade (start already
-                // coarsened) so the paused world sinks to void and the menu pixel-
-                // resolves in — one continuous dissolve, no sharp flash between.
+                // Carry the pause dim straight into the fade (start already darkened) so the
+                // world sinks to void and the menu pixel-resolves in — one continuous
+                // dissolve, no sharp flash between.
                 BeginFade(ReturnToMenu, _pauseBlur);
                 break;
         }
@@ -951,7 +1013,16 @@ public sealed class Game : IDisposable
             {
                 if (_captureScreen == "lobby") _renderer.DrawLobby(_lobby, _menuTime);
                 else if (_captureScreen == "room") _renderer.DrawLobbyRoom(CaptureRoom(), _menuTime);
-                else if (_captureScreen == "settings") _renderer.DrawSettings(_settingsScreen, _menuTime);
+                else if (_captureScreen is "settings" or "controls" or "sound")
+                {
+                    // VOIDTANKS_CAPTURE_ROW=<n> scrolls the controls list to a given row
+                    // before the grab, so the chassis sections further down the page can be
+                    // photographed and not just the first screenful.
+                    _settingsScreen.OpenForCapture(_captureScreen,
+                        int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_ROW"),
+                            out int row) ? row : 0);
+                    _renderer.DrawSettings(_settingsScreen, _menuTime);
+                }
                 else if (_captureScreen == "class") _renderer.DrawClassSelect(_classSelect, _menuTime);
                 else if (_captureScreen == "test") _renderer.DrawTest(_testScreen, _menuTime);
                 else _renderer.DrawMenu(_menu, _menuTime);
@@ -1302,13 +1373,27 @@ public sealed class Game : IDisposable
 
         if (_frame == captureAt)
         {
-            // Optional pause-blur capture: VOIDTANKS_CAPTURE_PAUSE=<0..1> grabs the
-            // frozen frame under the pixel-blur at that amount, so the transition
-            // and panel can be verified without a human pressing Escape.
+            // Optional pause capture, so the panel and its dim can be verified without a
+            // human pressing Escape:
+            //   VOIDTANKS_CAPTURE_PAUSE=<0..1>   the panel, dimmed by that amount
+            //   VOIDTANKS_CAPTURE_PAUSE=controls the bindings page over a live world
+            //   VOIDTANKS_CAPTURE_PAUSE=sound    the mixer over a live world
+            // The last two are the only way to see the settings screen as it actually looks
+            // in a match, which is a different picture from the same page over the menu's
+            // drifting grid — and the one this pass most needed to be able to look at.
             string? pause = Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_PAUSE");
-            if (pause != null && float.TryParse(pause, out float pb))
+            if (pause != null)
             {
-                _pauseBlur = Math.Clamp(pb, 0f, 1f);
+                if (float.TryParse(pause, out float pb)) _pauseBlur = Math.Clamp(pb, 0f, 1f);
+                else
+                {
+                    _pauseBlur = 1f;
+                    _pauseSettings = true;
+                    _settingsScreen.OpenForCapture(pause,
+                        int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_CAPTURE_ROW"),
+                            out int prow) ? prow : 0);
+                }
+
                 DrawPaused();
                 DrawPaused();
                 Raylib.TakeScreenshot(_capturePath!);
@@ -1353,7 +1438,11 @@ public sealed class Game : IDisposable
     {
         switch (_state)
         {
+            // Paused is here for the networked case only — the loop does not step the sim
+            // at all while a single-player run is paused. What reaches this in a match is an
+            // empty frame, so the world carries on around a craft that has stopped driving.
             case GameState.Playing:
+            case GameState.Paused:
                 // Combat triggers are muted while the crafting panel is up so a click
                 // on an item slot can't also fire the cannon; movement still runs.
                 _world!.Update(dt, input, acceptCombatInput: !_inventoryOpen && !_lanceHold);
@@ -1376,7 +1465,10 @@ public sealed class Game : IDisposable
 
     private void DrawPaused()
     {
-        _renderer.DrawPaused(_world!, _pauseMenu, _menuTime, _pauseBlur);
+        if (_pauseSettings)
+            _renderer.DrawPausedSettings(_world!, _settingsScreen, _menuTime, _pauseBlur);
+        else
+            _renderer.DrawPaused(_world!, _pauseMenu, _menuTime, _pauseBlur);
         _renderer.Present();
     }
 

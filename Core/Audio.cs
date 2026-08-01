@@ -125,11 +125,17 @@ public static class Audio
     public static void ApplySettings(Settings s)
     {
         _engine.Env.MasterVolume = s.MasterVolume;
-        _engine.SetBusGain(Bus.Sfx, s.SfxVolume);
-        _engine.SetBusGain(Bus.Ui, s.SfxVolume);
-        _engine.SetBusGain(Bus.Music, s.MusicVolume);
+
+        // Walked rather than listed. A bus with no fader of its own answers 1 from
+        // VolumeOf, so adding a category to the mixer and a row to the settings page is two
+        // edits and never a third one here that somebody forgets.
+        foreach (var bus in Enum.GetValues<Bus>()) _engine.SetBusGain(bus, s.VolumeOf(bus));
+
         _engine.Mix.MonoDownmix = s.MonoAudio;
         _engine.Mix.SoftenLoud = s.SoftenLoudSounds;
+
+        // The soundtrack streams through raylib rather than the mixer, so its bus gain has
+        // to reach it by hand — see MusicBox.Fader.
         MusicBox.Fader = s.MusicVolume;
     }
 

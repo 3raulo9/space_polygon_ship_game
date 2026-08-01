@@ -199,7 +199,7 @@ public sealed class LobbyRoom
     {
         // Escape always steps back out of wherever the player is: a station, then the room,
         // then the whole screen.
-        if (input.Hit(Btn.Enter) && Where == Focus.Naming) { CommitName(); return Action.None; }
+        if (Raylib.IsKeyPressed(KeyboardKey.Enter) && Where == Focus.Naming) { CommitName(); return Action.None; }
 
         Action act = Where switch
         {
@@ -246,11 +246,12 @@ public sealed class LobbyRoom
         Height += _vVel * dt;
         if (Height <= 0f) { Height = 0f; _vVel = 0f; }
 
-        // Naming is reachable from anywhere with Enter.
-        if (input.Hit(Btn.Enter)) { BeginNaming(); return Action.None; }
+        // Naming is reachable from anywhere with Enter. A literal key, like the Escape and
+        // the arrows around it: the room's own chrome is not part of the control layout.
+        if (Raylib.IsKeyPressed(KeyboardKey.Enter)) { BeginNaming(); return Action.None; }
 
-        // Interact (E) with whatever station is in reach.
-        if (input.Hit(Btn.E))
+        // Interact with whatever station is in reach.
+        if (input.InteractPressed)
         {
             if (Stage == Phase.Antechamber)
             {
@@ -284,7 +285,7 @@ public sealed class LobbyRoom
         if (input.Hit(Btn.TurnLeft)) PodIndex = (PodIndex - 1 + n) % n;
         if (input.Hit(Btn.TurnRight)) PodIndex = (PodIndex + 1) % n;
 
-        if (input.Hit(Btn.Enter) || input.Hit(Btn.E))
+        if (Raylib.IsKeyPressed(KeyboardKey.Enter) || input.InteractPressed)
         {
             var chassis = ClassCatalog.All[PodIndex].Kind;
             MyChassis = chassis;
@@ -331,7 +332,7 @@ public sealed class LobbyRoom
         }
 
         // LAUNCH only once everyone in the room has picked a craft.
-        if (input.Hit(Btn.Enter) && ConsoleRow == UI.LobbyScreen.Row.Launch && AllReady)
+        if (Raylib.IsKeyPressed(KeyboardKey.Enter) && ConsoleRow == UI.LobbyScreen.Row.Launch && AllReady)
             return Action.Launch;
 
         return Action.None;

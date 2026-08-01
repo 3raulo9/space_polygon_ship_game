@@ -25,6 +25,25 @@ public sealed class AudioEngine
     /// enough of a block that the per-block parameter work disappears into the noise.</summary>
     public const int BufferFrames = 512;
 
+    /// <summary>
+    /// What raylib's stream buffer default is put back to once our own stream has claimed
+    /// its size.
+    ///
+    /// <para><see cref="Raylib.SetAudioStreamBufferSizeDefault"/> is <em>global</em>, not a
+    /// parameter of the next stream: it decides the sub-buffer of every audio stream loaded
+    /// after it, and <c>LoadMusicStream</c> is an audio stream. Leaving it at
+    /// <see cref="BufferFrames"/> handed the soundtrack a 512-frame (~12ms) sub-buffer that
+    /// is refilled from <c>UpdateMusicStream</c> once per <em>rendered</em> frame — 16.7ms
+    /// at 60fps. The buffer ran dry before every single refill, which is heard as a
+    /// continuous tear. Ours is fine at 512 because it is filled from the audio thread's own
+    /// callback and never waits on the display.</para>
+    ///
+    /// <para>Deliberately larger than raylib's own default (<c>sampleRate/30</c>, ~1470
+    /// frames): music has no latency requirement whatsoever, and ~93ms of sub-buffer means a
+    /// frame spike four times the length of a normal one still cannot starve it.</para>
+    /// </summary>
+    public const int MusicBufferFrames = 4096;
+
     private static AudioEngine? _instance;
 
     private readonly object _lock = new();
@@ -72,6 +91,12 @@ public sealed class AudioEngine
 
         Raylib.SetAudioStreamBufferSizeDefault(BufferFrames);
         _stream = Raylib.LoadAudioStream(Mixer.SampleRate, 32, Mixer.Channels);
+
+        // Put the global back before anything else loads a stream — see MusicBufferFrames.
+        // Unconditional, and before the validity check: a failed load must not leave the
+        // default holding a size only this stream could have survived.
+        Raylib.SetAudioStreamBufferSizeDefault(MusicBufferFrames);
+
         if (!Raylib.IsAudioStreamValid(_stream)) return;
 
         Raylib.SetAudioStreamCallback(_stream, &StreamCallback);

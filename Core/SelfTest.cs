@@ -224,6 +224,20 @@ public static partial class SelfTest
         failures += Check("one player being seized does not disarm the rest", ASeizedMateDoesNotFreezeTheRoom);
         failures += Check("a splash round bites whoever is standing in it", SplashBitesEverySeat);
 
+        // --- Controls and the mixer -----------------------------------------------
+        failures += Check("the shipped bindings are the controls the game always had",
+            DefaultBindingsMatchTheOldHardcodedKeys);
+        failures += Check("a rebound control survives being written and read back",
+            BindingsRoundTripThroughTheConfig);
+        failures += Check("two actions on one button are flagged, and only where it matters",
+            ClashesAreReportedWithinASectionOnly);
+        failures += Check("the controls list fits the screen wherever it is scrolled to",
+            TheControlsListAlwaysFitsOnScreen);
+        failures += Check("every cue is on a fader the player can actually reach",
+            EveryCueIsOnACategoryBus);
+        failures += Check("a category fader turns down its own cues and nobody else's",
+            CategoryFadersAreIndependent);
+
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
             : $"SELFTEST: {failures} check(s) FAILED");
@@ -1222,8 +1236,8 @@ public static partial class SelfTest
     private static string? InputFrameRoundTrips()
     {
         var sent = new InputFrame(
-            Btn.Forward | Btn.MouseL | Btn.Q | Btn.Space,
-            Btn.Q | Btn.Space,
+            Btn.Forward | Btn.Fire | Btn.SpiderPounce | Btn.Jump,
+            Btn.SpiderPounce | Btn.Jump,
             new Vector2(-13.5f, 240.25f));
 
         Span<byte> wire = stackalloc byte[InputFrame.Size];
@@ -5776,7 +5790,7 @@ public static partial class SelfTest
             return "a remote seat's cable muzzle sits on the host's own craft";
 
         // Drive their hook from their own input frame, as the host does for a wire packet.
-        var fire = new InputFrame(Btn.E, Btn.E, Vector2.Zero);
+        var fire = new InputFrame(Btn.RightHook, Btn.RightHook, Vector2.Zero);
         world.SetInput(1, fire);
         world.Update((float)Config.FixedDt, InputFrame.Empty);
 
@@ -5815,7 +5829,7 @@ public static partial class SelfTest
         mate.Heading = 0f;
 
         // Seat 1 vents its dischargers, from its own input frame as a wire packet would.
-        world.SetInput(1, new InputFrame(Btn.E, Btn.E, Vector2.Zero));
+        world.SetInput(1, new InputFrame(Btn.TankSmoke, Btn.TankSmoke, Vector2.Zero));
         world.Update((float)Config.FixedDt, InputFrame.Empty);
 
         if (world.Smoke.Count == 0) return "the remote tank's dischargers never fired";

@@ -223,6 +223,15 @@ public static class MusicBox
         string? path = Choose();
         if (path == null) { ScheduleNext(); return; }
 
+        // Claim a generous sub-buffer for the piece we are about to open, right here rather
+        // than once at boot. raylib's stream buffer size is a global that the *next* stream
+        // load reads, so whoever loaded a stream most recently decides what the soundtrack
+        // gets — and this game has a mixer that legitimately wants a twelve-millisecond one
+        // (Acoustics.AudioEngine.BufferFrames). A stream fed once per rendered frame cannot
+        // live on twelve milliseconds; setting it at the point of use is the only version of
+        // this that cannot be broken from a distance by a load somewhere else.
+        Raylib.SetAudioStreamBufferSizeDefault(Acoustics.AudioEngine.MusicBufferFrames);
+
         Music m;
         try { m = Raylib.LoadMusicStream(path); }
         catch { m = default; }
