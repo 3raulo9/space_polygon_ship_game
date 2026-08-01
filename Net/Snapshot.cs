@@ -269,6 +269,13 @@ public static class Snapshot
         int at = 0;
         BitConverter.TryWriteBytes(dst.Slice(at, 4), tick); at += 4;
 
+        // What time it is on the world underfoot, as a fraction of its day. Two bytes buys a
+        // resolution of about five milliseconds of a six-minute day, which is far finer than
+        // anything a sky can show. Sent every field packet rather than once at launch: a
+        // client's clock and the host's would otherwise drift apart over a long match, and by
+        // the time anyone noticed it would be night on one screen and dusk on another.
+        BitConverter.TryWriteBytes(dst.Slice(at, 2), (ushort)(world.DayPhase * 65535f)); at += 2;
+
         int countAt = at++;
         int written = 0;
         foreach (var e in world.Enemies)
@@ -842,6 +849,9 @@ public static class Snapshot
         {
             int at = 0;
             uint tick = BitConverter.ToUInt32(src.Slice(at, 4)); at += 4;
+
+            // The host's hour. Eased in rather than taken outright — see NetSetDayPhase.
+            world.NetSetDayPhase(BitConverter.ToUInt16(src.Slice(at, 2)) / 65535f); at += 2;
 
             int enemies = src[at++];
             // The hunters are kept between packets and matched on the host's id, so each can be

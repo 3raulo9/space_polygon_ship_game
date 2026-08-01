@@ -176,7 +176,76 @@ internal sealed class LobbyRoomRenderer
         else
         {
             DrawPod(LobbyRoom.Pod, elapsed, room.NearPod);
+            DrawChart(room, elapsed);
             if (room.IsHost) DrawConsole(LobbyRoom.ConsoleStation, elapsed, room.NearConsole);
+        }
+    }
+
+    /// <summary>
+    /// The holo chart: a low plinth in the middle of the floor with the five worlds hanging
+    /// in a ring above it, turning. Each is painted in its own horizon colour, so the room can
+    /// see at a glance that they are five different skies — and the one the match is currently
+    /// bound for is ringed and lifted clear of the others.
+    ///
+    /// A world with a vote behind it wears one bright pip per ballot, stacked over it. From
+    /// across the deck that is the only part of the vote you can read, and it is enough:
+    /// somebody watching from the pod can see which way the room is leaning without walking over.
+    /// </summary>
+    private static void DrawChart(LobbyRoom room, float elapsed)
+    {
+        var at = LobbyRoom.ChartStation;
+        bool near = room.NearChart;
+
+        // The plinth. Waist-high and no wider than a table you could put your hands on: the
+        // point of the station is that people gather round it, and a two-metre drum in the
+        // middle of the deck reads as an obstacle instead.
+        Raylib.DrawCylinder(new Vector3(at.X, 0f, at.Y), 1.5f, 1.8f, 1.0f, 8,
+            Scale(Palette.StructureShell, 0.8f));
+        Raylib.DrawCylinderWires(new Vector3(at.X, 0f, at.Y), 1.5f, 1.8f, 1.0f, 8,
+            near ? Palette.StructureGlow : Scale(Palette.StructureGlow, 0.5f));
+
+        // The projection cone: a faint wire funnel from the plinth up to the ring, so the
+        // worlds read as being *thrown* up there rather than simply floating.
+        Raylib.DrawCylinderWires(new Vector3(at.X, 1.0f, at.Y), 1.3f, 2.6f, 1.3f, 8,
+            Scale(Palette.StructureGlow, 0.16f));
+
+        // Deliberately small — a chart on a table, at about the size of a thing you would lean
+        // over. An earlier pass had the worlds a metre across at head height, which read as
+        // five moons in the room rather than as a map of anywhere.
+        const float Ring = 2.1f;
+        const float Base = 2.3f;
+
+        int n = Planet.All.Count;
+        float ring = elapsed * 0.35f;
+        for (int i = 0; i < n; i++)
+        {
+            Planet p = Planet.All[i];
+            bool chosen = room.Match.Destination == p.Id;
+            bool cursor = near && room.Where == LobbyRoom.Focus.Chart && room.Chart.Cursor == p.Id;
+
+            float a = ring + i * MathF.Tau / n;
+            float lift = Base + (chosen ? 0.45f : 0f) + 0.08f * MathF.Sin(elapsed * 1.7f + i);
+            var pos = new Vector3(at.X + MathF.Cos(a) * Ring, lift, at.Y + MathF.Sin(a) * Ring);
+
+            float size = chosen ? 0.42f : 0.3f;
+            Raylib.DrawSphere(pos, size, Scale(p.SkyHorizon, chosen ? 1f : 0.7f));
+            if (chosen || cursor)
+                Raylib.DrawSphereWires(pos, size + 0.2f, 5, 8,
+                    cursor ? Palette.Flag : Scale(Palette.Flag, 0.5f));
+
+            // SOLUNE's moon, so the world with the cycle is identifiable from the floor.
+            if (p.HasCycle)
+            {
+                float m = elapsed * 1.1f + i;
+                Raylib.DrawSphere(pos + new Vector3(MathF.Cos(m) * 0.7f, 0.12f, MathF.Sin(m) * 0.7f),
+                    0.1f, Palette.HudChrome);
+            }
+
+            // The ballot, stacked above the world.
+            int votes = room.Chart.Tally(p.Id);
+            for (int v = 0; v < votes && v < 8; v++)
+                Raylib.DrawCube(pos + new Vector3(0f, size + 0.28f + v * 0.2f, 0f),
+                    0.14f, 0.11f, 0.14f, Palette.GridNear);
         }
     }
 
@@ -282,9 +351,30 @@ internal sealed class LobbyRoomRenderer
         }
 
         if (room.Where == LobbyRoom.Focus.Pod) { DrawPodPanel(room, elapsed); return; }
+        if (room.Where == LobbyRoom.Focus.Chart)
+        {
+            // The full chart, the same picture a solo player gets — with the tally and the
+            // clock switched on, because here there are other people to disagree with.
+            StarMapRenderer.Draw(room.Chart, room.Match.Mode, elapsed, voting: true);
+            if (!room.IsHost && !room.Chart.VoteOpen)
+                PixelFont.DrawCentered("YOU CAN LOOK, BUT NOT CHOOSE", W / 2, H - 26, 1,
+                    Scale(Palette.HudChrome, 0.5f));
+            return;
+        }
         if (room.Where == LobbyRoom.Focus.Console) { DrawConsolePanel(room, elapsed); return; }
 
+        // A running vote is shouted from anywhere in the room, not only at the table — nobody
+        // should miss twenty seconds because they were standing at the pod.
+        if (room.Chart.VoteOpen)
+        {
+            bool urgent = room.Chart.SecondsLeft <= 5f;
+            float beat = 0.55f + 0.45f * MathF.Abs(MathF.Sin(elapsed * (urgent ? 8f : 3f)));
+            PixelFont.DrawCentered($"DESTINATION VOTE  {room.Chart.SecondsLeft:0}", W / 2, 34, 1,
+                Scale(urgent ? Palette.Warning : Palette.Flag, beat));
+        }
+
         if (room.NearPod) Prompt("E — CHOOSE YOUR CRAFT");
+        else if (room.NearChart) Prompt(room.Chart.VoteOpen ? "E — CAST YOUR VOTE" : "E — STAR CHART");
         else if (room.NearConsole) Prompt("E — HOST CONSOLE");
         else Prompt("ENTER — RENAME     ESC — LEAVE");
     }
@@ -302,23 +392,34 @@ internal sealed class LobbyRoomRenderer
 
     private static void DrawConsolePanel(LobbyRoom room, float elapsed)
     {
-        Panel(70, 60, W - 140, 164);
-        PixelFont.DrawCentered("HOST CONSOLE", W / 2, 66, 1, Palette.HudChrome);
+        Panel(64, 54, W - 128, 178);
+        PixelFont.DrawCentered("HOST CONSOLE", W / 2, 60, 1, Palette.HudChrome);
 
-        int y = 82;
-        Row(room, UI.LobbyScreen.Row.Map, "MAP", room.Match.Map == GameMap.Flat ? "FLAT" : "PLANET", y);
-        Row(room, UI.LobbyScreen.Row.Seats, "SEATS", room.Match.MaxPlayers.ToString(), y + 14);
-        Row(room, UI.LobbyScreen.Row.FriendlyFire, "FRIENDLY FIRE", room.Match.FriendlyFire ? "ON" : "OFF", y + 28);
-        Row(room, UI.LobbyScreen.Row.Revives, "REVIVES", room.Match.Revives.ToString(), y + 42);
-        Row(room, UI.LobbyScreen.Row.Enemies, "ENEMIES", room.Match.SpawnEnemies ? "ON" : "OFF", y + 56);
+        int y = 76;
+        Row(room, UI.LobbyScreen.Row.Mode, "MODE",
+            room.Match.Mode == GameMode.Descent ? "DESCENT" : "SANDBOX", y);
+        // Not a row you nudge: it is settled at the chart, and shown here so a host does not
+        // have to walk across the deck to remember where they are taking everyone.
+        PixelFont.Draw("DESTINATION", 84, y + 14, 1, Scale(Palette.HudChrome, 0.45f));
+        PixelFont.Draw(room.Match.World.Name, 200, y + 14, 1, Scale(Palette.Flag, 0.8f));
+        Row(room, UI.LobbyScreen.Row.Vote, "VOTE",
+            room.Chart.VoteOpen ? $"{room.Chart.SecondsLeft:0}S LEFT" : "PUT IT TO THE ROOM", y + 28);
+        Row(room, UI.LobbyScreen.Row.Seats, "SEATS", room.Match.MaxPlayers.ToString(), y + 42);
+        Row(room, UI.LobbyScreen.Row.FriendlyFire, "FRIENDLY FIRE", room.Match.FriendlyFire ? "ON" : "OFF", y + 56);
+        Row(room, UI.LobbyScreen.Row.Revives, "REVIVES", room.Match.Revives.ToString(), y + 70);
+        Row(room, UI.LobbyScreen.Row.Enemies, "ENEMIES", room.Match.SpawnEnemies ? "ON" : "OFF", y + 84);
 
         bool go = room.ConsoleRow == UI.LobbyScreen.Row.Launch;
-        bool ready = room.AllReady;
+        // A vote in progress holds the launch: the room has not finished saying where it wants
+        // to go, and dropping them mid-argument would make the whole exercise a decoration.
+        bool ready = room.AllReady && !room.Chart.VoteOpen;
         float beat = ready ? 0.7f + 0.3f * MathF.Abs(MathF.Sin(elapsed * 3f)) : 0.4f;
-        PixelFont.DrawCentered(ready ? "LAUNCH" : "WAITING FOR ALL READY", W / 2, y + 76,
+        string gate = room.Chart.VoteOpen ? "VOTE IN PROGRESS"
+                    : room.AllReady ? "LAUNCH" : "WAITING FOR ALL READY";
+        PixelFont.DrawCentered(gate, W / 2, y + 104,
             go && ready ? 2 : 1, go ? Scale(Palette.Flag, beat) : Scale(Palette.HudChrome, 0.6f));
 
-        PixelFont.DrawCentered("UP/DN ROW   A/D CHANGE   ENTER   ESC BACK", W / 2, y + 98, 1,
+        PixelFont.DrawCentered("UP/DN ROW   A/D CHANGE   ENTER   ESC BACK", W / 2, y + 122, 1,
             Scale(Palette.HudChrome, 0.6f));
     }
 

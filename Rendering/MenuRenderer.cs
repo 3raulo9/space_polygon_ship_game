@@ -92,9 +92,10 @@ internal static class MenuRenderer
         int y = 116;
         const int step = 24;
 
-        DrawItem(font, "SINGLE PLAYER", Menu.Item.SinglePlayer, menu, y, null);
-        DrawItem(font, "SETTINGS", Menu.Item.Settings, menu, y + step, null);
+        DrawItem(font, "DESCENT", Menu.Item.Descent, menu, y, null);
+        DrawItem(font, "SANDBOX", Menu.Item.Sandbox, menu, y + step, null);
         DrawItem(font, "MULTIPLAYER", Menu.Item.Multiplayer, menu, y + step * 2, null);
+        DrawItem(font, "SETTINGS", Menu.Item.Settings, menu, y + step * 3, null);
     }
 
     private static void DrawItem(Font font, string label, Menu.Item item, Menu menu, int y, string? tag)

@@ -53,14 +53,59 @@ public sealed class World : IAnchorField
     /// </summary>
     public PlayerTank Player => Players[LocalIndex];
 
-    /// <summary>The rules of this match — seats, friendly fire, revives. The host's copy;
-    /// clients are handed it once on joining and never edit it.</summary>
-    public MatchSettings Match { get; internal set; } = MatchSettings.SinglePlayer;
+    /// <summary>
+    /// The rules of this match — seats, friendly fire, revives, and where it is being played.
+    /// The host's copy; clients are handed it once on joining and never edit it.
+    ///
+    /// Assigning it re-applies the destination's pull to every craft already standing. That
+    /// matters because of the order the lobby happens in: the host's world is built the moment
+    /// they walk to the HOST pillar, long before anybody has chosen a world at the chart, so
+    /// the craft in it were made under SOLUNE's gravity and the rules that arrive at LAUNCH
+    /// are the first time the machine learns otherwise. Everything else a planet governs —
+    /// fog, the sky, how hard the director pushes — is read live off <see cref="Ground"/> and
+    /// needed no such fixing up; gravity was the one value copied onto an object.
+    /// </summary>
+    public MatchSettings Match
+    {
+        get => _match;
+        internal set
+        {
+            _match = value;
+            foreach (var p in Players) p.GravityScale = Ground.Gravity;
+        }
+    }
+    private MatchSettings _match = MatchSettings.SinglePlayer;
 
     /// <summary>The hangar build this stage was spun up for — the chassis, its point
     /// spend and its paint job. Read by the renderer to colour the craft's own parts,
     /// and by nothing in the sim: the stats were baked into the player at construction.</summary>
     public readonly Loadout Loadout;
+
+    /// <summary>Which of the five worlds this stage is standing on. A shorthand for
+    /// <c>Match.World</c>, read often enough by the sim and the renderer to earn a name.</summary>
+    public Planet Ground => Match.World;
+
+    /// <summary>
+    /// How far through its day this world is: 0 at dawn, 0.25 at noon, 0.5 at dusk, 0.75 at
+    /// midnight. Meaningless on the four worlds whose sky does not move, and left at dawn
+    /// there so nothing has to check before reading it.
+    ///
+    /// Advanced on every machine, host and client alike, so the sky keeps moving smoothly
+    /// between packets; the host's account of it rides the field snapshot and is eased in by
+    /// <see cref="NetSetDayPhase"/> rather than snapped, because a sun that jumps backwards
+    /// twenty times a second is worse than a sun that is a few seconds out.
+    ///
+    /// Opens at <em>noon</em>, not at zero. Dawn is half-dark by this world's own reckoning —
+    /// the sun is on the horizon — so a stage that started at 0 would drop every player into
+    /// twilight with the fog already closing and the hunters already bold, which is not what
+    /// landing on a world is supposed to feel like and is not what the other four do.
+    /// </summary>
+    public float DayPhase { get; private set; } = 0.25f;
+
+    /// <summary>The conditions overhead right now — sky, fog, light, and how dark it is.
+    /// The renderer installs this into the <see cref="Rendering.Atmosphere"/> each frame;
+    /// the sim reads <c>Night</c> off it to decide how bold the hunters are.</summary>
+    public SkyLook Sky => Ground.Look(DayPhase);
 
     public readonly List<EnemyTank> Enemies = new();
 
@@ -876,14 +921,9 @@ public sealed class World : IAnchorField
                     || nearBoss is "1" or "seize" || nearMaw is "1" or "swallow";
         if (capture) DynamicSpawning = false;
 
-        // FLAT is a sandbox: the city still stands (Structures is built regardless, above),
-        // but nothing hostile is seeded and nothing ever spawns. Turn the director off and
-        // skip every seeding block below — no salvage, no opening hunter, no bosses.
-        if (Match.Map == GameMap.Flat)
-        {
-            DynamicSpawning = false;
-            return;
-        }
+        // What the world underfoot does to the craft standing on it. Applied to every seat as
+        // it opens, not just this one — see OpenSeat.
+        Player.GravityScale = Ground.Gravity;
 
         // Salvage. Capture seeds one battery and one round dead ahead; play seeds a
         // small starter field at random fog bearings — no fixed spots — so there's
@@ -1449,6 +1489,11 @@ public sealed class World : IAnchorField
         // did without either of them knowing seats exist.
         _inputs[LocalIndex] = input;
 
+        // The hour, before anything reads it. Turned on every machine — a client that only
+        // moved its sun when a packet arrived would strobe — and reconciled toward the host's
+        // account in NetSetDayPhase.
+        AdvanceDay(dt);
+
         // Every craft drives, each from its own slot. In a solo run this is the one loop
         // iteration it has always been. A craft whose player has dropped is frozen where it
         // stands until they reconnect — not stepped, so it neither drifts nor decays.
@@ -1641,6 +1686,11 @@ public sealed class World : IAnchorField
         UpdateSmoke(dt);
         UpdateStructures(dt);
         UpdatePickups(dt);
+        // How far off the hunters are willing to sit. Fixed everywhere except SOLUNE after
+        // dark, where they come right in — pushed onto the live hulls each tick rather than
+        // baked in at spawn, so a hunter that was fading in at dusk closes as the light goes
+        // instead of politely holding the range it was born with.
+        ApplyNightNerve();
         // The director tops up hunters, bosses, maws and squads — everything hostile. A host
         // who turned enemies off in the lobby keeps the city and the salvage but never the fight.
         if (DynamicSpawning && Match.SpawnEnemies) UpdateSpawning(dt);
@@ -2790,17 +2840,93 @@ public sealed class World : IAnchorField
     /// drift in fresh salvage, or — rarely — bring up a Crab-Core, always at a random
     /// bearing out in the fog around the roaming craft and only while under each cap.
     /// </summary>
+    // --- The hour, and what it costs ---------------------------------------------------
+
+    /// <summary>
+    /// Turns the world's clock. A day is <see cref="Planet.DayLength"/> seconds and the phase
+    /// wraps, so nothing accumulates and a match left running all night stays exact.
+    /// </summary>
+    private void AdvanceDay(float dt)
+    {
+        if (!Ground.HasCycle) return;
+        DayPhase += dt / Planet.DayLength;
+        if (DayPhase >= 1f) DayPhase -= MathF.Floor(DayPhase);
+    }
+
+    /// <summary>
+    /// The host's account of the hour, off the field packet. Eased rather than snapped: the
+    /// two clocks tick at the same rate and start together, so any gap is latency and a few
+    /// seconds of sky is worth less than a sun that stutters. A gap big enough to be a real
+    /// desync — a late joiner, a machine that hitched — is taken outright.
+    /// </summary>
+    public void NetSetDayPhase(float phase)
+    {
+        if (!Ground.HasCycle) return;
+
+        // Shortest way round the dial, so midnight-to-dawn does not drag the sun backwards
+        // through the whole day.
+        float diff = phase - DayPhase;
+        if (diff > 0.5f) diff -= 1f;
+        if (diff < -0.5f) diff += 1f;
+
+        // A twentieth of a day is eighteen seconds of sky — past that it is not lag.
+        DayPhase = MathF.Abs(diff) > 0.05f ? phase : DayPhase + diff * 0.1f;
+        if (DayPhase >= 1f) DayPhase -= 1f;
+        if (DayPhase < 0f) DayPhase += 1f;
+    }
+
+    /// <summary>
+    /// Test hook: put the world's clock at a given hour without waiting six minutes for it.
+    /// </summary>
+    public void SetDayPhaseForTest(float phase)
+    {
+        DayPhase = phase - MathF.Floor(phase);
+        ApplyNightNerve();
+    }
+
+    /// <summary>
+    /// How close the hunters dare to come. In daylight — and on every world that has no
+    /// night — this is the stand-off the game has always had; at the dead of night on SOLUNE
+    /// they close to inside the range at which a hull reads as a silhouette rather than a
+    /// shape, which is the entire point of the dark.
+    /// </summary>
+    private void ApplyNightNerve()
+    {
+        float night = Sky.Night;
+        if (night <= 0f && !Ground.HasCycle) return; // nothing to squeeze on a world with no dark
+
+        // A fraction of what each hull already dared, so an elite stays the bolder of the two.
+        float closeness = 1f + (Planet.NightStandoff / Planet.DayStandoff - 1f) * night;
+        foreach (var e in Enemies)
+            if (e.Alive) e.PreferredRange = e.BaseRange * closeness;
+    }
+
+    /// <summary>
+    /// How much of everything this world wants on the field, against the standard the game
+    /// was tuned at. The planet's own figure, multiplied up after dark on the one world that
+    /// has a dark.
+    /// </summary>
+    private float HostilePressure => Ground.Hostiles
+        * (1f + (Planet.NightHostileBoost - 1f) * Sky.Night);
+
+    /// <summary>Scales a spawn interval by the pressure: a busy world tops up faster.</summary>
+    private float Cadence(float baseInterval) => baseInterval / MathF.Max(0.2f, HostilePressure);
+
+    /// <summary>Scales a population ceiling by the pressure, never below one — a world that
+    /// spawns anything at all must be allowed to hold one of it.</summary>
+    private int Ceiling(int baseCap) => Math.Max(1, (int)MathF.Round(baseCap * HostilePressure));
+
     private void UpdateSpawning(float dt)
     {
         _enemyTimer += dt;
-        if (_enemyTimer >= EnemySpawnInterval)
+        if (_enemyTimer >= Cadence(EnemySpawnInterval))
         {
             _enemyTimer = 0f;
             if (Random.Shared.NextSingle() < EnemySpawnChance)
             {
                 // At the cap, release the farthest hunter so a fresh one always has room
                 // to fade in — the population is bounded but the arrivals never stop.
-                if (Enemies.Count >= MaxEnemies) RemoveFarthest(Enemies, e => e.Position);
+                if (Enemies.Count >= Ceiling(MaxEnemies)) RemoveFarthest(Enemies, e => e.Position);
                 bool elite = Random.Shared.NextSingle() < EliteChance;
                 Enemies.Add(new EnemyTank(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), elite));
             }
@@ -2821,7 +2947,7 @@ public sealed class World : IAnchorField
         }
 
         _bossTimer += dt;
-        if (_bossTimer >= BossSpawnInterval)
+        if (_bossTimer >= Cadence(BossSpawnInterval))
         {
             _bossTimer = 0f;
             // Only ever one crab, and only when the field is clear of a live one.
@@ -2830,7 +2956,7 @@ public sealed class World : IAnchorField
         }
 
         _mawTimer += dt;
-        if (_mawTimer >= MawSpawnInterval)
+        if (_mawTimer >= Cadence(MawSpawnInterval))
         {
             _mawTimer = 0f;
             // Only ever one mouth, and never while one is already up there.
@@ -2839,14 +2965,14 @@ public sealed class World : IAnchorField
         }
 
         _squadTimer += dt;
-        if (_squadTimer >= SquadSpawnInterval)
+        if (_squadTimer >= Cadence(SquadSpawnInterval))
         {
             _squadTimer = 0f;
             // Squads are never released to make room for a new one the way hunters are: a
             // squad is a fight with a beginning and an end, and quietly deleting four
             // people mid-arc to let four more fade in would be nonsense. Under the cap they
             // arrive; at it, nothing happens until one is finished with.
-            if (Squads.Count < MaxSquads && Random.Shared.NextSingle() < SquadSpawnChance)
+            if (Squads.Count < Ceiling(MaxSquads) && Random.Shared.NextSingle() < SquadSpawnChance)
                 SpawnSoldierSquad();
         }
     }
@@ -4217,6 +4343,7 @@ public sealed class World : IAnchorField
         var craft = new PlayerTank(Torus.Wrap(at), bearing, loadout ?? new Loadout())
         {
             Lives = Match.Revives + 1,
+            GravityScale = Ground.Gravity,
         };
         if (seat < Players.Count) Players[seat] = craft;
         else Players.Add(craft);
@@ -4255,6 +4382,7 @@ public sealed class World : IAnchorField
         {
             Height = old.Height,
             Lives = old.Lives,
+            GravityScale = old.GravityScale,
         };
     }
 

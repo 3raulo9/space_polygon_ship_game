@@ -50,7 +50,23 @@ public sealed class EnemyTank
 
     private readonly float _moveSpeed;
     private readonly float _turnSpeed;
-    private readonly float _preferredRange;   // hangs at this distance, not point-blank
+    private float _preferredRange;   // hangs at this distance, not point-blank
+
+    /// <summary>
+    /// The range this hunter was built to hold — an elite's nerve, or an ordinary one's. Kept
+    /// so the world can squeeze the whole field in after dark (see <c>World.ApplyNightNerve</c>)
+    /// without flattening the difference between the two: the squeeze is a fraction of what
+    /// each hull already dared, not a number handed down to all of them alike.
+    /// </summary>
+    public float BaseRange { get; private set; }
+
+    /// <summary>How far off it is holding right now. Written by the world each tick on a world
+    /// with a night; left at <see cref="BaseRange"/> everywhere else.</summary>
+    public float PreferredRange
+    {
+        get => _preferredRange;
+        set => _preferredRange = MathF.Max(4f, value);
+    }
     private float _fireCooldown;
     private readonly float _fireInterval;
 
@@ -104,6 +120,7 @@ public sealed class EnemyTank
             _preferredRange = 40f;
             _fireInterval = 1.9f;
         }
+        BaseRange = _preferredRange;
         // Desync initial cooldowns so a group never fires in lockstep.
         _fireCooldown = _fireInterval * (0.4f + 0.6f * Random.Shared.NextSingle());
     }

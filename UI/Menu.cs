@@ -17,7 +17,11 @@ public sealed class Menu
     public enum Action
     {
         None,
-        StartSinglePlayer,
+        /// <summary>The endless one: the world running for as long as you can stand in it.</summary>
+        StartSandbox,
+        /// <summary>The one with somewhere to go: the same field, but landed on deliberately
+        /// and — eventually — finished with.</summary>
+        StartDescent,
         StartMultiplayer,
         OpenSettings,
         OpenTestScreen, // the secret hatch — wired, but goes nowhere yet
@@ -26,7 +30,10 @@ public sealed class Menu
 
     public enum Item
     {
-        SinglePlayer,
+        /// <summary>Listed first because it is the game with an intent behind it. SANDBOX sits
+        /// under it as the thing you drop to when you would rather just drive.</summary>
+        Descent,
+        Sandbox,
         Settings,
         Multiplayer, // host or join a match; a separate mode, not a flavour of the solo run
     }
@@ -34,7 +41,7 @@ public sealed class Menu
     /// <summary>Every entry is live now that multiplayer has somewhere to go.</summary>
     public static bool IsSelectable(Item item) => true;
 
-    public Item Selected { get; private set; } = Item.SinglePlayer;
+    public Item Selected { get; private set; } = Item.Descent;
 
     /// <summary>
     /// Reads input and returns the action the loop should take. Movement skips
@@ -54,7 +61,8 @@ public sealed class Menu
         {
             switch (Selected)
             {
-                case Item.SinglePlayer: return Action.StartSinglePlayer;
+                case Item.Descent: return Action.StartDescent;
+                case Item.Sandbox: return Action.StartSandbox;
                 case Item.Settings: return Action.OpenSettings;
                 case Item.Multiplayer: return Action.StartMultiplayer;
             }
