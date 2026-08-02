@@ -620,6 +620,165 @@ public static class Meshes
         return m;
     }
 
+    // --- Salvage materials ----------------------------------------------------
+    // The stuff kills leave behind and finished things come apart into. Each one has to be
+    // recognisable in an 18-pixel slot with nothing but its outline to go on, so they are
+    // built as four obviously different silhouettes — a flat torn plate, a round coil, a
+    // conical pile, a squat brick — and only then tinted apart. All stand base-at-origin
+    // like the other pickups, so the icon renderer can lift each about its own middle.
+
+    /// <summary>A torn plate of hull: an irregular slab with real thickness and no two
+    /// corners the same, so it reads as something that was ripped off a machine rather
+    /// than cut to a shape.</summary>
+    public static PolyMesh ScrapPlate(Color fill)
+    {
+        var m = new PolyMesh();
+        const float t = 0.13f;   // plate thickness
+        Vector3[] top =
+        {
+            new(-0.62f, t, -0.34f), new(0.50f, t, -0.52f),
+            new(0.66f, t, 0.30f),   new(-0.44f, t, 0.55f),
+        };
+        var bot = new Vector3[top.Length];
+        for (int i = 0; i < top.Length; i++) bot[i] = new Vector3(top[i].X, 0f, top[i].Z);
+
+        m.AddFace(fill, top[0], top[1], top[2], top[3]);
+        m.AddFace(fill, bot[3], bot[2], bot[1], bot[0]);
+        for (int i = 0; i < top.Length; i++)
+        {
+            int j = (i + 1) % top.Length;
+            m.AddFace(fill, bot[i], bot[j], top[j], top[i]);
+        }
+        // One corner folded up, the way a plate tears rather than snaps.
+        m.AddFace(fill, top[1], top[2], new Vector3(0.74f, 0.46f, -0.06f));
+        return m;
+    }
+
+    /// <summary>A coil of drawn wire: three square-section rings stacked into a short
+    /// spool. Round where everything else in the salvage is angular.</summary>
+    public static PolyMesh WireCoil(Color fill)
+    {
+        var m = new PolyMesh();
+        for (int k = 0; k < 3; k++)
+            SquareRing(m, fill, 0.14f + k * 0.26f, 0.50f, 0.10f, 8);
+        return m;
+    }
+
+    /// <summary>One ring of a coil: a square-section band swept around Y. Cheap, and hard
+    /// enough facetted that it never reads as a smooth modern torus.</summary>
+    private static void SquareRing(PolyMesh m, Color c, float y, float radius, float t, int seg)
+    {
+        for (int i = 0; i < seg; i++)
+        {
+            float a0 = MathF.Tau * i / seg, a1 = MathF.Tau * (i + 1) / seg;
+            float c0 = MathF.Cos(a0), s0 = MathF.Sin(a0);
+            float c1 = MathF.Cos(a1), s1 = MathF.Sin(a1);
+            float ro = radius + t, ri = radius - t;
+            Vector3 oo0 = new(c0 * ro, y + t, s0 * ro), oo1 = new(c1 * ro, y + t, s1 * ro);
+            Vector3 ob0 = new(c0 * ro, y - t, s0 * ro), ob1 = new(c1 * ro, y - t, s1 * ro);
+            Vector3 io0 = new(c0 * ri, y + t, s0 * ri), io1 = new(c1 * ri, y + t, s1 * ri);
+            Vector3 ib0 = new(c0 * ri, y - t, s0 * ri), ib1 = new(c1 * ri, y - t, s1 * ri);
+            m.AddFace(c, ob0, ob1, oo1, oo0);   // outside
+            m.AddFace(c, io0, io1, ib1, ib0);   // inside
+            m.AddFace(c, oo0, oo1, io1, io0);   // crown
+            m.AddFace(c, ib0, ib1, ob1, ob0);   // underside
+        }
+    }
+
+    /// <summary>A pile of powder: a low faceted cone with a few loose grains scattered off
+    /// its foot. The only thing in the salvage that isn't solid.</summary>
+    public static PolyMesh PowderPile(Color body, Color grain)
+    {
+        var m = new PolyMesh();
+        const int sides = 7;
+        const float r = 0.60f, h = 0.72f;
+        var ring = new Vector3[sides];
+        for (int i = 0; i < sides; i++)
+        {
+            float a = MathF.Tau * i / sides;
+            ring[i] = new Vector3(MathF.Cos(a) * r, 0f, MathF.Sin(a) * r);
+        }
+        Vector3 apex = new(0f, h, 0f);
+        for (int i = 0; i < sides; i++)
+            m.AddFace(body, ring[i], ring[(i + 1) % sides], apex);
+        NgonCap(m, body, ring, up: false);
+
+        // Three grains that didn't make it onto the heap.
+        m.AddBoxSpan(grain, 0.62f, 0.76f, -0.10f, 0.04f, 0f, 0.13f);
+        m.AddBoxSpan(grain, -0.80f, -0.66f, 0.16f, 0.30f, 0f, 0.11f);
+        m.AddBoxSpan(grain, -0.14f, 0.00f, -0.82f, -0.68f, 0f, 0.12f);
+        return m;
+    }
+
+    /// <summary>A cast ingot: a squat tapered brick with a raised face. Reads as heavy,
+    /// which is the whole of what dense alloy is.</summary>
+    public static PolyMesh Ingot(Color fill, Color face)
+    {
+        var m = new PolyMesh();
+        m.AddBox(fill, 0.66f, 0.40f, 0.54f, 0.30f, 0f, 0.40f);
+        m.AddBox(face, 0.30f, 0.16f, 0.40f, 0.46f);   // the stamped top
+        return m;
+    }
+
+    /// <summary>A dull metal cube with a chamfered crown — lead, and nothing else about
+    /// it worth drawing.</summary>
+    public static PolyMesh MetalBlock(Color fill, Color crown)
+    {
+        var m = new PolyMesh();
+        m.AddBox(fill, 0.42f, 0.42f, 0f, 0.78f);
+        m.AddBox(crown, 0.42f, 0.42f, 0.30f, 0.30f, 0.78f, 0.90f);
+        return m;
+    }
+
+    /// <summary>A twinned crystal: two pyramids meeting at a waist, standing on its
+    /// point. Zinc, and the only material with a bright silhouette.</summary>
+    public static PolyMesh Crystal(Color fill)
+    {
+        var m = new PolyMesh();
+        const int sides = 6;
+        const float r = 0.42f, waist = 0.55f, top = 1.15f;
+        var ring = new Vector3[sides];
+        for (int i = 0; i < sides; i++)
+        {
+            float a = MathF.Tau * i / sides;
+            ring[i] = new Vector3(MathF.Cos(a) * r, waist, MathF.Sin(a) * r);
+        }
+        Vector3 foot = new(0f, 0f, 0f), crown = new(0f, top, 0f);
+        for (int i = 0; i < sides; i++)
+        {
+            int j = (i + 1) % sides;
+            m.AddFace(fill, ring[j], ring[i], foot);
+            m.AddFace(fill, ring[i], ring[j], crown);
+        }
+        return m;
+    }
+
+    /// <summary>A drawn rod: a thin hexagonal bar with a bright cut end. Tall and narrow,
+    /// so it is never confused with the brick or the block beside it.</summary>
+    public static PolyMesh Rod(Color fill, Color cap)
+    {
+        var m = new PolyMesh();
+        const int sides = 6;
+        const float r = 0.24f, h = 1.20f;
+        var bot = new Vector3[sides];
+        var top = new Vector3[sides];
+        for (int i = 0; i < sides; i++)
+        {
+            float a = MathF.Tau * i / sides + MathF.PI / sides;
+            float cx = MathF.Cos(a) * r, cz = MathF.Sin(a) * r;
+            bot[i] = new Vector3(cx, 0f, cz);
+            top[i] = new Vector3(cx, h, cz);
+        }
+        for (int i = 0; i < sides; i++)
+        {
+            int j = (i + 1) % sides;
+            m.AddFace(fill, bot[i], bot[j], top[j], top[i]);
+        }
+        NgonCap(m, fill, bot, up: false);
+        NgonCap(m, cap, top, up: true);
+        return m;
+    }
+
     /// <summary>A tiny projectile bolt — a small bright shard, barely a shape.</summary>
     public static PolyMesh Bolt(Color fill) => Octahedron(fill, 0.22f);
 

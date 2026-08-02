@@ -51,6 +51,51 @@ internal static class PixelFont
         Draw(text, cx - w / 2, y, px, color);
     }
 
+    // --- The tiny digits ------------------------------------------------------
+    // A stack count is the one thing in the panel that has to fit *inside* an 18-pixel slot
+    // without covering the item it is counting, and the 5×7 face is simply too big for that
+    // — "20" in the corner of a slot is a third of the slot. These are 3×5, the smallest a
+    // digit can be drawn and still be read: same stamping, half the footprint.
+
+    public const int SmallW = 3;
+    public const int SmallH = 5;
+
+    /// <summary>Draws digits at the compact 3×5 size, top-left at (x, y). Anything that is
+    /// not a digit advances as a blank — this face exists for counts and nothing else.</summary>
+    public static int DrawSmall(string text, int x, int y, Color color)
+    {
+        int cx = x;
+        foreach (char ch in text)
+        {
+            if (ch >= '0' && ch <= '9')
+            {
+                string[] rows = SmallDigits[ch - '0'];
+                for (int r = 0; r < SmallH; r++)
+                    for (int c = 0; c < SmallW; c++)
+                        if (rows[r][c] == '#') Raylib.DrawRectangle(cx + c, y + r, 1, 1, color);
+            }
+            cx += SmallW + 1;
+        }
+        return cx - x;
+    }
+
+    /// <summary>Advance width of a compact-digit string, matching <see cref="DrawSmall"/>.</summary>
+    public static int MeasureSmall(string text) => text.Length * (SmallW + 1);
+
+    private static readonly string[][] SmallDigits =
+    {
+        new[] { "###", "#.#", "#.#", "#.#", "###" },
+        new[] { "..#", "..#", "..#", "..#", "..#" },
+        new[] { "###", "..#", "###", "#..", "###" },
+        new[] { "###", "..#", "###", "..#", "###" },
+        new[] { "#.#", "#.#", "###", "..#", "..#" },
+        new[] { "###", "#..", "###", "..#", "###" },
+        new[] { "###", "#..", "###", "#.#", "###" },
+        new[] { "###", "..#", "..#", "..#", "..#" },
+        new[] { "###", "#.#", "###", "#.#", "###" },
+        new[] { "###", "#.#", "###", "..#", "###" },
+    };
+
     private static readonly Dictionary<char, string[]> Glyphs = new()
     {
         ['A'] = new[] { ".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#" },
@@ -100,5 +145,8 @@ internal static class PixelFont
         [']'] = new[] { ".###.", "...#.", "...#.", "...#.", "...#.", "...#.", ".###." },
         ['!'] = new[] { "..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.." },
         [','] = new[] { ".....", ".....", ".....", ".....", "..#..", "..#..", ".#..." },
+        // The take-apart bench's gamble: what falls out of a cell is one of three metals, or
+        // nothing at all, and this is the only honest thing to draw under that arrow.
+        ['?'] = new[] { ".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.." },
     };
 }

@@ -47,7 +47,43 @@ internal static class InventoryRenderer
                 (int)(b.Y + b.Height + 2), 1, Scale(Ink, 0.85f));
         }
 
-        // --- Crafting triangle ---
+        // --- The two benches, mirrored about the middle of the screen ---
+        DrawAssembly(inv, elapsed);
+        DrawTeardown(inv, elapsed);
+
+        // --- The 20-slot grid ---
+        for (int i = 0; i < Inventory.SlotCount; i++)
+            DrawSlot(InventoryLayout.GridSlot(i), inv.Slots[i]);
+
+        // --- Hints along the bottom ---
+        PixelFont.DrawCentered("LCLICK-MOVE STACK    RCLICK-USE OR BREAK ONE",
+            W / 2, H - 15, 1, Scale(Ink, 0.6f));
+        PixelFont.DrawCentered("HOLD LCLICK THEN RCLICK-DROP ONE    F-CLOSE",
+            W / 2, H - 7, 1, Scale(Ink, 0.6f));
+
+        // --- The hover label, then the dragged stack, then the pointer ---
+        DrawHover(inv, screen);
+
+        if (!screen.Held.IsEmpty)
+        {
+            var c = screen.Cursor;
+            var box = new Rectangle(c.X - S / 2f, c.Y - S / 2f, S, S);
+            DrawIcon(box, screen.Held.Kind);
+            DrawCount(box, screen.Held.Count);
+        }
+
+        DrawPixelCursor(screen.Cursor);
+    }
+
+    // --- The assembly bench ---------------------------------------------------
+    // Three corners feeding a centre. Unchanged in how it works; it has simply moved off the
+    // middle of the screen to sit opposite the bench that undoes what it does.
+
+    private static void DrawAssembly(Inventory inv, float elapsed)
+    {
+        PixelFont.DrawCentered("ASSEMBLE", InventoryLayout.BenchLeft,
+            InventoryLayout.BenchLabelY, 1, Scale(Ink, 0.75f));
+
         Vector2 a = InventoryLayout.CraftCorner(0);
         Vector2 bl = InventoryLayout.CraftCorner(1);
         Vector2 br = InventoryLayout.CraftCorner(2);
@@ -59,38 +95,98 @@ internal static class InventoryRenderer
         for (int i = 0; i < Inventory.CraftCount; i++)
             DrawSlot(InventoryLayout.Craft(i), inv.Craft[i]);
 
-        // The output box: a live CRAB CORE when the recipe is met, else a dim empty well.
+        // The output box: whatever the corners make, live, else a dim empty well.
         Rectangle outBox = InventoryLayout.Output;
         ItemStack output = inv.CraftOutput();
         DrawSlot(outBox, ItemStack.Empty);
         if (!output.IsEmpty)
         {
-            // A gentle pulse so the craftable core reads as "ready", then its icon.
+            // A gentle pulse so a finished recipe reads as "ready", then its icon and count.
             float pulse = 0.6f + 0.4f * MathF.Sin(elapsed * 5f);
             Raylib.DrawRectangleLinesEx(Grow(outBox, 1), 1f, Scale(Palette.NeonMagenta, pulse));
-            DrawIcon(outBox, ItemKind.CrabCore);
+            DrawIcon(outBox, output.Kind);
+            DrawCount(outBox, output.Count);
         }
+    }
 
-        // --- The 20-slot grid ---
-        for (int i = 0; i < Inventory.SlotCount; i++)
-            DrawSlot(InventoryLayout.GridSlot(i), inv.Slots[i]);
+    // --- The take-apart bench -------------------------------------------------
+    // One thing in at the top, and however many parts it is made of coming down out of it.
+    // The arrows are the whole point: they appear the moment something breakable lands on the
+    // bench, one per part, so a player can see what a battery is worth before spending it —
+    // and the last of them is a "?" when the part under it is a gamble rather than a promise.
 
-        // --- Hints along the bottom ---
-        PixelFont.DrawCentered("LCLICK-MOVE STACK    RCLICK-USE STACK",
-            W / 2, H - 15, 1, Scale(Ink, 0.6f));
-        PixelFont.DrawCentered("HOLD LCLICK THEN RCLICK-DROP ONE    F-CLOSE",
-            W / 2, H - 7, 1, Scale(Ink, 0.6f));
+    private static void DrawTeardown(Inventory inv, float elapsed)
+    {
+        PixelFont.DrawCentered("TAKE APART", InventoryLayout.BenchRight,
+            InventoryLayout.BenchLabelY, 1, Scale(Ink, 0.75f));
 
-        // --- The dragged stack rides the cursor last, over everything ---
-        if (!screen.Held.IsEmpty)
+        ItemStack bench = inv.Break[0];
+        int arrows = bench.IsEmpty ? 0 : Crafting.PartCount(bench.Kind);
+
+        Rectangle inBox = InventoryLayout.BreakSlot;
+        DrawSlot(inBox, bench);
+        if (arrows > 0)
         {
-            var c = screen.Cursor;
-            var box = new Rectangle(c.X - S / 2f, c.Y - S / 2f, S, S);
-            DrawIcon(box, screen.Held.Kind);
-            DrawCount(box, screen.Held.Count);
+            // The same "ready" pulse the assembly output wears, so both benches say they are
+            // waiting on the player in the same language.
+            float pulse = 0.6f + 0.4f * MathF.Sin(elapsed * 5f);
+            Raylib.DrawRectangleLinesEx(Grow(inBox, 1), 1f, Scale(Palette.NeonMagenta, pulse));
         }
 
-        DrawPixelCursor(screen.Cursor);
+        var from = new Vector2(inBox.X + inBox.Width / 2f, inBox.Y + inBox.Height);
+        for (int i = 0; i < Inventory.PartCount; i++)
+        {
+            bool live = i < arrows;
+            ItemStack held = inv.Parts[i];
+            // A slot is drawn while its arrow exists, and stays drawn while it still holds
+            // something — so parts left behind by the last teardown are never hidden by
+            // clearing the bench.
+            if (!live && held.IsEmpty) continue;
+
+            Rectangle box = InventoryLayout.Part(i);
+            if (live) DrawArrow(from, new Vector2(box.X + box.Width / 2f, box.Y),
+                                Scale(Palette.BatteryCore, held.IsEmpty ? 0.55f : 0.9f));
+            DrawSlot(box, held);
+
+            // Nothing there yet: show what this arrow is going to give, ghosted — or a "?"
+            // for the one that might give nothing at all.
+            if (!live || !held.IsEmpty) continue;
+            if (Crafting.IsUncertain(bench.Kind, i))
+            {
+                PixelFont.DrawCentered("?", (int)(box.X + box.Width / 2f),
+                    (int)(box.Y + (box.Height - PixelFont.GlyphH) / 2f), 1, Scale(Ink, 0.7f));
+                continue;
+            }
+            ItemStack promise = Crafting.Preview(bench.Kind, i);
+            if (!promise.IsEmpty) DrawIcon(box, promise.Kind, Ghost);
+        }
+    }
+
+    /// <summary>What the uncertain arrow might give, spelled out — "LEAD / ZINC / LITHIUM?".
+    /// Read off the teardown table rather than typed, so a table that grows a fourth metal
+    /// says so here without anybody remembering to come and edit a string.</summary>
+    private static string MaybeNames(ItemKind kind)
+    {
+        Crafting.Teardown? t = Crafting.Of(kind);
+        if (t is null || t.OneOf.Length == 0) return "?";
+        var names = new string[t.OneOf.Length];
+        for (int i = 0; i < names.Length; i++) names[i] = ItemNames.Of(t.OneOf[i]);
+        return string.Join(" / ", names) + "?";
+    }
+
+    /// <summary>A thin line with a two-pixel head at the far end — the "this becomes that"
+    /// mark, drawn at the internal resolution so it stays as chunky as everything else.</summary>
+    private static void DrawArrow(Vector2 from, Vector2 to, Color col)
+    {
+        Raylib.DrawLineV(from, to, col);
+        Vector2 dir = to - from;
+        float len = dir.Length();
+        if (len < 1f) return;
+        dir /= len;
+        var side = new Vector2(-dir.Y, dir.X);
+        Vector2 back = to - dir * 3f;
+        Raylib.DrawLineV(to, back + side * 2f, col);
+        Raylib.DrawLineV(to, back - side * 2f, col);
     }
 
     // --- The pointer ----------------------------------------------------------
@@ -152,24 +248,88 @@ internal static class InventoryRenderer
     /// <see cref="ItemIconRenderer"/>) inset into a slot, so the salvage turns slowly on
     /// the spot instead of sitting there as a flat square. The source is flipped
     /// vertically because render textures are stored bottom-up.</summary>
-    private static void DrawIcon(Rectangle box, ItemKind kind)
+    private static void DrawIcon(Rectangle box, ItemKind kind, Color? tint = null)
     {
         if (_icons is null) return;
         var inner = Grow(box, -1);
         var src = new Rectangle(0, 0, ItemIconRenderer.Size, -ItemIconRenderer.Size);
-        Raylib.DrawTexturePro(_icons.Texture(kind), src, inner, Vector2.Zero, 0f, Color.White);
+        Raylib.DrawTexturePro(_icons.Texture(kind), src, inner, Vector2.Zero, 0f,
+            tint ?? Color.White);
     }
+
+    /// <summary>The wash a promised-but-not-yet-taken part is drawn under: present enough to
+    /// name the thing, faint enough that nobody mistakes it for something they own.</summary>
+    private static readonly Color Ghost = new(255, 255, 255, 105);
 
     private static void DrawCount(Rectangle box, int count)
     {
         if (count <= 1) return;
         string s = count.ToString();
-        int w = PixelFont.Measure(s, 1);
-        // Bottom-right, with a dark plate behind so it reads over any icon colour.
-        int tx = (int)(box.X + box.Width) - w - 1;
-        int ty = (int)(box.Y + box.Height) - PixelFont.GlyphH - 1;
-        Raylib.DrawRectangle(tx - 1, ty - 1, w + 1, PixelFont.GlyphH + 2, new Color(0, 0, 0, 190));
-        PixelFont.Draw(s, tx, ty, 1, Color.White);
+        int w = PixelFont.MeasureSmall(s) - 1;   // no trailing gap after the last digit
+        // Bottom-right, in the compact digits, with a dark plate behind so it reads over any
+        // icon colour. Small on purpose: a slot is 18 pixels and the item in it is the thing
+        // worth looking at — the count is a footnote, and at the full face it was covering a
+        // quarter of what it was counting.
+        int tx = (int)(box.X + box.Width) - w - 2;
+        int ty = (int)(box.Y + box.Height) - PixelFont.SmallH - 2;
+        Raylib.DrawRectangle(tx - 1, ty - 1, w + 2, PixelFont.SmallH + 2, new Color(0, 0, 0, 190));
+        PixelFont.DrawSmall(s, tx, ty, Color.White);
+    }
+
+    // --- The hover label ------------------------------------------------------
+    // Everything in the pack is a small turning polygon and several of them are grey lumps.
+    // The silhouettes are doing as much as silhouettes can at this size, and the honest fix
+    // for the rest is to say the name: point at a thing and it tells you what it is and how
+    // many of it you have.
+
+    private static void DrawHover(Inventory inv, InventoryScreen screen)
+    {
+        // Nothing while a stack is riding the cursor — the cursor is already carrying the
+        // answer, and a label under a dragged item just obscures where it is going.
+        if (!screen.Held.IsEmpty) return;
+
+        var (region, index) = InventoryLayout.Locate(screen.Cursor);
+        ItemStack under = region switch
+        {
+            InvRegion.Output => inv.CraftOutput(),
+            InvRegion.None   => ItemStack.Empty,
+            _                => Inventory.Addressable(region, index)
+                                    ? inv.SlotRef(region, index) : ItemStack.Empty,
+        };
+
+        // An empty slot under one of the bench's arrows names what that arrow is going to
+        // give, so the promise can be read rather than guessed at from a 16-pixel ghost.
+        string name;
+        if (under.IsEmpty && region == InvRegion.Parts && !inv.Break[0].IsEmpty)
+        {
+            ItemKind on = inv.Break[0].Kind;
+            if (index >= Crafting.PartCount(on)) return;
+            name = Crafting.IsUncertain(on, index)
+                ? MaybeNames(on)
+                : ItemNames.Of(Crafting.Preview(on, index).Kind);
+        }
+        else if (under.IsEmpty) return;
+        else name = ItemNames.Of(under.Kind);
+
+        int nameW = PixelFont.Measure(name, 1) - 1;
+        string count = under.IsEmpty ? "" : under.Count.ToString();
+        int countW = count.Length == 0 ? 0 : PixelFont.MeasureSmall(count) + 3;
+        int w = nameW + countW + 6;
+        const int h = PixelFont.GlyphH + 4;
+
+        // Up and to the right of the pointer, then folded back inside the panel so a label
+        // on the last column or the bottom row is never half off the screen.
+        int x = (int)screen.Cursor.X + 6;
+        int y = (int)screen.Cursor.Y - h - 2;
+        x = Math.Clamp(x, 1, W - w - 1);
+        y = Math.Clamp(y, 1, H - h - 1);
+
+        Raylib.DrawRectangle(x, y, w, h, new Color(4, 8, 12, 230));
+        Raylib.DrawRectangleLines(x, y, w, h, Scale(SlotEdge, 0.9f));
+        PixelFont.Draw(name, x + 3, y + 2, 1, Ink);
+        if (count.Length > 0)
+            PixelFont.DrawSmall(count, x + 3 + nameW + 3, y + 2 + (PixelFont.GlyphH - PixelFont.SmallH),
+                Scale(Ink, 0.75f));
     }
 
     // --- helpers --------------------------------------------------------------

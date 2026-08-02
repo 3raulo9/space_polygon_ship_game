@@ -1094,18 +1094,54 @@ public sealed class Game : IDisposable
             return true;
         }
 
-        // Inventory variant: seed a representative pack (a bit of every item, three
-        // fragments loaded in the triangle so the CRAB CORE preview shows, one equipped)
-        // and grab the crafting panel — lets the layout and font be verified headlessly.
-        if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_INV") != null)
+        // Inventory variant: seed a representative pack (a bit of every item, a recipe loaded
+        // into the assembly triangle so its preview shows, a cell sitting on the take-apart
+        // bench so its arrows are out, one weapon equipped) and grab the panel — lets both
+        // benches' layout and the font be verified headlessly.
+        //
+        // UNRENDERED_CAPTURE_INV=rounds loads the round recipe instead of the CRAB CORE, so
+        // the other assembly can be photographed without a hand on the mouse.
+        if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_INV") is { } invShot)
         {
             var inv = _world!.Inventory;
             inv.Add(ItemKind.Battery, 4);
             inv.Add(ItemKind.Bullet, 17);
             inv.Add(ItemKind.CrabFragment, 2);
-            for (int i = 0; i < Inventory.CraftCount; i++)
-                inv.Craft[i] = new ItemStack(ItemKind.CrabFragment, 1);
+            inv.Add(ItemKind.ScrapMetal, 12);
+            inv.Add(ItemKind.CopperWire, 3);
+            inv.Add(ItemKind.SpaceGunpowder, 7);
+            inv.Add(ItemKind.DenseAlloy, 5);
+            inv.Add(ItemKind.Lead, 2);
+            inv.Add(ItemKind.Zinc, 1);
+            inv.Add(ItemKind.Lithium, 1);
+            if (invShot == "rounds")
+            {
+                inv.Craft[0] = new ItemStack(ItemKind.SpaceGunpowder, 1);
+                inv.Craft[1] = new ItemStack(ItemKind.DenseAlloy, 1);
+                inv.Craft[2] = new ItemStack(ItemKind.ScrapMetal, 1);
+            }
+            else
+            {
+                for (int i = 0; i < Inventory.CraftCount; i++)
+                    inv.Craft[i] = new ItemStack(ItemKind.CrabFragment, 1);
+            }
+            inv.Break[0] = new ItemStack(ItemKind.Battery, 3);
+            inv.Parts[0] = new ItemStack(ItemKind.CopperWire, 2);
             inv.Weapons[0] = new ItemStack(ItemKind.CrabCore, 1);
+            // UNRENDERED_CAPTURE_SLOT=<n> parks the pointer on a grid slot, so the hover
+            // label can be photographed too; PART<n> points it at the take-apart bench's
+            // n-th arrow instead, where the label names what that arrow is going to give.
+            if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_SLOT") is { } hoverAt)
+            {
+                bool part = hoverAt.StartsWith("PART", StringComparison.OrdinalIgnoreCase);
+                if (int.TryParse(part ? hoverAt[4..] : hoverAt, out int hover))
+                {
+                    Rectangle box = part
+                        ? UI.InventoryLayout.Part(hover) : UI.InventoryLayout.GridSlot(hover);
+                    _inventory.PointAtForCapture(
+                        new Vector2(box.X + box.Width / 2f, box.Y + box.Height / 2f));
+                }
+            }
             _menuTime += (float)Config.FixedDt;
             for (int i = 0; i < 2; i++) { _renderer.DrawInventory(_world!, _inventory, _menuTime); _renderer.Present(); }
             Raylib.TakeScreenshot(_capturePath!);

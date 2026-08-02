@@ -197,6 +197,12 @@ public sealed class World : IAnchorField
             case InvOp.Charge:
                 ChargeFromSlot(Players[seat], inv, it.FromIndex);
                 break;
+            case InvOp.Break:
+                // The host rolls its own teardown. The client already rolled one to answer
+                // the click, and the two will often disagree about which metal came out of a
+                // cell — the echo of this pack is what the player actually ends up with.
+                inv.BreakOne();
+                break;
         }
     }
 
@@ -2794,6 +2800,10 @@ public sealed class World : IAnchorField
         // And the teeth, thrown off the ring they were still turning on.
         Debris.Burst(new Vector3(c.X, body + MawRig.ToothLocalY * MawRig.Scale, c.Y),
             Palette.MawTooth, elite: false);
+
+        // It leaves no core — there is no shard of a Maw worth building a weapon out of —
+        // but it is still a great deal of dead machine, and it comes apart like one.
+        for (int i = 0; i < 3; i++) ScatterMaterials(maw.Position);
     }
 
     /// <summary>
@@ -2939,10 +2949,15 @@ public sealed class World : IAnchorField
             if (Random.Shared.NextSingle() < PickupSpawnChance)
             {
                 // Same rule for salvage: when full, the farthest piece drifts out and a
-                // new one drifts in, so batteries and rounds keep coming forever.
-                if (Pickups.Count >= MaxPickups) RemoveFarthest(Pickups, pk => pk.Position);
+                // new one drifts in, so batteries and rounds keep coming forever. The cap is
+                // counted over the drift alone, and only the drift can be released to satisfy
+                // it — the parts a firefight left lying about are somebody's, and the world
+                // helping itself to them to make room for a floating battery was the salvage
+                // quietly disappearing out from under the player who earned it.
+                if (AmbientSalvage() >= MaxPickups)
+                    RemoveFarthest(Pickups, pk => pk.Position, IsAmbient);
                 var kind = Random.Shared.NextSingle() < BatteryShare ? PickupKind.Battery : PickupKind.Ammo;
-                Pickups.Add(new Pickup(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), kind));
+                DropSalvage(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), kind);
             }
         }
 
@@ -2991,10 +3006,11 @@ public sealed class World : IAnchorField
     {
         float reach = PlayerTank.Radius + Pickup.Radius;
         float reachSq = reach * reach;
-        _fragmentToRemove = null;
+        bool anySpent = false;
         foreach (var pk in Pickups)
         {
             pk.Update(dt);
+            if (pk.Consumed) continue;
             // First craft to reach it takes it — the roster order breaks a tie between two
             // players standing on the same cell, which is as fair as anything and, unlike a
             // distance test, never hands the same shard to both.
@@ -3004,12 +3020,16 @@ public sealed class World : IAnchorField
                 if (who.Away || !who.Alive) continue;
                 if (Torus.DistanceSquared(pk.Position, who.Position) > reachSq) continue;
                 Collect(pk, seat);
+                anySpent |= pk.Consumed;
                 break;
             }
         }
-        // A spent fragment is pulled off the field after the walk so the list isn't
-        // mutated mid-iteration.
-        if (_fragmentToRemove != null) Pickups.Remove(_fragmentToRemove);
+        // Everything spent this tick is pulled off the field after the walk, so the list
+        // isn't mutated mid-iteration. This used to be a single "the one to remove" field,
+        // which meant that when two players cleared two pieces of salvage on the same tick
+        // only one of them actually left — and the other went on paying out, every tick,
+        // for as long as somebody stood on it.
+        if (anySpent) Pickups.RemoveAll(pk => pk.Consumed);
     }
 
     /// <summary>
@@ -3021,12 +3041,7 @@ public sealed class World : IAnchorField
     /// </summary>
     private void Collect(Pickup pk, int seat)
     {
-        ItemKind kind = pk.Kind switch
-        {
-            PickupKind.Battery      => ItemKind.Battery,
-            PickupKind.CrabFragment => ItemKind.CrabFragment,
-            _                       => ItemKind.Bullet,
-        };
+        ItemKind kind = ItemOf(pk.Kind);
         InventoryOf(seat).Add(kind, pk.Amount);
 
         // Through the cue channel rather than straight at the speaker, so the player who
@@ -3038,17 +3053,21 @@ public sealed class World : IAnchorField
         // system (cosmetic only — it never touches damage or collision).
         Color spark = pk.Kind switch
         {
-            PickupKind.Battery      => Palette.BatteryCore,
-            PickupKind.CrabFragment => Palette.NeonRed,
-            _                       => Palette.Flag,
+            PickupKind.Battery        => Palette.BatteryCore,
+            PickupKind.CrabFragment   => Palette.NeonRed,
+            PickupKind.ScrapMetal     => Palette.ScrapSteel,
+            PickupKind.CopperWire     => Palette.CopperWire,
+            PickupKind.SpaceGunpowder => Palette.PowderGrain,
+            _                         => Palette.Flag,
         };
         Debris.Burst(new Vector3(pk.Position.X, pk.BobHeight, pk.Position.Y), spark, elite: false);
 
-        // A collected fragment is spent, not endless salvage: drop it from the field
-        // rather than respawning it in the fog. Batteries and rounds keep drifting back.
-        if (pk.Kind == PickupKind.CrabFragment)
+        // Only the ambient drift is endless. A fragment or a part off a body is spent when
+        // it is taken — it came from something that died, and there is no honest way for it
+        // to reappear out in the fog a minute later.
+        if (!IsAmbient(pk))
         {
-            _fragmentToRemove = pk;
+            pk.Consumed = true;
             return;
         }
 
@@ -3057,6 +3076,19 @@ public sealed class World : IAnchorField
         pk.Position = PointAround(Players[seat].Position, 45f, 100f);
         pk.Age = 0f;
     }
+
+    /// <summary>What one piece of salvage becomes in a pack. The one place the two
+    /// enumerations are tied together — the field's kinds and the pack's kinds are separate
+    /// on purpose, because most of what a pack can hold never lies on the grid.</summary>
+    public static ItemKind ItemOf(PickupKind kind) => kind switch
+    {
+        PickupKind.Battery        => ItemKind.Battery,
+        PickupKind.CrabFragment   => ItemKind.CrabFragment,
+        PickupKind.ScrapMetal     => ItemKind.ScrapMetal,
+        PickupKind.CopperWire     => ItemKind.CopperWire,
+        PickupKind.SpaceGunpowder => ItemKind.SpaceGunpowder,
+        _                         => ItemKind.Bullet,
+    };
 
     /// <summary>What a rocket costs in bullet salvage. Dear enough that a soldier is choosing
     /// between a full magazine and something that can take a building down.</summary>
@@ -3124,10 +3156,6 @@ public sealed class World : IAnchorField
                 return false;
         }
     }
-
-    // A fragment collected this tick, queued for removal after the pickup loop so the
-    // list isn't mutated while it's being walked. Cleared each pass.
-    private Pickup? _fragmentToRemove;
 
     /// <summary>A random point on the plane at [min,max] from the player.</summary>
     /// <summary>
@@ -3200,18 +3228,22 @@ public sealed class World : IAnchorField
     /// <summary>Drops the item farthest from everyone from a list — used to make room for a
     /// fresh spawn so a full field never blocks new arrivals. Measured against the NEAREST
     /// player rather than against this machine's craft, so a hunter parked in a team-mate's
-    /// face is never the one released to make room.</summary>
-    private void RemoveFarthest<T>(List<T> list, Func<T, Vector2> posOf)
+    /// face is never the one released to make room.
+    ///
+    /// <para><paramref name="only"/> narrows what may be released. The ambient salvage drip
+    /// uses it to release only its own kind: the drift that keeps the field stocked must
+    /// never be allowed to delete the parts a player earned off a body.</para></summary>
+    private void RemoveFarthest<T>(List<T> list, Func<T, Vector2> posOf, Func<T, bool>? only = null)
     {
-        if (list.Count == 0) return;
-        int farthest = 0;
-        float best = DistanceToNearestPlayer(posOf(list[0]));
-        for (int i = 1; i < list.Count; i++)
+        int farthest = -1;
+        float best = float.MinValue;
+        for (int i = 0; i < list.Count; i++)
         {
+            if (only != null && !only(list[i])) continue;
             float d = DistanceToNearestPlayer(posOf(list[i]));
             if (d > best) { best = d; farthest = i; }
         }
-        list.RemoveAt(farthest);
+        if (farthest >= 0) list.RemoveAt(farthest);
     }
 
     /// <summary>How far the nearest living craft is from a point, squared. The field's
@@ -5432,7 +5464,10 @@ public sealed class World : IAnchorField
 
         var kind = Random.Shared.NextSingle() < DropBatteryShare
             ? PickupKind.Battery : PickupKind.Ammo;
-        Pickups.Add(new Pickup(s.Position, kind));
+        DropSalvage(s.Position, kind);
+        // A soldier is carrying a launcher, a spool and a harness full of machinery, and all
+        // of it breaks the same way a hunter's does.
+        ScatterMaterials(s.Position);
     }
 
     /// <summary>
@@ -6992,7 +7027,8 @@ public sealed class World : IAnchorField
             // salvage cap — a kill you earned always leaves its reward.
             var kind = Random.Shared.NextSingle() < DropBatteryShare
                 ? PickupKind.Battery : PickupKind.Ammo;
-            Pickups.Add(new Pickup(enemy.Position, kind));
+            DropSalvage(enemy.Position, kind);
+            ScatterMaterials(enemy.Position);
         }
     }
 
@@ -7000,6 +7036,109 @@ public sealed class World : IAnchorField
     /// rounds. Weighted toward ammo so a firefight feeds the gun it was fought with, and the
     /// battery is the rarer prize.</summary>
     private const float DropBatteryShare = 0.45f;
+
+    // --- What a body is worth in parts --------------------------------------------
+    // Everything on this field is a machine or is carrying one, and killing it breaks that
+    // machine open. The odds are per-material and rolled independently, so a kill usually
+    // leaves plate, sometimes leaves powder, and occasionally gives up a coil of wire — which
+    // makes wire the thing you have to actually fight for and scrap the thing you trip over.
+
+    private const float ScrapChance = 0.90f;
+    private const float GunpowderChance = 0.20f;
+    private const float WireChance = 0.10f;
+
+    /// <summary>How far from the body the parts land. Small — they should read as one dead
+    /// thing's worth of wreckage lying where it fell, and a player driving over the corpse
+    /// should sweep up most of it in one pass rather than having to hunt the scatter.</summary>
+    public const float ScatterRadius = 2.2f;
+
+    /// <summary>
+    /// Rolls the materials off one body and scatters them where it died. Every drop site in
+    /// the world goes through here — hunters, squads, the two bosses — because "killing any
+    /// enemy leaves parts" is one rule, and three copies of it would be three chances for one
+    /// of them to quietly stop matching the others.
+    /// </summary>
+    private void ScatterMaterials(Vector2 at)
+    {
+        if (Random.Shared.NextSingle() < ScrapChance) DropSalvage(Scatter(at), PickupKind.ScrapMetal);
+        if (Random.Shared.NextSingle() < GunpowderChance) DropSalvage(Scatter(at), PickupKind.SpaceGunpowder);
+        if (Random.Shared.NextSingle() < WireChance) DropSalvage(Scatter(at), PickupKind.CopperWire);
+    }
+
+    /// <summary>A point a short random way off the body, so two parts off the same kill never
+    /// land exactly on top of each other and read as one.</summary>
+    private static Vector2 Scatter(Vector2 at)
+    {
+        float a = Random.Shared.NextSingle() * MathF.Tau;
+        float r = ScatterRadius * MathF.Sqrt(Random.Shared.NextSingle());
+        return Torus.Wrap(at + new Vector2(MathF.Cos(a), MathF.Sin(a)) * r);
+    }
+
+    /// <summary>
+    /// The one way salvage gets onto the field. Every add goes through here so the list has a
+    /// hard ceiling, because a field that grows without bound is a field where the salvage
+    /// stops being <em>reachable</em>: only the nearest <see cref="Net.Snapshot"/> worth of it
+    /// fits in a packet, so anything past the ceiling is invisible on every machine but the
+    /// host's and might as well not be there. Over the ceiling, the piece farthest from
+    /// everybody is released — never the one just dropped, which is the one somebody earned.
+    /// </summary>
+    private void DropSalvage(Vector2 at, PickupKind kind)
+    {
+        while (Pickups.Count >= MaxFieldSalvage) RemoveFarthest(Pickups, pk => pk.Position);
+        Pickups.Add(new Pickup(ReachablePoint(at), kind));
+    }
+
+    /// <summary>
+    /// The same point, unless it is inside a building — in which case the nearest point just
+    /// outside that building's wall.
+    ///
+    /// <para>A tower is solid: the craft is stopped at its footprint, so anything sitting
+    /// inside one can be seen, driven at, and never reached. It is a rare landing and a
+    /// permanent one, and it looks exactly like the game deciding this particular piece of
+    /// salvage is not for you. The ambient drift seeds at a random bearing and a kill can
+    /// perfectly well happen against a wall, so both go through here.</para>
+    ///
+    /// <para>Pushed out to the player's own radius clear of the wall rather than just onto
+    /// it, because a pickup exactly on the footprint is one the craft is stopped a hair short
+    /// of — which is the same problem with an extra step.</para>
+    /// </summary>
+    public Vector2 ReachablePoint(Vector2 at)
+    {
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        foreach (var s in Structures)
+        {
+            int n = s.Blockers(blockers);
+            for (int i = 0; i < n; i++)
+            {
+                float clear = blockers[i].Radius + PlayerTank.Radius + 0.5f;
+                Vector2 out_ = Torus.Delta(blockers[i].At, at);
+                float d = out_.Length();
+                if (d >= clear) continue;
+                // Dead centre: any bearing will do, so take one rather than dividing by zero.
+                Vector2 dir = d > 0.01f ? out_ / d : new Vector2(1f, 0f);
+                at = Torus.Wrap(blockers[i].At + dir * clear);
+            }
+        }
+        return at;
+    }
+
+    /// <summary>
+    /// The hard ceiling on salvage lying about, across the whole field. Comfortably above the
+    /// ambient <see cref="MaxPickups"/> — a firefight is meant to leave a mess — and inside
+    /// what a field packet can describe, which is the number that actually matters.
+    /// </summary>
+    private const int MaxFieldSalvage = 40;
+
+    /// <summary>The drift that keeps the field stocked, as opposed to what a body left. Only
+    /// this is subject to <see cref="MaxPickups"/>.</summary>
+    private static bool IsAmbient(Pickup pk) => pk.Kind is PickupKind.Battery or PickupKind.Ammo;
+
+    private int AmbientSalvage()
+    {
+        int n = 0;
+        foreach (var pk in Pickups) if (IsAmbient(pk)) n++;
+        return n;
+    }
 
     // --- Falling-debris crush -----------------------------------------------------
 
@@ -7142,7 +7281,11 @@ public sealed class World : IAnchorField
 
         // The kill leaves a shard of the core behind — a CRAB CORE fragment to collect.
         // Three of them craft a thrown CRAB CORE of the player's own.
-        Pickups.Add(new Pickup(boss.Position, PickupKind.CrabFragment));
+        DropSalvage(boss.Position, PickupKind.CrabFragment);
+        // And, being a machine like everything else out here, its parts. Rolled three times:
+        // there is a great deal more of a crab to come apart than there is of a hunter, and
+        // walking away from one with a single scrap of plate would read as an insult.
+        for (int i = 0; i < 3; i++) ScatterMaterials(boss.Position);
     }
 
     /// <summary>
