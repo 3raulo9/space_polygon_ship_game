@@ -22,6 +22,13 @@ public sealed class EntityRenderer
     private readonly PolyMesh _battery = Meshes.Battery(Palette.BatteryFill, Palette.BatteryCore);
     private readonly PolyMesh _bullet = Meshes.Bullet(Palette.Flag, Palette.HudChrome);
 
+    // And what a body leaves lying where it fell. Deliberately duller and smaller than the
+    // two drifting salvage cells: parts are worth doubling back for, not worth crossing a
+    // field under fire for, and the silhouette should say so from a distance.
+    private readonly PolyMesh _scrap = Meshes.ScrapPlate(Palette.ScrapSteel);
+    private readonly PolyMesh _wire = Meshes.WireCoil(Palette.CopperWire);
+    private readonly PolyMesh _powder = Meshes.PowderPile(Palette.PowderDark, Palette.PowderGrain);
+
     // Death debris: a jagged chunk and a bright spark. Both are drawn white and
     // tinted per-instance so each piece can carry its own (fading) colour.
     private readonly PolyMesh _shard = Meshes.Shard(Color.White);
@@ -191,17 +198,32 @@ public sealed class EntityRenderer
         _squads.Draw(world, cameraPos, (float)Raylib.GetTime());
 
         // Floating pickups: bob at waist height and turn slowly on the spot, so the
-        // charge band and bullet tip catch the light as they drift in the fog. A CRAB
-        // CORE fragment reuses the battery cell's shape flooded neon-red, so it reads as
-        // a hot shard of the thing it fell out of.
+        // charge band and bullet tip catch the light as they drift in the fog, and the
+        // parts a kill scattered lie turning just off the deck where the body went down.
         foreach (var pk in world.Pickups)
         {
             Vector2 at = Torus.NearestImage(pk.Position, eyeXZ);
-            if (pk.Kind == PickupKind.CrabFragment)
-                _battery.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 1f, Palette.NeonRed);
-            else
-                (pk.Kind == PickupKind.Battery ? _battery : _bullet)
-                    .Draw(at, pk.Spin, pk.BobHeight, cameraPos);
+            switch (pk.Kind)
+            {
+                // A CRAB CORE fragment reuses the cell's shape flooded neon-red, so it reads
+                // as a hot shard of the thing it fell out of.
+                case PickupKind.CrabFragment:
+                    _battery.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 1f, Palette.NeonRed);
+                    break;
+                case PickupKind.Battery: _battery.Draw(at, pk.Spin, pk.BobHeight, cameraPos); break;
+                // Parts sit lower and turn on the spot like everything else, but they hang
+                // nearer the grid — they were dropped, not left floating.
+                case PickupKind.ScrapMetal:
+                    _scrap.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.5f);
+                    break;
+                case PickupKind.CopperWire:
+                    _wire.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.4f);
+                    break;
+                case PickupKind.SpaceGunpowder:
+                    _powder.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.4f);
+                    break;
+                default: _bullet.Draw(at, pk.Spin, pk.BobHeight, cameraPos); break;
+            }
         }
 
         foreach (var p in world.Projectiles)

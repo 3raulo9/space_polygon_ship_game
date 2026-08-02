@@ -321,13 +321,21 @@ public static class Snapshot
         }
         dst[countAt] = (byte)written;
 
-        // The salvage on the grid — few, static, and never culled, so a client sees every cell
-        // and shard the host has out. Position and kind only; the bob and spin animate locally.
+        // The salvage on the grid. Position and kind only; the bob and spin animate locally.
+        //
+        // Nearest first, and only as much of it as a packet will hold. This used to be the
+        // first eight pickups in list order, which was fine while the only salvage was the
+        // handful of cells drifting around the field — and then kills started leaving parts
+        // where they fell. A firefight can put a dozen pieces on the ground in seconds, and
+        // list order is arrival order, so everything a client had already walked past sat at
+        // the front of the packet while the pile it was standing in never got sent at all.
+        // The salvage was there, the host would happily hand it over, and there was nothing
+        // on the client's screen to drive over.
         int pkAt = at++;
         int pk = 0;
-        foreach (var p in world.Pickups)
+        foreach (int i in NearestSalvage(world, eye))
         {
-            if (pk >= MaxPickups) break;
+            Entities.Pickup p = world.Pickups[i];
             BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(p.Position.X, PosScale)); at += 2;
             BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(p.Position.Y, PosScale)); at += 2;
             dst[at++] = (byte)p.Kind;
@@ -337,8 +345,44 @@ public static class Snapshot
         return at;
     }
 
-    /// <summary>How many pickups a field packet carries — the world's own cap.</summary>
-    private const int MaxPickups = 8;
+    /// <summary>How many pickups a field packet carries. Above the world's own hard ceiling
+    /// on ambient salvage and well above what one firefight leaves, so in practice the cull
+    /// below never actually drops anything — it is there for the pathological case, and it
+    /// drops the right things when it fires.</summary>
+    private const int MaxPickups = 32;
+
+    /// <summary>Scratch for the salvage sort: the chosen indices and their distances, held
+    /// between packets rather than allocated per write. Snapshots are written one at a time
+    /// off the sim thread, as every other buffer in this file already assumes.</summary>
+    private static readonly int[] _nearIndex = new int[MaxPickups];
+    private static readonly float[] _nearDist = new float[MaxPickups];
+
+    /// <summary>
+    /// The <see cref="MaxPickups"/> pieces of salvage closest to this recipient, nearest
+    /// first. A straight insertion into a fixed run: the list is short, the cap is small, and
+    /// the alternative is sorting and allocating twenty times a second for a packet that
+    /// almost always holds everything anyway.
+    /// </summary>
+    private static ReadOnlySpan<int> NearestSalvage(World.World world, Vector2 eye)
+    {
+        int n = 0;
+        for (int i = 0; i < world.Pickups.Count; i++)
+        {
+            float d = Torus.DistanceSquared(world.Pickups[i].Position, eye);
+            if (n == MaxPickups && d >= _nearDist[n - 1]) continue;
+
+            int at = n < MaxPickups ? n++ : MaxPickups - 1;
+            while (at > 0 && _nearDist[at - 1] > d)
+            {
+                _nearDist[at] = _nearDist[at - 1];
+                _nearIndex[at] = _nearIndex[at - 1];
+                at--;
+            }
+            _nearDist[at] = d;
+            _nearIndex[at] = i;
+        }
+        return _nearIndex.AsSpan(0, n);
+    }
 
     // --- Structures ---------------------------------------------------------------
 
@@ -887,20 +931,27 @@ public static class Snapshot
                 world.AdoptRound(Torus.Wrap(new Vector2(x, y)), h, new Vector2(vx, vy), owner, flags);
             }
 
-            // The salvage. Static, so the list is only rebuilt when its size changes (a spawn or
-            // a pickup) — otherwise the existing cells keep their age and bob smoothly rather
-            // than resetting their phase twenty times a second.
+            // The salvage. The cells themselves are reused between packets when the count
+            // holds, so each keeps its own bob phase and drifts smoothly rather than having
+            // it reset twenty times a second — but what is *in* each cell is taken from the
+            // packet every time, kind included. It has to be: the host sends its nearest
+            // salvage, so as the player moves, slot 3 becomes a different piece of salvage
+            // without the count changing at all. Keeping the old kind there drew a battery
+            // where the host had a scrap of plate, and the player collected whatever the host
+            // said was there rather than the thing they drove at.
             int pk = src[at++];
-            bool rebuild = pk != world.Pickups.Count;
-            if (rebuild) world.Pickups.Clear();
+            if (pk != world.Pickups.Count)
+            {
+                world.Pickups.Clear();
+                for (int i = 0; i < pk; i++)
+                    world.Pickups.Add(new Entities.Pickup(Vector2.Zero, Entities.PickupKind.Battery));
+            }
             for (int i = 0; i < pk; i++)
             {
                 float px = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
                 float py = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
                 var kind = (Entities.PickupKind)src[at++];
-                var pos = Torus.Wrap(new Vector2(px, py));
-                if (rebuild) world.Pickups.Add(new Entities.Pickup(pos, kind));
-                else world.Pickups[i].Position = pos;
+                world.Pickups[i].NetSet(Torus.Wrap(new Vector2(px, py)), kind);
             }
             return tick;
         }

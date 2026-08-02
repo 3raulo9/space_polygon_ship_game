@@ -13,9 +13,15 @@ namespace Unrendered.UI;
 /// <summary>
 /// The fixed geometry of the inventory panel at the internal 320×240 resolution, shared
 /// by the screen (hit-testing) and the renderer (drawing) so the boxes drawn are exactly
-/// the boxes clicked. Lower section: a 5×4 grid of 20 slots. Upper section: a crafting
-/// triangle with a box at each corner and an output box at its centre. Along the top: the
-/// four R/T/Y/U equip slots.
+/// the boxes clicked. Lower section: a 5×4 grid of 20 slots. Along the top: the four
+/// R/T/Y/U equip slots.
+///
+/// <para>The middle band holds the two workbenches, side by side and mirrored about the
+/// centre of the screen: on the left the assembly triangle — a box at each corner and an
+/// output box at its centre — and on the right the take-apart bench, one input box with a
+/// fan of arrows coming down into a row of part slots. Their two centres sit an equal
+/// distance either side of x=160, so the pair reads as one balanced workshop rather than as
+/// a crafting panel with something bolted onto its side.</para>
 /// </summary>
 public static class InventoryLayout
 {
@@ -31,13 +37,29 @@ public static class InventoryLayout
         return new Rectangle(x0 + i * (Slot + WeaponGap), WeaponY, Slot, Slot);
     }
 
+    // --- The two benches ---
+    // Each bench is built about its own centre line, the pair mirrored about the middle of
+    // the screen. Both share the same top and bottom rows, so the eye reads "in" along one
+    // line and "out" along another whichever bench it is looking at.
+
+    /// <summary>Half the distance between the two benches' centre lines.</summary>
+    private const int BenchSpread = 76;
+    public const int BenchLeft = Config.InternalWidth / 2 - BenchSpread;    // 84
+    public const int BenchRight = Config.InternalWidth / 2 + BenchSpread;   // 236
+
+    /// <summary>The row things go <em>in</em> at, and the row they come <em>out</em> at.</summary>
+    public const int BenchInY = 68;
+    public const int BenchOutY = 117;
+
+    /// <summary>Where each bench's heading sits — just under the equip row's letters.</summary>
+    public const int BenchLabelY = 50;
+
     // --- Crafting triangle: three corners + a centre output ---
-    // Points chosen so the triangle reads clearly under the equip row and above the grid.
     private static readonly Vector2[] _corners =
     {
-        new(160, 62),    // apex
-        new(128, 116),   // bottom-left
-        new(192, 116),   // bottom-right
+        new(BenchLeft, BenchInY),           // apex
+        new(BenchLeft - 28, BenchOutY),     // bottom-left
+        new(BenchLeft + 28, BenchOutY),     // bottom-right
     };
     public static Vector2 CraftCorner(int i) => _corners[i];
     public static Vector2 CraftCentroid =>
@@ -45,6 +67,24 @@ public static class InventoryLayout
 
     public static Rectangle Craft(int i) => Boxed(_corners[i]);
     public static Rectangle Output => Boxed(CraftCentroid);
+
+    // --- Take-apart bench: one input, a row of parts under it ---
+    // The parts row is laid out for the widest teardown there is, and the panel simply
+    // doesn't draw the slots a given item has no arrows for — so a bullet's three and a
+    // battery's three sit in the same places, and a two-part item would leave a gap rather
+    // than shuffling the others sideways.
+    private const int PartGap = 12;
+
+    public static Vector2 BreakCentre => new(BenchRight, BenchInY);
+    public static Rectangle BreakSlot => Boxed(BreakCentre);
+
+    public static Vector2 PartCentre(int i)
+    {
+        int span = Slot + PartGap;
+        float x0 = BenchRight - (Inventory.PartCount - 1) * span / 2f;
+        return new Vector2(x0 + i * span, BenchOutY);
+    }
+    public static Rectangle Part(int i) => Boxed(PartCentre(i));
 
     // --- The 20-slot grid, lower section ---
     public const int GridCols = 5;
@@ -79,6 +119,9 @@ public static class InventoryLayout
         for (int i = 0; i < Inventory.CraftCount; i++)
             if (Hit(Craft(i), p)) return (InvRegion.Craft, i);
         if (Hit(Output, p)) return (InvRegion.Output, 0);
+        if (Hit(BreakSlot, p)) return (InvRegion.Break, 0);
+        for (int i = 0; i < Inventory.PartCount; i++)
+            if (Hit(Part(i), p)) return (InvRegion.Parts, i);
         for (int i = 0; i < Inventory.SlotCount; i++)
             if (Hit(GridSlot(i), p)) return (InvRegion.Slots, i);
         return (InvRegion.None, -1);
@@ -122,6 +165,10 @@ public sealed class InventoryScreen
     private InvRegion _sourceRegion = InvRegion.None;
     private int _sourceIndex = -1;
 
+    /// <summary>Capture hatch: parks the pointer on a slot so the headless grab can photograph
+    /// the hover label, which otherwise only ever exists under a real mouse.</summary>
+    public void PointAtForCapture(Vector2 at) => Cursor = at;
+
     /// <summary>Clears any drag state when the panel opens.</summary>
     public void Reset()
     {
@@ -152,13 +199,30 @@ public sealed class InventoryScreen
 
         // Right-click, while carrying a stack (left still held), peels a single unit off
         // into the slot under the cursor — the way one fragment at a time goes into each
-        // craft corner. With empty hands instead, right-click spends a battery/bullet
-        // stack straight into the craft.
+        // craft corner. With empty hands instead, right-click either spends a battery/bullet
+        // stack straight into the craft or, on the take-apart bench, opens one item.
         if (Raylib.IsMouseButtonPressed(MouseButton.Right))
         {
             if (!Held.IsEmpty) PlaceOne(world, inv, region, index);
+            else if (region == InvRegion.Break) BreakOne(world, inv);
             else RightClickCharge(world, region, index);
         }
+    }
+
+    /// <summary>
+    /// The take-apart bench's one button: right-click what is sitting on it and one of them
+    /// comes apart, its parts landing under the arrows that promised them.
+    ///
+    /// <para>The roll is the one thing a client cannot get right on its own — which metal
+    /// fell out of that battery is the host's to decide. So the local mirror rolls its own
+    /// for an instant answer and the host's echo of the real pack overwrites it a round trip
+    /// later, exactly as every other optimistic inventory action here is settled.</para>
+    /// </summary>
+    private void BreakOne(World.World world, Inventory inv)
+    {
+        if (!inv.BreakOne()) return;
+        world.FileInvIntent(new InvIntent(InvOp.Break, InvRegion.Break, 0,
+                                          InvRegion.Parts, 0, 1));
     }
 
     /// <summary>
@@ -200,13 +264,14 @@ public sealed class InventoryScreen
     {
         if (!Held.IsEmpty) return;
 
-        // The output box hands out a fresh CRAB CORE preview; the fragments are only
-        // spent once it's dropped somewhere valid (see PlaceCraftedCore). Nothing has
+        // The output box hands out a preview of whatever the corners make; the parts are
+        // only spent once it's dropped somewhere valid (see PlaceCraftedCore). Nothing has
         // happened yet, so the host is told nothing either.
         if (region == InvRegion.Output)
         {
-            if (!inv.CanCraft()) return;
-            Held = new ItemStack(ItemKind.CrabCore, 1);
+            ItemStack made = inv.CraftOutput();
+            if (made.IsEmpty) return;
+            Held = made;
             _sourceRegion = InvRegion.Output;
             _sourceIndex = 0;
             return;
@@ -285,15 +350,15 @@ public sealed class InventoryScreen
         }
     }
 
-    /// <summary>Lands a crafted core on the target slot and only now spends the three
-    /// fragments. If the target isn't free the craft is abandoned with nothing lost.</summary>
+    /// <summary>Lands what the bench made on the target slot and only now spends the three
+    /// parts. If the target isn't free the craft is abandoned with nothing lost.</summary>
     private void PlaceCraftedCore(World.World world, Inventory inv, InvRegion region, int index)
     {
         ref ItemStack target = ref inv.SlotRef(region, index);
         bool free = target.IsEmpty;
-        if (!free) { ClearHeld(); return; }   // preview discarded, no fragments spent
+        if (!free) { ClearHeld(); return; }   // preview discarded, no parts spent
 
-        ItemStack core = inv.TakeCraftOutput();   // spends one fragment per corner
+        ItemStack core = inv.TakeCraftOutput();   // spends one part per corner
         if (core.IsEmpty) { ClearHeld(); return; } // recipe slipped away — shouldn't happen
         target = core;
         world.FileInvIntent(new InvIntent(InvOp.CraftInto, InvRegion.Output, 0,

@@ -144,4 +144,40 @@ public static class Palette
 
     // #5AE6C8 — bright charge-band / terminal glow on the battery cell.
     public static readonly Color BatteryCore = new(90, 230, 200, 255);
+
+    // --- Salvage materials ---------------------------------------------------
+    // What a kill leaves on the grid and what a finished thing gives up when it is opened.
+    // These are the least interesting objects in the world and the palette says so: no glow,
+    // no neon, nothing that could be mistaken across a dark field for a battery cell. They
+    // are told apart by silhouette first (a torn plate, a coil, a pile, a brick) and only
+    // then by these, which sit in a narrow band of cold greys with one dirty metal in it.
+
+    // #7A858C — torn hull plate. The commonest thing in the game, in the dullest grey it
+    // can be and still read against the void.
+    public static readonly Color ScrapSteel = new(122, 133, 140, 255);
+
+    // #A0713F — dull, unpolished copper. The one warm tone allowed down here, and only
+    // because a coil of wire that isn't copper-coloured isn't a coil of wire.
+    public static readonly Color CopperWire = new(160, 113, 63, 255);
+
+    // #3E3348 — the powder: near-black with a bruised violet cast, the same wrongness the
+    // Maw's ichor has. Whatever this is, it did not come from anywhere good.
+    public static readonly Color PowderDark = new(62, 51, 72, 255);
+
+    // #6E5C86 — the few grains that catch the light off the pile.
+    public static readonly Color PowderGrain = new(110, 92, 134, 255);
+
+    // #525C6E — dense alloy: a cold blue-grey brick, heavier-looking than the scrap it
+    // sits next to, which is the entire difference between them at 18 pixels.
+    public static readonly Color AlloyIngot = new(82, 92, 110, 255);
+
+    // #4E5358 — lead. Dead, soft, and the most desaturated thing in the palette.
+    public static readonly Color LeadGrey = new(78, 83, 88, 255);
+
+    // #93A8B4 — zinc, drawn as a pale blue-white crystal: the light one of the three metals.
+    public static readonly Color ZincPale = new(147, 168, 180, 255);
+
+    // #B08CA8 — lithium: a faint rose on an otherwise grey rod, the only hint that one of
+    // the three metals is worth more than the others.
+    public static readonly Color LithiumRose = new(176, 140, 168, 255);
 }

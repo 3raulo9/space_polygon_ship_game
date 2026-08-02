@@ -31,6 +31,12 @@ public static partial class SelfTest
         failures += Check("salvage stows into the inventory, doesn't auto-charge", BatteryStowsThenCharges);
         failures += Check("bullet salvage stows a random handful of rounds", AmmoStowsThenLoads);
         failures += Check("three fragments craft a throwable CRAB CORE", FragmentsCraftCrabCore);
+        failures += Check("materials craft rounds and cells", MaterialsCraftRoundsAndCells);
+        failures += Check("the bench takes a thing apart into its parts", TeardownYieldsParts);
+        failures += Check("each bench takes only what it should", BenchesTakeOnlyWhatTheyShould);
+        failures += Check("salvage two players reach at once is not duplicated", SalvageIsSpentWhenTaken);
+        failures += Check("a client sees the salvage it is standing in", ClientSeesTheNearestSalvage);
+        failures += Check("salvage never lands inside a wall", SalvageNeverLandsInsideAWall);
         failures += Check("a thrown CRAB CORE blast destroys enemies", CrabCoreBlastKills);
         failures += Check("a CRAB CORE blast can destroy the Crab-Core", CrabCoreBlastKillsBoss);
         failures += Check("a CRAB CORE blast can destroy the Maw-Core", CrabCoreBlastKillsMaw);
@@ -177,6 +183,7 @@ public static partial class SelfTest
         failures += Check("salvage is personal: each craft keeps what it drove over", SalvageIsPerSeat);
         failures += Check("a client's inventory move is the host's to make", InventoryIntentsAreHostAuthoritative);
         failures += Check("a seat's pack survives the wire intact", InventoryCrossesTheWire);
+        failures += Check("which metal falls out of a cell is the host's roll", BreakingIsTheHostsRoll);
         failures += Check("a spent player watches a living team-mate", SpentPlayerSpectatesASurvivor);
         failures += Check("cables and stolen lances cross to onlookers", RigsCrossTheWire);
         failures += Check("a laggy client's shot is scored where they saw it", LagCompensationRewindsTheTarget);
@@ -3007,6 +3014,126 @@ public static partial class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// A field packet holds a bounded amount of salvage, and it used to be whichever of it
+    /// happened to be at the front of the host's list — which is arrival order. Once kills
+    /// started scattering parts, a firefight would fill that budget with everything the player
+    /// had already walked past, and the pile they were actually standing in was never sent at
+    /// all: salvage that existed, that the host would have handed over, and that there was
+    /// nothing on screen to drive over. The packet now carries the nearest, so what a player
+    /// can see is what is there.
+    /// </summary>
+    private static string? ClientSeesTheNearestSalvage()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.Pickups.Clear();
+        Vector2 eye = host.Players[0].Position;
+
+        // A great deal of old salvage, far out. More than any packet will carry.
+        for (int i = 0; i < 60; i++)
+        {
+            float a = MathF.Tau * i / 60f;
+            host.Pickups.Add(new Pickup(
+                Torus.Wrap(eye + new Vector2(MathF.Cos(a), MathF.Sin(a)) * 140f),
+                PickupKind.Ammo));
+        }
+        // And, dropped last, the parts off a body at the player's feet.
+        host.Pickups.Add(new Pickup(Torus.Wrap(eye + new Vector2(1.5f, 0f)), PickupKind.ScrapMetal));
+        host.Pickups.Add(new Pickup(Torus.Wrap(eye + new Vector2(0f, 1.5f)), PickupKind.CopperWire));
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        client.Pickups.Clear();
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WriteField(host, forSeat: 0, tick: 1u, buf);
+        Snapshot.ApplyField(client, buf.AsSpan(0, n));
+
+        bool scrap = false, wire = false;
+        foreach (var pk in client.Pickups)
+        {
+            scrap |= pk.Kind == PickupKind.ScrapMetal;
+            wire |= pk.Kind == PickupKind.CopperWire;
+        }
+        if (!scrap || !wire)
+            return $"the parts at the player's feet never crossed ({client.Pickups.Count} pickups did)";
+
+        // And the kind travels with the position: the host's nearest salvage is re-sorted
+        // every packet, so a cell reused for a different piece must take its new identity.
+        // Two packets in a row, with the salvage swapped underneath, and the client's list
+        // must describe the second one rather than the first.
+        foreach (var pk in host.Pickups) pk.NetSet(pk.Position, PickupKind.SpaceGunpowder);
+        n = Snapshot.WriteField(host, forSeat: 0, tick: 2u, buf);
+        Snapshot.ApplyField(client, buf.AsSpan(0, n));
+        foreach (var pk in client.Pickups)
+            if (pk.Kind != PickupKind.SpaceGunpowder)
+                return $"a reused pickup kept its old kind ({pk.Kind})";
+        return null;
+    }
+
+    /// <summary>
+    /// Salvage that lands inside a building can be seen from across the field and never
+    /// reached: a tower is solid, and the craft is stopped at its footprint. Every drop is
+    /// nudged clear of the wall, and clear by enough that the craft's own radius still fits.
+    /// </summary>
+    private static string? SalvageNeverLandsInsideAWall()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        if (world.Structures.Count == 0) return "the world seeded no buildings to test against";
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        int tested = 0;
+        foreach (var s in world.Structures)
+        {
+            int n = s.Blockers(blockers);
+            for (int i = 0; i < n; i++)
+            {
+                // Dead centre, and a little off it: both have to come back out.
+                foreach (var probe in new[] { blockers[i].At, Torus.Wrap(blockers[i].At + new Vector2(1f, 0.5f)) })
+                {
+                    Vector2 placed = world.ReachablePoint(probe);
+                    float d = MathF.Sqrt(Torus.DistanceSquared(placed, blockers[i].At));
+                    if (d < blockers[i].Radius + Entities.PlayerTank.Radius)
+                        return $"salvage was placed {d:0.0} into a wall of radius {blockers[i].Radius:0.0}";
+                    tested++;
+                }
+            }
+            if (tested > 40) break;   // a representative sweep, not the whole skyline
+        }
+        return tested == 0 ? "no building offered a footprint to test" : null;
+    }
+
+    /// <summary>
+    /// Two players clearing two pieces of salvage on the same tick. Only one of them used to
+    /// actually leave the field — the other stayed, and went on paying out its contents every
+    /// tick for as long as anybody stood on it.
+    /// </summary>
+    private static string? SalvageIsSpentWhenTaken()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Pickups.Clear();
+        world.AddPlayer(new Loadout { Class = PlayerClass.Tank });   // seat 1
+
+        world.Players[0].Position = Torus.Wrap(new Vector2(-60f, 0f));
+        world.Players[1].Position = Torus.Wrap(new Vector2(60f, 0f));
+        world.Pickups.Add(new Pickup(world.Players[0].Position, PickupKind.ScrapMetal));
+        world.Pickups.Add(new Pickup(world.Players[1].Position, PickupKind.ScrapMetal));
+
+        // Several ticks: a piece that was taken but never removed keeps paying out.
+        for (int i = 0; i < 5; i++) StepWithoutInput(world);
+
+        if (world.Pickups.Count != 0)
+            return $"{world.Pickups.Count} taken pickups were left lying on the field";
+        int a = CountItems(world.InventoryOf(0), ItemKind.ScrapMetal);
+        int b = CountItems(world.InventoryOf(1), ItemKind.ScrapMetal);
+        if (a != 1 || b != 1) return $"two pieces of salvage paid out {a} and {b}, expected 1 each";
+        return null;
+    }
+
     private static string? BossesCrossTheWire()
     {
         // A client must SEE another player's boss fight, not only hear it. The host's Crab-Core
@@ -3287,26 +3414,68 @@ public static partial class SelfTest
     /// clearing a firefight feeds the craft that cleared it. Killing the seeded hunter has to
     /// add exactly one pickup, and it has to be one of the two usable kinds.
     /// </summary>
+    /// <summary>
+    /// A kill leaves exactly one reward — a battery or a handful of rounds — and, on top of
+    /// it, whatever parts the body gave up: a machine that has just been destroyed comes
+    /// apart, and the scrap, powder and wire the workshop runs on is where that comes from.
+    /// Run over several kills, because the parts are rolled per material and a single body is
+    /// entitled to leave none of them.
+    /// </summary>
     private static string? KillsLeaveSalvage()
     {
-        var world = new World.World { DynamicSpawning = false };
-        AimPlayerAtFirstEnemy(world);
+        const int Kills = 8;
+        int killed = 0, scrapSeen = 0;
 
-        int before = world.Pickups.Count;
-        for (int i = 0; i < 60 * 8 && world.Enemies.Count > 0; i++)
+        for (int round = 0; round < Kills; round++)
         {
-            AimPlayerAtFirstEnemy(world);
-            world.FirePlayerShot();
-            StepWithoutInput(world);
+            var world = new World.World { DynamicSpawning = false };
+            world.Pickups.Clear();
+
+            // Where the hunter was standing on the last tick it was alive — the parts are
+            // scattered about the body, and this is the only handle on where that was.
+            Vector2 grave = world.Enemies.Count > 0 ? world.Enemies[0].Position : Vector2.Zero;
+            for (int i = 0; i < 60 * 8 && world.Enemies.Count > 0; i++)
+            {
+                AimPlayerAtFirstEnemy(world);
+                grave = world.Enemies[0].Position;
+                world.FirePlayerShot();
+                StepWithoutInput(world);
+            }
+            if (world.Enemies.Count > 0) continue;   // never died; not this round's business
+            killed++;
+
+            int reward = 0, parts = 0;
+            foreach (var pk in world.Pickups)
+            {
+                switch (pk.Kind)
+                {
+                    case Entities.PickupKind.Battery:
+                    case Entities.PickupKind.Ammo:
+                        reward++;
+                        break;
+                    case Entities.PickupKind.ScrapMetal:
+                    case Entities.PickupKind.SpaceGunpowder:
+                    case Entities.PickupKind.CopperWire:
+                        parts++;
+                        if (pk.Kind == Entities.PickupKind.ScrapMetal) scrapSeen++;
+                        // Close enough to the corpse to be swept up in one pass. Generous
+                        // against the scatter radius, because the body kept moving right up
+                        // to the tick it died.
+                        float d = MathF.Sqrt(Torus.DistanceSquared(pk.Position, grave));
+                        if (d > World.World.ScatterRadius + 4f)
+                            return $"a part landed {d:0.0} from the body it came off";
+                        break;
+                    default:
+                        return $"a kill dropped a {pk.Kind}";
+                }
+            }
+            if (reward != 1) return $"a kill left {reward} battery/ammo drops, expected 1";
+            if (parts > 3) return $"a kill left {parts} parts, expected at most 3";
         }
-        if (world.Enemies.Count > 0) return "enemy still alive after 8s of fire";
 
-        int dropped = world.Pickups.Count - before;
-        if (dropped != 1) return $"a kill dropped {dropped} pickups, expected 1";
-
-        var kind = world.Pickups[^1].Kind;
-        if (kind is not (Entities.PickupKind.Battery or Entities.PickupKind.Ammo))
-            return $"a kill dropped a {kind}, expected a battery or rounds";
+        if (killed == 0) return "no enemy died in 8s of fire";
+        // Scrap comes off nine bodies in ten, so eight kills with none at all is not luck.
+        if (scrapSeen == 0) return $"{killed} kills left no scrap metal at all";
         return null;
     }
 
@@ -3442,6 +3611,124 @@ public static partial class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// The two new recipes: rounds out of powder, alloy and scrap, and a cell out of wire,
+    /// scrap and any one of the three anode metals. The bench does not care which corner a
+    /// part was dropped into, so both are checked in an order nobody would type by hand.
+    /// </summary>
+    private static string? MaterialsCraftRoundsAndCells()
+    {
+        var inv = new Inventory();
+        inv.Craft[0] = new ItemStack(ItemKind.ScrapMetal, 1);
+        inv.Craft[1] = new ItemStack(ItemKind.SpaceGunpowder, 1);
+        inv.Craft[2] = new ItemStack(ItemKind.DenseAlloy, 1);
+
+        ItemStack rounds = inv.CraftOutput();
+        if (rounds.IsEmpty || rounds.Kind != ItemKind.Bullet)
+            return "powder, alloy and scrap did not make rounds";
+        if (rounds.Count < 2) return $"the round recipe yielded {rounds.Count}, expected a handful";
+        if (inv.TakeCraftOutput().IsEmpty) return "claiming the rounds made nothing";
+        foreach (var c in inv.Craft)
+            if (!c.IsEmpty) return "crafting rounds did not consume the parts";
+
+        // Each of the three metals satisfies the cell's third corner on its own.
+        foreach (var metal in new[] { ItemKind.Lead, ItemKind.Zinc, ItemKind.Lithium })
+        {
+            var cell = new Inventory();
+            cell.Craft[0] = new ItemStack(metal, 1);
+            cell.Craft[1] = new ItemStack(ItemKind.ScrapMetal, 1);
+            cell.Craft[2] = new ItemStack(ItemKind.CopperWire, 1);
+            ItemStack made = cell.CraftOutput();
+            if (made.IsEmpty || made.Kind != ItemKind.Battery)
+                return $"wire, scrap and {metal} did not make a cell";
+        }
+
+        // And three parts that are not a recipe make nothing at all.
+        var junk = new Inventory();
+        junk.Craft[0] = new ItemStack(ItemKind.ScrapMetal, 1);
+        junk.Craft[1] = new ItemStack(ItemKind.ScrapMetal, 1);
+        junk.Craft[2] = new ItemStack(ItemKind.ScrapMetal, 1);
+        return junk.CanCraft() ? "three scraps crafted something" : null;
+    }
+
+    /// <summary>
+    /// The take-apart bench. A round always gives back the three things it is made of; a cell
+    /// always gives back wire and scrap and, about half the time, one of the three metals.
+    /// Rolled many times, because the point of the third arrow is that it is a gamble.
+    /// </summary>
+    private static string? TeardownYieldsParts()
+    {
+        // A round: three parts, every time, and always the same three.
+        for (int i = 0; i < 20; i++)
+        {
+            var inv = new Inventory();
+            inv.Break[0] = new ItemStack(ItemKind.Bullet, 1);
+            if (!inv.BreakOne()) return "the bench refused to open a round";
+            if (!inv.Break[0].IsEmpty) return "opening a round did not spend it";
+            if (CountEverywhere(inv, ItemKind.SpaceGunpowder) != 1
+                || CountEverywhere(inv, ItemKind.DenseAlloy) != 1
+                || CountEverywhere(inv, ItemKind.ScrapMetal) != 1)
+                return "a round did not come apart into powder, alloy and scrap";
+        }
+
+        // A cell: wire and scrap every time, a metal some of the time.
+        int metals = 0;
+        const int Cells = 200;
+        for (int i = 0; i < Cells; i++)
+        {
+            var inv = new Inventory();
+            inv.Break[0] = new ItemStack(ItemKind.Battery, 1);
+            if (!inv.BreakOne()) return "the bench refused to open a cell";
+            if (CountEverywhere(inv, ItemKind.CopperWire) != 1
+                || CountEverywhere(inv, ItemKind.ScrapMetal) != 1)
+                return "a cell did not always give back wire and scrap";
+            int metal = CountEverywhere(inv, ItemKind.Lead)
+                      + CountEverywhere(inv, ItemKind.Zinc)
+                      + CountEverywhere(inv, ItemKind.Lithium);
+            if (metal > 1) return "a cell gave back more than one metal";
+            metals += metal;
+        }
+        // A coin toss over two hundred cells: anything outside this is a broken table, not
+        // an unlucky run.
+        if (metals < Cells / 4 || metals > Cells * 3 / 4)
+            return $"{metals} of {Cells} cells gave up a metal — expected about half";
+
+        // And raw material is the bottom of the pile: it does not come apart any further.
+        var scrap = new Inventory();
+        scrap.Break[0] = new ItemStack(ItemKind.ScrapMetal, 4);
+        if (scrap.BreakOne()) return "the bench opened a scrap of metal";
+        return null;
+    }
+
+    /// <summary>
+    /// The two benches' placement rules. The corners take parts and nothing else, the bench
+    /// takes only what can actually be opened, and the row the parts come down into is
+    /// out-only — the player empties it, nothing may be dropped back in.
+    /// </summary>
+    private static string? BenchesTakeOnlyWhatTheyShould()
+    {
+        if (Inventory.Accepts(InvRegion.Craft, ItemKind.Battery))
+            return "a battery was allowed into a crafting corner";
+        if (!Inventory.Accepts(InvRegion.Craft, ItemKind.ScrapMetal))
+            return "scrap was refused by a crafting corner";
+        if (!Inventory.Accepts(InvRegion.Break, ItemKind.Battery))
+            return "the take-apart bench refused a battery";
+        if (Inventory.Accepts(InvRegion.Break, ItemKind.ScrapMetal))
+            return "the take-apart bench accepted something it cannot open";
+        if (Inventory.Accepts(InvRegion.Parts, ItemKind.ScrapMetal))
+            return "the parts row accepted a drop";
+
+        // Out of the parts row and into the grid works; the reverse does not.
+        var inv = new Inventory();
+        inv.Parts[0] = new ItemStack(ItemKind.ScrapMetal, 3);
+        if (!inv.Move(InvRegion.Parts, 0, InvRegion.Slots, 0, 3))
+            return "parts could not be dragged out into the grid";
+        if (inv.Move(InvRegion.Slots, 0, InvRegion.Parts, 0, 3))
+            return "the grid was allowed to push items back into the parts row";
+        return CountItems(inv, ItemKind.ScrapMetal) == 3
+            ? null : "dragging parts into the grid lost them";
+    }
+
     private static string? CrabCoreBlastKills()
     {
         var world = new World.World();
@@ -3512,6 +3799,10 @@ public static partial class SelfTest
         foreach (var s in inv.Craft)
             if (!s.IsEmpty && s.Kind == kind) n += s.Count;
         foreach (var s in inv.Weapons)
+            if (!s.IsEmpty && s.Kind == kind) n += s.Count;
+        foreach (var s in inv.Break)
+            if (!s.IsEmpty && s.Kind == kind) n += s.Count;
+        foreach (var s in inv.Parts)
             if (!s.IsEmpty && s.Kind == kind) n += s.Count;
         return n;
     }
@@ -6291,6 +6582,39 @@ public static partial class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// A teardown is the one inventory action with a die roll in it, so it is the one a client
+    /// genuinely cannot get right on its own: it rolls its own metal for an instant answer and
+    /// has to end up holding whatever the host rolled instead.
+    /// </summary>
+    private static string? BreakingIsTheHostsRoll()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+
+        Inventory pack = hw.InventoryOf(1);
+        pack.Break[0] = new ItemStack(ItemKind.Battery, 2);
+        for (int i = 0; i < 10; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+        if (cw.InventoryOf(1).Break[0].Count != 2)
+            return "the host's bench never reached the client";
+
+        // The client opens one, exactly as the panel does: it scribbles its own roll onto the
+        // mirror and files the intent.
+        cw.Authoritative = false;
+        cw.InventoryOf(1).BreakOne();
+        cw.FileInvIntent(new InvIntent(InvOp.Break, InvRegion.Break, 0, InvRegion.Parts, 0, 1));
+        for (int i = 0; i < 20; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+
+        if (pack.Break[0].Count != 1) return "the client's teardown never reached the host's bench";
+        if (CountEverywhere(pack, ItemKind.CopperWire) != 1
+            || CountEverywhere(pack, ItemKind.ScrapMetal) != 1)
+            return "the host's replay of the teardown did not yield the certain parts";
+        // And the mirror is the host's pack, roll and all — not the client's guess at it.
+        if (cw.InventoryOf(1).Fingerprint() != pack.Fingerprint())
+            return "the client kept its own roll instead of the host's";
+        return null;
+    }
+
     private static string? InventoryCrossesTheWire()
     {
         var pack = new Inventory();
@@ -6298,6 +6622,8 @@ public static partial class SelfTest
         pack.Add(ItemKind.Bullet, 17);
         pack.Craft[1] = new ItemStack(ItemKind.CrabFragment, 1);
         pack.Weapons[2] = new ItemStack(ItemKind.CrabCore, 1);
+        pack.Break[0] = new ItemStack(ItemKind.Battery, 2);
+        pack.Parts[2] = new ItemStack(ItemKind.Lithium, 1);
 
         var buf = new byte[Inventory.WireSize];
         pack.Write(buf);
@@ -6308,6 +6634,8 @@ public static partial class SelfTest
             return "a pack came off the wire different from the one that went on";
         if (landed.Weapons[2].Kind != ItemKind.CrabCore) return "the equip row did not survive";
         if (landed.Craft[1].Kind != ItemKind.CrabFragment) return "the craft corners did not survive";
+        if (landed.Break[0].Count != 2) return "the take-apart bench did not survive";
+        if (landed.Parts[2].Kind != ItemKind.Lithium) return "the parts row did not survive";
 
         // And the digest has to actually notice a change, or the host would never re-send.
         landed.Slots[0].Count++;
