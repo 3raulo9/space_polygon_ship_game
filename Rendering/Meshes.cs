@@ -720,6 +720,25 @@ public static class Meshes
         return m;
     }
 
+    /// <summary>
+    /// A repair kit: a wide, flat case with a raised cross on the lid. Everything else in the
+    /// pack is tall — a can, a rod, a crystal, a brick — so the one thing that mends the hull
+    /// is deliberately the one thing that is broader than it is high, and it is legible at
+    /// icon size by silhouette before the mark on the lid is even readable.
+    /// </summary>
+    public static PolyMesh RepairKit(Color shell, Color mark)
+    {
+        var m = new PolyMesh();
+        m.AddBox(shell, 0.72f, 0.46f, 0f, 0.34f);          // the case
+        m.AddBox(shell, 0.66f, 0.40f, 0.34f, 0.40f);       // the lid's lip
+        // The cross, two crossed bars proud of the lid.
+        m.AddBoxSpan(mark, -0.34f, 0.34f, -0.11f, 0.11f, 0.40f, 0.47f);
+        m.AddBoxSpan(mark, -0.11f, 0.11f, -0.30f, 0.30f, 0.40f, 0.47f);
+        // A handle, so it reads as something carried rather than a slab.
+        m.AddBoxSpan(mark, -0.10f, 0.10f, -0.05f, 0.05f, 0.47f, 0.62f);
+        return m;
+    }
+
     /// <summary>A dull metal cube with a chamfered crown — lead, and nothing else about
     /// it worth drawing.</summary>
     public static PolyMesh MetalBlock(Color fill, Color crown)

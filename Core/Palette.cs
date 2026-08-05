@@ -180,4 +180,16 @@ public static class Palette
     // #B08CA8 — lithium: a faint rose on an otherwise grey rod, the only hint that one of
     // the three metals is worth more than the others.
     public static readonly Color LithiumRose = new(176, 140, 168, 255);
+
+    // --- The repair kit ------------------------------------------------------
+    // The one thing that mends hull. It gets a colour of its own rather than borrowing the
+    // battery's, because a player scanning a dark field has to be able to tell "I need a
+    // cell" from "I need a kit" at fog range — and those are different needs now.
+
+    // #5A6A5E — the case: a drab olive-grey, field equipment rather than a machine part.
+    public static readonly Color RepairShell = new(90, 106, 94, 255);
+
+    // #E8E2D0 — the cross on the lid, in the Maw's own bone white. The palest thing in the
+    // palette, and the only mark on any pickup that is meant to be read rather than felt.
+    public static readonly Color RepairMark = new(232, 226, 208, 255);
 }

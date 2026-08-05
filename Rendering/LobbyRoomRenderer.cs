@@ -350,7 +350,10 @@ internal sealed class LobbyRoomRenderer
             y += 9;
         }
 
-        if (room.Where == LobbyRoom.Focus.Pod) { DrawPodPanel(room, elapsed); return; }
+        // The pod is not drawn here at all: standing in it hands the whole frame to the
+        // hangar (see Renderer.DrawLobbyRoom), which is the same screen single player uses
+        // and needs the room's 3D pass out of its way to do it.
+        if (room.Where == LobbyRoom.Focus.Pod) return;
         if (room.Where == LobbyRoom.Focus.Chart)
         {
             // The full chart, the same picture a solo player gets — with the tally and the
@@ -373,21 +376,10 @@ internal sealed class LobbyRoomRenderer
                 Scale(urgent ? Palette.Warning : Palette.Flag, beat));
         }
 
-        if (room.NearPod) Prompt("E — CHOOSE YOUR CRAFT");
+        if (room.NearPod) Prompt("E — HANGAR: CHOOSE AND BUILD YOUR CRAFT");
         else if (room.NearChart) Prompt(room.Chart.VoteOpen ? "E — CAST YOUR VOTE" : "E — STAR CHART");
         else if (room.NearConsole) Prompt("E — HOST CONSOLE");
         else Prompt("ENTER — RENAME     ESC — LEAVE");
-    }
-
-    private static void DrawPodPanel(LobbyRoom room, float elapsed)
-    {
-        Panel(60, 150, W - 120, 76);
-        PixelFont.DrawCentered("CHOOSE YOUR CRAFT", W / 2, 156, 1, Palette.HudChrome);
-        var arch = ClassCatalog.All[room.PodIndex];
-        PixelFont.DrawCentered("< " + arch.Name + " >", W / 2, 172, 2, Palette.Flag);
-        PixelFont.DrawCentered(arch.Tagline, W / 2, 190, 1, Palette.GridNear);
-        PixelFont.DrawCentered("A/D CHANGE   ENTER PICK   ESC BACK", W / 2, 214, 1,
-            Scale(Palette.HudChrome, 0.6f));
     }
 
     private static void DrawConsolePanel(LobbyRoom room, float elapsed)

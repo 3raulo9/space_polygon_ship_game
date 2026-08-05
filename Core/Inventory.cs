@@ -23,6 +23,10 @@ public enum ItemKind
     Lead,            // \
     Zinc,            //  > a cell's anode metal: one of the three, never known in advance
     Lithium,         // /
+
+    /// <summary>Mends the hull, and is the only thing that does. A battery puts shield
+    /// charges back on the stack; nothing puts hull back but this.</summary>
+    RepairKit,
 }
 
 /// <summary>What each item is called when the panel has room to say so — the hover label,
@@ -43,6 +47,7 @@ public static class ItemNames
         ItemKind.Lead           => "LEAD",
         ItemKind.Zinc           => "ZINC",
         ItemKind.Lithium        => "LITHIUM",
+        ItemKind.RepairKit      => "REPAIR KIT",
         _                       => "SALVAGE",
     };
 }
@@ -156,10 +161,13 @@ public sealed class Inventory
     public readonly ItemStack[] Parts = new ItemStack[PartCount];
 
     /// <summary>The stacking ceiling for a kind: batteries 4, bullets 20, fragments a
-    /// small pile, raw materials by the handful, the crafted core one at a time.</summary>
+    /// small pile, raw materials by the handful, the crafted core one at a time. Repair
+    /// kits stack low — hull is the layer you cannot get back cheaply, and a pocket of
+    /// twenty of them would make it one you never had to think about.</summary>
     public static int MaxStack(ItemKind kind) => kind switch
     {
         ItemKind.Battery      => 4,
+        ItemKind.RepairKit    => 2,
         ItemKind.Bullet       => 20,
         ItemKind.CrabFragment => 9,
         ItemKind.CrabCore     => 1,

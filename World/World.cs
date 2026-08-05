@@ -286,8 +286,13 @@ public sealed partial class World : IAnchorField
     /// climbing or dropping a couple of metres through the shot's flight slips it.</summary>
     private const float EnemyHitVertical = 1.6f;
 
-    // Shield fraction at which the low-health alarm sounds. Crossing *down*
-    // through this line fires warning.wav once — not once per frame below it.
+    // Hull fraction at which the low-health alarm sounds. Crossing *down* through this
+    // line fires warning.wav once — not once per frame below it.
+    //
+    // It watches the HULL, not the shields. Shields are meant to be spent: a craft standing
+    // at 1/5 with a full hull is a player who is doing fine and knows it, and an alarm there
+    // is the alarm nobody listens to. It goes off when the layer that cannot be bought back
+    // starts going.
     private const float LowShieldWarning = 0.45f;
 
     // --- The TANK's siege kit (world side) --------------------------------------
@@ -324,10 +329,15 @@ public sealed partial class World : IAnchorField
     private const float SmokeLife = 6f;
     private const float SmokeRadius = 7.5f;
 
-    // What one battery is worth when spent from the pack: 30% of the shield *and* 30%
-    // of the Hyper reserve. Public so the inventory panel's right-click charge reads
-    // the same figure the salvage used to apply on contact.
+    // What one battery is worth when spent from the pack: one whole shield charge (see
+    // PlayerTank.ChargeShield) and 30% of the Hyper reserve. Public so the inventory
+    // panel's right-click charge reads the same figure the salvage used to apply on contact.
     public const float BatteryChargeFraction = 0.30f;
+
+    /// <summary>What one repair kit mends: a third of the hull, whatever the build. Hull is
+    /// the layer no battery reaches and nothing regrows, so a kit is deliberately worth more
+    /// than a cell and deliberately rarer.</summary>
+    public const float RepairKitFraction = 0.34f;
 
     // --- Dynamic horizon spawning -------------------------------------------------
     // Nothing is pinned to a fixed spot. Hunters, salvage and the rare Crab-Core all
@@ -844,6 +854,7 @@ public sealed partial class World : IAnchorField
     private const float PickupSpawnInterval = 7f;
     private const float PickupSpawnChance = 0.6f;
     private const float BatteryShare = 0.6f;   // this fraction of new salvage is batteries
+    private const float AmbientKitShare = 0.10f; // and this fraction is repair kits
     private float _pickupTimer;
 
     // The Crab-Core is no longer a rare boss — it is a regular inhabitant of the field:
@@ -1071,6 +1082,22 @@ public sealed partial class World : IAnchorField
 
     /// <summary>The name over a seat's craft, or an empty string if none is known.</summary>
     public string NameOf(int seat) => SeatNames.TryGetValue(seat, out var n) ? n : "";
+
+    /// <summary>
+    /// Each seat's hangar build, as the session was told it. The snapshot names only a
+    /// <em>chassis</em> for a seat — one byte, twenty times a second — so when a client has to
+    /// rebuild a craft it looks the full build up here rather than making a default one, and
+    /// the points and paint that arrived on the reliable channel survive the rebuild.
+    /// </summary>
+    public readonly Dictionary<int, Loadout> SeatBuilds = new();
+
+    /// <summary>The build to make a seat's craft from when the snapshot says it is flying
+    /// <paramref name="chassis"/>: the one the session was told, if that is the same craft, and
+    /// otherwise a plain one — a build we were told about a different chassis says nothing
+    /// about this one.</summary>
+    public Loadout BuildFor(int seat, PlayerClass chassis)
+        => SeatBuilds.TryGetValue(seat, out var b) && b.Class == chassis
+            ? b : new Loadout { Class = chassis };
 
     /// <summary>A name for the feed and the scoreboard, falling back to the seat number so a
     /// line is never about nobody. Solo has no roster at all and reads as PILOT.</summary>
@@ -2906,10 +2933,18 @@ public sealed partial class World : IAnchorField
     /// </summary>
     private void AdvanceDay(float dt)
     {
+        RunTime += dt;
         if (!Ground.HasCycle) return;
         DayPhase += dt / Planet.DayLength;
         if (DayPhase >= 1f) DayPhase -= MathF.Floor(DayPhase);
     }
+
+    /// <summary>
+    /// Seconds this world has been stepped for. Kept beside the day clock because it is turned
+    /// by the same tick, but it deliberately does <em>not</em> wrap: it is how long the run
+    /// lasted, which is the only number a sandbox has to show for itself when it ends.
+    /// </summary>
+    public float RunTime { get; private set; }
 
     /// <summary>
     /// The host's account of the hour, off the field packet. Eased rather than snapped: the
@@ -3004,7 +3039,7 @@ public sealed partial class World : IAnchorField
                 // quietly disappearing out from under the player who earned it.
                 if (AmbientSalvage() >= MaxPickups)
                     RemoveFarthest(Pickups, pk => pk.Position, IsAmbient);
-                var kind = Random.Shared.NextSingle() < BatteryShare ? PickupKind.Battery : PickupKind.Ammo;
+                var kind = RollSalvage(BatteryShare, AmbientKitShare);
                 DropSalvage(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), kind);
             }
         }
@@ -3135,6 +3170,7 @@ public sealed partial class World : IAnchorField
         PickupKind.Zinc           => ItemKind.Zinc,
         PickupKind.Lithium        => ItemKind.Lithium,
         PickupKind.CrabCore       => ItemKind.CrabCore,
+        PickupKind.RepairKit      => ItemKind.RepairKit,
         _                         => ItemKind.Bullet,
     };
 
@@ -3144,6 +3180,7 @@ public sealed partial class World : IAnchorField
     public static PickupKind SalvageOf(ItemKind kind) => kind switch
     {
         ItemKind.Battery        => PickupKind.Battery,
+        ItemKind.RepairKit      => PickupKind.RepairKit,
         ItemKind.CrabFragment   => PickupKind.CrabFragment,
         ItemKind.CrabCore       => PickupKind.CrabCore,
         ItemKind.ScrapMetal     => PickupKind.ScrapMetal,
@@ -3226,11 +3263,14 @@ public sealed partial class World : IAnchorField
     /// asked for it (see <see cref="ApplyInvIntent"/>), and both ends must spend exactly the
     /// same thing.
     ///
-    /// A battery is worth the same shield <em>and</em> hyper the salvage used to give, the
-    /// whole stack at once. A stack of rounds loads only what the magazine has room for, so
-    /// right-clicking 12 into a 40/50 magazine loads 10 and leaves 2 behind — and on a soldier
-    /// every ten rounds also seats a rocket, because they have to come from somewhere and the
-    /// alternative is a second kind of pickup for one chassis.
+    /// One battery cell is worth exactly one shield charge — spend two at 1/5 and stand at
+    /// 3/5 — plus its old share of the hyper reserve, the whole stack at once. A repair kit
+    /// is the only thing that touches the hull, and it never touches the shields: the two
+    /// items mend the two layers and neither substitutes for the other. A stack of rounds
+    /// loads only what the magazine has room for, so right-clicking 12 into a 40/50 magazine
+    /// loads 10 and leaves 2 behind — and on a soldier every ten rounds also seats a rocket,
+    /// because they have to come from somewhere and the alternative is a second kind of
+    /// pickup for one chassis.
     /// </summary>
     public bool ChargeFromSlot(PlayerTank player, Inventory inv, int index)
     {
@@ -3243,11 +3283,34 @@ public sealed partial class World : IAnchorField
         switch (slot.Kind)
         {
             case ItemKind.Battery:
-                player.RefillShield(BatteryChargeFraction * slot.Count);
+            {
+                // Refused outright when there is nothing to put back, rather than quietly
+                // eating the stack: a full shield is exactly the case where the player wants
+                // to keep the cells for later.
+                if (player.Shield >= player.MaxShield && player.Hyper >= player.MaxHyper)
+                {
+                    if (local) Audio.PlayFull();
+                    return false;
+                }
+                player.ChargeShield(slot.Count);
                 player.RefillHyper(BatteryChargeFraction * slot.Count);
                 slot = ItemStack.Empty;
                 if (local) Audio.PlayPickup(player.Position);
                 return true;
+            }
+
+            case ItemKind.RepairKit:
+            {
+                if (player.Health >= player.MaxHealth)
+                {
+                    if (local) Audio.PlayFull();
+                    return false;
+                }
+                player.RepairHull(RepairKitFraction * slot.Count);
+                slot = ItemStack.Empty;
+                if (local) Audio.PlayPickup(player.Position);
+                return true;
+            }
 
             case ItemKind.Bullet:
             {
@@ -4396,6 +4459,10 @@ public sealed partial class World : IAnchorField
         gone.Away = true;
         gone.Lives = 0;
         gone.Shield = 0f;
+        // And the hull, which is what Alive actually reads. Emptying only the shield left the
+        // abandoned craft standing — every renderer, tag, hunter and spectator-picker still
+        // counted a player who had walked out of the room.
+        gone.Health = 0f;
     }
 
     /// <summary>
@@ -7171,7 +7238,7 @@ public sealed partial class World : IAnchorField
         }
         else
             Emit(Cue.Hit, victim.Position);
-        if (victim.Alive && victim.ShieldFraction <= LowShieldWarning)
+        if (victim.Alive && victim.HealthFraction <= LowShieldWarning)
             Emit(Cue.Warning, victim.Position, owner: Seat(victim), personal: true);
     }
 
@@ -7209,8 +7276,7 @@ public sealed partial class World : IAnchorField
             // salvage is. Left on the field rather than out in the fog, so clearing a
             // firefight is worth doubling back through. Unlike the ambient drip it ignores the
             // salvage cap — a kill you earned always leaves its reward.
-            var kind = Random.Shared.NextSingle() < DropBatteryShare
-                ? PickupKind.Battery : PickupKind.Ammo;
+            var kind = RollSalvage(DropBatteryShare, DropKitShare);
             DropSalvage(enemy.Position, kind);
             ScatterMaterials(enemy.Position);
 
@@ -7236,6 +7302,23 @@ public sealed partial class World : IAnchorField
     /// rounds. Weighted toward ammo so a firefight feeds the gun it was fought with, and the
     /// battery is the rarer prize.</summary>
     private const float DropBatteryShare = 0.45f;
+
+    /// <summary>And the rarest of the three: a repair kit. Hull is the layer nothing else in
+    /// the game gives back, so the thing that gives it back has to be scarce enough that a
+    /// player counts them — one kill in twelve, against nearly one in two for a cell.</summary>
+    private const float DropKitShare = 0.08f;
+
+    /// <summary>
+    /// Rolls one piece of salvage: a kit, a cell, or rounds. One place rather than three, so
+    /// the drip that keeps the field stocked and the two kill drops can never quietly drift
+    /// into offering different odds.
+    /// </summary>
+    private static PickupKind RollSalvage(float batteryShare, float kitShare)
+    {
+        float r = Random.Shared.NextSingle();
+        if (r < kitShare) return PickupKind.RepairKit;
+        return r < kitShare + batteryShare ? PickupKind.Battery : PickupKind.Ammo;
+    }
 
     // --- What a body is worth in parts --------------------------------------------
     // Everything on this field is a machine or is carrying one, and killing it breaks that

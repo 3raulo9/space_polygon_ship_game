@@ -1,6 +1,7 @@
 ﻿using System.Numerics;
 using Unrendered.Entities;
 using Unrendered.Net;
+using Unrendered.UI;
 using Unrendered.World;
 
 namespace Unrendered.Core;
@@ -57,6 +58,11 @@ public static partial class SelfTest
         failures += Check("the loadout budget refuses an eleventh point", BudgetRefusesOverspend);
         failures += Check("a 5/5/5 build is exactly the historical craft", DefaultBuildIsTheOldCraft);
         failures += Check("loadout points reach the player's live stats", LoadoutDrivesPlayerStats);
+        failures += Check("a solo run that ends puts up an ending, and a match never does", RunOverOpensOnlySolo);
+        failures += Check("the ending screen tells the truth about the run", RunOverReadsTheRun);
+        failures += Check("shields break one charge at a time, then the hull bleeds", ShieldChargesThenHull);
+        failures += Check("a battery buys a charge and a kit buys hull", CellsAndKitsMendDifferentLayers);
+        failures += Check("a whole build survives the wire", ABuildSurvivesTheWire);
         failures += Check("the spider's lance costs rounds and burns a line", SpiderLanceKills);
         failures += Check("charging the spider's lance roots the craft", SpiderChargeRootsTheCraft);
         failures += Check("the spider wears its core on the front", SpiderWearsItsCoreOnTheFront);
@@ -207,6 +213,7 @@ public static partial class SelfTest
         failures += Check("a full match tells the joiner so instead of ignoring them", AFullMatchRefusesOutLoud);
         failures += Check("somebody who joins a running match still picks their craft", LateJoinerPicksTheirChassis);
         failures += Check("a player who arrives after LAUNCH is still named on every screen", NamesReachEveryoneAfterLaunch);
+        failures += Check("the points and paint a player spent reach every screen", ABuildReachesEveryone);
         failures += Check("a rules change reaches the seat count clients grow by", RulesReachTheClientsWorld);
 
         // --- The room ---------------------------------------------------------------
@@ -232,6 +239,7 @@ public static partial class SelfTest
         failures += Check("a blast in your face muffles the whole world", ConcussionDucksAndDulls);
         failures += Check("a spectator hears from the craft they are riding", EarsRideTheCamera);
         failures += Check("a sound over the seam is heard beside you", TheTorusDoesNotBreakTheEars);
+        failures += Check("the world's noise fades out but the menu keeps its voice", WorldFadeSilencesTheWorldNotTheUi);
 
         // --- The monsters can reach anybody, not just seat 0 ----------------------
         failures += Check("the crab's beam burns whoever is standing in it", BeamBurnsEverySeat);
@@ -440,36 +448,45 @@ public static partial class SelfTest
     {
         var lo = new Loadout();
 
-        // A track can only climb into points that are actually free, so maxing one out
-        // from the even opening spread means selling the other two down first. That the
-        // climb stalls until you do is itself the rule under test.
-        while (lo.Adjust(Loadout.Stat.Shield, +1)) { }
-        if (lo.Shield != 6) return $"shield climbed to {lo.Shield} on one spare point";
+        // A track can only climb into points that are actually free, and the opening 5/5/5/5
+        // spread spends the budget exactly — so a track cannot climb at all until something
+        // else is sold down. That the climb stalls until you do is itself the rule under test.
+        if (lo.Adjust(Loadout.Stat.Shield, +1))
+            return $"shield climbed to {lo.Shield} with the budget already spent";
 
         while (lo.Adjust(Loadout.Stat.Speed, -1)) { }
         while (lo.Adjust(Loadout.Stat.Ammo, -1)) { }
         while (lo.Adjust(Loadout.Stat.Shield, +1)) { }
         if (lo.Shield != Loadout.StatMax) return $"shield capped at {lo.Shield}, want 10";
 
-        while (lo.Adjust(Loadout.Stat.Speed, +1)) { }
-        if (lo.Speed != 5) return $"second track reached {lo.Speed}, want 5";
+        // Ten in shields, one apiece in speed and ammo and the untouched five in hull is
+        // seventeen of twenty, so the fourth track can take the last three and stop dead.
+        while (lo.Adjust(Loadout.Stat.Health, +1)) { }
+        if (lo.Health != 8) return $"the fourth track reached {lo.Health}, want 8";
 
-        if (lo.Adjust(Loadout.Stat.Ammo, +1))
-            return $"third track climbed to {lo.Ammo} with the budget spent";
-        if (lo.Ammo != Loadout.StatMin) return $"third track sits at {lo.Ammo}, want 1";
+        if (lo.Adjust(Loadout.Stat.Speed, +1))
+            return $"a track climbed to {lo.Speed} with the budget spent";
+        if (lo.Speed != Loadout.StatMin) return $"speed sits at {lo.Speed}, want 1";
         if (lo.Spent != Loadout.Budget) return $"spent {lo.Spent}, want {Loadout.Budget}";
 
-        // ...and an even spread is legal, with a point left over.
+        // ...and the even spread is legal, spending the lot exactly.
         var even = new Loadout();
-        if (even.Spent != 15 || even.Remaining != 1)
-            return $"5/5/5 spends {even.Spent} of {Loadout.Budget}";
+        if (even.Spent != Loadout.Budget || even.Remaining != 0)
+            return $"5/5/5/5 spends {even.Spent} of {Loadout.Budget}";
         return null;
     }
 
     private static string? DefaultBuildIsTheOldCraft()
     {
         var lo = new Loadout();
-        if (MathF.Abs(lo.MaxShield - 100f) > 0.01f) return $"shield {lo.MaxShield}, want 100";
+        // The historical 100 points of punishment, now split down the middle: five charges of
+        // ten in front of fifty of hull. Adding the fourth track was not allowed to make
+        // anybody tougher, and this is the assertion that says so.
+        if (MathF.Abs(lo.MaxShield - 50f) > 0.01f) return $"shield {lo.MaxShield}, want 50";
+        if (MathF.Abs(lo.MaxHealth - 50f) > 0.01f) return $"hull {lo.MaxHealth}, want 50";
+        if (MathF.Abs(lo.MaxShield + lo.MaxHealth - 100f) > 0.01f)
+            return $"a flat build soaks {lo.MaxShield + lo.MaxHealth}, want the historical 100";
+        if (lo.ShieldCharges != 5) return $"{lo.ShieldCharges} charges, want 5";
         if (MathF.Abs(lo.SpeedScale - 1f) > 0.001f) return $"speed scale {lo.SpeedScale}, want 1";
         if (lo.MaxAmmo != 50) return $"magazine {lo.MaxAmmo}, want 50";
         return null;
@@ -489,6 +506,242 @@ public static partial class SelfTest
             return $"top speed {world.Player.TopSpeed} doesn't match the speed track";
         if (world.Player.Ammo > world.Player.MaxAmmo)
             return "opened with more rounds than the magazine holds";
+        return null;
+    }
+
+    /// <summary>
+    /// When the ending screen is allowed to appear. Both endings of a solo run earn it — the
+    /// craft spent, and a DESCENT cleared — and a networked match never does, whatever happens
+    /// to the craft at this keyboard. Nineteen other people are still playing.
+    /// </summary>
+    private static string? RunOverOpensOnlySolo()
+    {
+        var solo = new World.World(null, MatchSettings.SinglePlayer) { DynamicSpawning = false };
+        solo.Enemies.Clear();
+        if (RunOverScreen.ShouldOpen(solo, networked: false))
+            return "a live run was called over before anything happened to it";
+
+        // Spent: the run is over. Every life, not one — a solo run opens with the match's
+        // revives on it and a craft with a comeback left is not finished.
+        for (int i = 0; i < 12 && solo.Player.Alive; i++) SpendALife(solo.Player);
+        if (!solo.Player.Spectating) return "the test failed to spend the craft";
+        if (!RunOverScreen.ShouldOpen(solo, networked: false))
+            return "a spent solo craft did not end the run";
+
+        // The identical world in a match ends nothing — this is the guard that matters, since
+        // the loop's only other cue that it is in a match is the session being non-null.
+        if (RunOverScreen.ShouldOpen(solo, networked: true))
+            return "a match put an ending screen over one player's death";
+
+        // ...and winning ends a run too, which is the half a plain death check would miss.
+        var won = new World.World(null,
+            new MatchSettings { MaxPlayers = 1, Mode = GameMode.Descent })
+        { DynamicSpawning = false };
+        if (won.Run is null) return "a DESCENT world opened with no run on it";
+        if (RunOverScreen.ShouldOpen(won, networked: false))
+            return "a descent was called over at the landing";
+        won.Run.SkipTo(DescentPhase.Cleared, Descent.WaveCount, won);
+        if (!RunOverScreen.ShouldOpen(won, networked: false))
+            return "clearing a world did not end the run";
+        if (won.Player.Spectating) return "the test cleared the world by dying, which proves nothing";
+        return null;
+    }
+
+    /// <summary>
+    /// What the panel says. A win must not be dressed as a death — different heading, different
+    /// first row — and the run's own numbers have to be the ones it reports.
+    /// </summary>
+    private static string? RunOverReadsTheRun()
+    {
+        var lost = new World.World(new Loadout { Class = PlayerClass.Fish },
+            MatchSettings.SinglePlayer)
+        { DynamicSpawning = false };
+        lost.Enemies.Clear();
+        for (int i = 0; i < 12 && lost.Player.Alive; i++) SpendALife(lost.Player);
+
+        var screen = new RunOverScreen();
+        screen.Open(lost);
+        if (screen.Won) return "a spent craft was reported as a win";
+        if (screen.RetryLabel != "TRY AGAIN") return $"a loss offered '{screen.RetryLabel}'";
+        if (screen.Selected != RunOverScreen.Row.Retry)
+            return "the ending did not open on the row a player most likely wants";
+        // The craft it names is the craft that was flown, off Build (what the renderer reads),
+        // not the stale Class copy that has drifted from it before.
+        if (!Named(screen, "CRAFT", "FISH")) return "the ending named the wrong chassis";
+
+        // A cleared DESCENT: the other face of the same screen.
+        var won = new World.World(null, new MatchSettings { MaxPlayers = 1, Mode = GameMode.Descent })
+        { DynamicSpawning = false };
+        if (won.Run is null) return "a DESCENT world opened with no run on it";
+        won.Run.SkipTo(DescentPhase.Cleared, Descent.WaveCount, won);
+        screen.Open(won);
+        if (!screen.Won) return "a cleared world was reported as a death";
+        if (screen.RetryLabel != "GO AGAIN") return $"a win offered '{screen.RetryLabel}'";
+        if (!screen.Title.Contains("CLEAR")) return $"a win was headed '{screen.Title}'";
+        if (!Named(screen, "REACHED", "ALL FIVE WAVES"))
+            return "a cleared run did not say it had gone all the way down";
+
+        // Every row leads somewhere, and no two lead to the same place.
+        var seen = new HashSet<RunOverScreen.Action>();
+        foreach (var row in System.Enum.GetValues<RunOverScreen.Row>())
+        {
+            if (screen.LabelOf(row).Length == 0) return $"row {row} has no label";
+            if (screen.HintOf(row).Length == 0) return $"row {row} explains nothing";
+            screen.SelectForTest(row);
+            if (!seen.Add(RowAction(row))) return $"two rows do the same thing ({row})";
+        }
+        if (seen.Count != RunOverScreen.RowCount) return "a row leads nowhere";
+
+        // The clock is read as a length of time, not as a float of seconds.
+        if (RunOverScreen.Clock(0f) != "0:00") return "a run of no time read as " + RunOverScreen.Clock(0f);
+        if (RunOverScreen.Clock(125f) != "2:05") return "125 seconds read as " + RunOverScreen.Clock(125f);
+        return null;
+    }
+
+    private static RunOverScreen.Action RowAction(RunOverScreen.Row row) => row switch
+    {
+        RunOverScreen.Row.Retry => RunOverScreen.Action.Retry,
+        RunOverScreen.Row.Hangar => RunOverScreen.Action.Hangar,
+        _ => RunOverScreen.Action.Menu,
+    };
+
+    /// <summary>Whether the ending's readout carries a given label with a given value.</summary>
+    private static bool Named(RunOverScreen screen, string label, string value)
+    {
+        foreach (var (l, v) in screen.Lines)
+            if (l == label) return v == value;
+        return false;
+    }
+
+    /// <summary>
+    /// The two-layer damage model, end to end: charges are counted off one at a time, a hit
+    /// bigger than the charge it breaks spills into the next, nothing reaches the hull while
+    /// any charge stands, and only the hull running out spends a life.
+    /// </summary>
+    private static string? ShieldChargesThenHull()
+    {
+        var lo = new Loadout();                       // 5 charges of 10, 50 of hull
+        var world = new World.World(lo, new MatchSettings { Revives = 3 });
+        PlayerTank p = world.Player;
+
+        if (p.ChargesLeft != 5) return $"opened on {p.ChargesLeft} charges, want 5";
+
+        // A hit inside one charge breaks nothing yet — it is not spent until it is empty.
+        p.TakeDamage(6f);
+        if (p.ChargesLeft != 5) return $"a partial hit popped a charge ({p.ChargesLeft} left)";
+        if (p.TopChargeFraction > 0.45f) return "the top charge did not read as bitten into";
+
+        // ...and the next four points finish it.
+        p.TakeDamage(4f);
+        if (p.ChargesLeft != 4) return $"an emptied charge did not break ({p.ChargesLeft} left)";
+
+        // A big hit spills: 25 is two and a half charges, and the half lands on the third.
+        p.TakeDamage(25f);
+        if (p.ChargesLeft != 2) return $"a 25-point hit left {p.ChargesLeft} charges, want 2";
+        if (MathF.Abs(p.Health - p.MaxHealth) > 0.001f)
+            return "damage reached the hull with charges still standing";
+
+        // Strip the rest of the shield exactly, and the hull is still untouched.
+        p.TakeDamage(p.Shield);
+        if (p.ChargesLeft != 0) return "the last charge survived a hit worth all of it";
+        if (MathF.Abs(p.Health - p.MaxHealth) > 0.001f)
+            return "the hull took the overkill of a hit that exactly emptied the shield";
+        int lives0 = p.Lives;
+        if (lives0 != world.Match.Revives + 1) return "the match's revives did not reach the craft";
+
+        // NOW it bleeds, and only now.
+        p.TakeDamage(10f);
+        if (MathF.Abs(p.Health - (p.MaxHealth - 10f)) > 0.001f)
+            return $"hull at {p.Health} after a 10-point hit through a spent shield";
+        if (p.Lives != lives0) return "a hull scratch cost a life";
+
+        // And running the hull out is what spends one — which brings the whole craft back.
+        p.TakeDamage(p.Health);
+        if (p.Lives != lives0 - 1) return "an emptied hull did not spend a life";
+        if (p.ChargesLeft != 5 || p.Health < p.MaxHealth - 0.001f)
+            return "a revive did not rebuild the craft whole";
+        return null;
+    }
+
+    /// <summary>
+    /// The two consumables mend the two layers and neither substitutes for the other: a cell
+    /// puts back exactly one charge and never touches hull, a kit mends hull and never puts a
+    /// charge back.
+    /// </summary>
+    private static string? CellsAndKitsMendDifferentLayers()
+    {
+        var world = new World.World(new Loadout(), new MatchSettings { Revives = 3 });
+        PlayerTank p = world.Player;
+
+        // A craft that has been through it: the shields stripped and the hull opened, then
+        // two charges put back on the stack. Both layers hurt, which is the only state where
+        // the two items can be told apart by what they do.
+        p.TakeDamage(p.MaxShield + 12f);
+        p.ChargeShield(2);
+        if (p.ChargesLeft != 2) return $"the setup left {p.ChargesLeft} charges, want 2";
+        float hurtHull = p.Health;
+        if (hurtHull >= p.MaxHealth) return "the setup failed to wound the hull";
+
+        // A cell: one charge, and the hull is not its business.
+        var inv = world.Inventory;
+        inv.Slots[0] = new ItemStack(ItemKind.Battery, 1);
+        if (!world.ChargeFromSlot(p, inv, 0)) return "a cell refused to be spent on a hurt craft";
+        if (p.ChargesLeft != 3) return $"one cell left {p.ChargesLeft} charges, want 3";
+        if (MathF.Abs(p.Health - hurtHull) > 0.001f) return "a cell mended the hull";
+
+        // A kit: hull, and the shields are not its business.
+        int charges = p.ChargesLeft;
+        inv.Slots[1] = new ItemStack(ItemKind.RepairKit, 1);
+        if (!world.ChargeFromSlot(p, inv, 1)) return "a kit refused to be spent on a hurt hull";
+        if (p.Health <= hurtHull) return "a kit did not mend the hull";
+        if (p.ChargesLeft != charges) return "a kit put a shield charge back";
+
+        // Neither is wasted on a craft that does not need it.
+        p.Shield = p.MaxShield;
+        p.Health = p.MaxHealth;
+        p.Hyper = p.MaxHyper;
+        inv.Slots[2] = new ItemStack(ItemKind.Battery, 1);
+        inv.Slots[3] = new ItemStack(ItemKind.RepairKit, 1);
+        if (world.ChargeFromSlot(p, inv, 2)) return "a full craft still swallowed a cell";
+        if (world.ChargeFromSlot(p, inv, 3)) return "an unhurt hull still swallowed a kit";
+        return null;
+    }
+
+    /// <summary>
+    /// A build is not private to the machine that made it: chassis, all four tracks and every
+    /// part's paint have to survive being written down and read back, and a packet that claims
+    /// more than the budget allows has to come back as a craft the hangar could have made.
+    /// </summary>
+    private static string? ABuildSurvivesTheWire()
+    {
+        var lo = new Loadout { Class = PlayerClass.Fish };
+        while (lo.Adjust(Loadout.Stat.Speed, -1)) { }
+        while (lo.Adjust(Loadout.Stat.Health, +1)) { }
+        lo.CycleSwatch(PlayerClass.Fish, 0, +3);
+        lo.CycleSwatch(PlayerClass.Fish, 2, +1);
+
+        Span<byte> buf = stackalloc byte[Loadout.Bytes];
+        lo.Write(buf);
+        Loadout back = Loadout.Read(buf);
+
+        if (back.Class != PlayerClass.Fish) return $"the chassis arrived as {back.Class}";
+        for (int i = 0; i < Loadout.StatCount; i++)
+            if (back[(Loadout.Stat)i] != lo[(Loadout.Stat)i])
+                return $"track {(Loadout.Stat)i} arrived as {back[(Loadout.Stat)i]}, sent {lo[(Loadout.Stat)i]}";
+        for (int part = 0; part < ClassCatalog.Get(PlayerClass.Fish).PartNames.Length; part++)
+            if (back.SwatchIndex(PlayerClass.Fish, part) != lo.SwatchIndex(PlayerClass.Fish, part))
+                return $"part {part}'s paint did not survive the wire";
+        if (!lo.SameAs(back)) return "a build did not recognise its own round trip";
+
+        // A hand-written packet asking for four maxed tracks is walked back to something legal
+        // rather than trusted — the host replays these, and a craft nobody could build in the
+        // hangar must not be buildable by typing.
+        Span<byte> cheat = stackalloc byte[Loadout.Bytes];
+        lo.Write(cheat);
+        for (int i = 0; i < Loadout.StatCount; i++) cheat[1 + i] = 10;
+        Loadout clamped = Loadout.Read(cheat);
+        if (clamped.Spent > Loadout.Budget)
+            return $"an over-budget packet bought a craft spending {clamped.Spent}";
         return null;
     }
 
@@ -1429,20 +1682,37 @@ public static partial class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// Enough damage to take one whole life off a craft, whatever it is built from: every
+    /// shield charge and then all of the hull behind them. Shields are no longer what kills
+    /// you, so a test that wants a craft dead has to say so — <c>TakeDamage(MaxShield)</c>
+    /// now leaves a player standing at 0/5 with a full hull, which is exactly right and
+    /// exactly not what these tests are asking for.
+    /// </summary>
+    private static void SpendALife(PlayerTank p) => p.TakeDamage(p.MaxShield + p.MaxHealth);
+
     private static string? RevivesRunOutIntoSpectating()
     {
-        // One revive: two lives. Dying once brings them back on a full shield; dying twice
-        // puts them out of the match without taking the match down with them.
+        // One revive: two lives. Dying once brings them back whole; dying twice puts them out
+        // of the match without taking the match down with them.
         var world = new World.World(null, new MatchSettings { MaxPlayers = 4, Revives = 1 });
         PlayerTank p = world.Player;
         if (p.RevivesLeft != 1) return $"one revive read as {p.RevivesLeft}";
 
+        // Emptying the shields alone is not a death any more — the craft stands there with
+        // nothing in front of its hull, which is the whole point of the two layers.
         p.TakeDamage(p.MaxShield);
+        if (p.RevivesLeft != 1) return "a spent shield cost a life";
+        if (p.ChargesLeft != 0) return $"{p.ChargesLeft} charges survived a shield's worth of damage";
+        if (MathF.Abs(p.Health - p.MaxHealth) > 0.001f) return "damage reached the hull through a live shield";
+
+        SpendALife(p);
         if (p.Spectating) return "a player with a revive left was sent to spectate";
         if (p.Shield < p.MaxShield - 0.001f) return "a revive didn't restore the shield";
+        if (p.Health < p.MaxHealth - 0.001f) return "a revive didn't mend the hull";
         if (p.RevivesLeft != 0) return "the revive wasn't spent";
 
-        p.TakeDamage(p.MaxShield);
+        SpendALife(p);
         if (!p.Spectating) return "a player out of revives is still playing";
         if (p.Alive) return "a spent player is somehow still alive";
 
@@ -1454,7 +1724,7 @@ public static partial class SelfTest
         // Zero revives is a legal choice and means exactly one life.
         var brutal = new World.World(null, new MatchSettings { Revives = 0 });
         if (brutal.Player.Lives != 1) return "a zero-revive match didn't give exactly one life";
-        brutal.Player.TakeDamage(brutal.Player.MaxShield);
+        SpendALife(brutal.Player);
         if (!brutal.Player.Spectating) return "a zero-revive player survived their first death";
         return null;
     }
@@ -1564,7 +1834,7 @@ public static partial class SelfTest
 
         // Spend the near player's single life. Their craft is still somewhere — the camera
         // has to be — but nothing on the field should be interested in it any more.
-        spent.TakeDamage(spent.MaxShield);
+        SpendALife(spent);
         if (!spent.Spectating) return "the test failed to put the near player out";
 
         var hunter = new EnemyTank(Torus.Wrap(new Vector2(130f, 0f)), elite: false);
@@ -3455,8 +3725,11 @@ public static partial class SelfTest
             {
                 switch (pk.Kind)
                 {
+                    // The three things a kill can reward: rounds for the gun, a cell for the
+                    // shields, or — rarely — the kit that is the only thing that mends hull.
                     case Entities.PickupKind.Battery:
                     case Entities.PickupKind.Ammo:
+                    case Entities.PickupKind.RepairKit:
                         reward++;
                         break;
                     case Entities.PickupKind.ScrapMetal:
@@ -3573,10 +3846,14 @@ public static partial class SelfTest
         if (CountItems(world.Inventory, ItemKind.Battery) < 1)
             return "battery was not stowed in the inventory";
 
-        // Spending it (as the panel's right-click does) recharges shield + hyper.
-        world.Player.RefillShield(World.World.BatteryChargeFraction);
+        // Spending it (as the panel's right-click does) puts back one whole shield charge
+        // and its share of hyper.
+        int charges0 = world.Player.ChargesLeft;
+        world.Player.ChargeShield(1);
         world.Player.RefillHyper(World.World.BatteryChargeFraction);
         if (world.Player.Shield <= shield0) return "spending a battery did not recharge shield";
+        if (world.Player.ChargesLeft != charges0 + 1)
+            return "spending one battery did not put back exactly one shield charge";
         if (world.Player.Hyper <= hyper0) return "spending a battery did not recharge hyper";
         return null;
     }
@@ -6771,6 +7048,7 @@ public static partial class SelfTest
         // Seat 0 is spent. Seat 2 is nearer than seat 1, so it is the one to watch.
         world.Players[2].Position = Torus.Wrap(world.Players[0].Position + new Vector2(4f, 0f));
         world.Players[0].Shield = 0f;
+        world.Players[0].Health = 0f;
         world.Players[0].Lives = 0;
         if (!world.Players[0].Spectating) return "the test failed to put the local player out";
 
@@ -6787,6 +7065,7 @@ public static partial class SelfTest
 
         // But it does move on when the one it was watching is spent too.
         world.Players[2].Shield = 0f;
+        world.Players[2].Health = 0f;
         world.Players[2].Lives = 0;
         StepWithoutInput(world);
         if (world.ViewSeat != 1) return "the camera stayed on a craft that had gone out";
@@ -7471,8 +7750,7 @@ public static partial class SelfTest
                     && m.Room is { MyChassis: not null } r)
                 {
                     World.World jw = m.Net.World!;
-                    m.Build.Class = r.MyChassis.Value;
-                    jw.ReplacePlayer(m.Net.LocalSeat, m.Build);
+                    jw.ReplacePlayer(m.Net.LocalSeat, r.MyBuild);
                     foreach (var a in r.Avatars.Values)
                         if (!jw.SeatNames.ContainsKey(a.Seat)) jw.SeatNames[a.Seat] = a.Name;
                     m.Net.Room = null;
@@ -7499,7 +7777,10 @@ public static partial class SelfTest
             m.Net = new Session(Wire[peer], host: false) { LocalName = m.Name };
             m.Net.JoinMatch(m.World);
             m.Net.SendHello(m.Build.Class);
-            m.Room = new World.LobbyRoom { IsHost = false };
+            // The room's pod edits this machine's own long-lived build, exactly as the loop
+            // hands Game._loadout to it — so a test can spend points on m.Build and expect
+            // them to be what leaves on the wire.
+            m.Room = new World.LobbyRoom(m.Build) { IsHost = false };
             m.Net.Room = m.Room;
             m.Room.Connecting();
         }
@@ -7545,7 +7826,7 @@ public static partial class SelfTest
         // Game.StartHosting.
         Machine h = s.Host;
         h.Build = new Loadout { Class = PlayerClass.Tank };
-        h.Room = new World.LobbyRoom { IsHost = true };
+        h.Room = new World.LobbyRoom(h.Build) { IsHost = true };
         h.Room.AdoptRules(rules);
         h.World = new World.World(h.Build, h.Room.Match.Clamped()) { DynamicSpawning = false };
         h.World.Enemies.Clear();
@@ -7814,6 +8095,79 @@ public static partial class SelfTest
                 return $"player {who} cannot see the late joiner's seat at all";
             if (w.Players[seat].Class != PlayerClass.Fish)
                 return $"player {who} sees the late joiner as {w.Players[seat].Class}, not a FISH";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// A player's whole bench crosses to everybody: the points they spent and the colours they
+    /// chose, not just which chassis they picked.
+    ///
+    /// <para>A pick used to be one chassis byte, so a build died on the machine that made it —
+    /// every other player saw a default-painted craft with the machine's default stats, and
+    /// the HOST simulated those defaults, which meant the shield and speed a player had bought
+    /// were not the shield and speed they were played with. This is the test for the whole of
+    /// that, on the two ends that can disagree: the host, and a third machine that only ever
+    /// learns about it second-hand.</para>
+    /// </summary>
+    private static string? ABuildReachesEveryone()
+    {
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 4, Revives = 2 });
+
+        // Player 1 goes to the pod and actually uses the bench: a FISH, points dragged off
+        // ammo onto hull, and a repaint of its hide.
+        Loadout mine = s.All[1].Room!.MyBuild;
+        mine.Class = PlayerClass.Fish;
+        while (mine.Adjust(Loadout.Stat.Ammo, -1)) { }
+        while (mine.Adjust(Loadout.Stat.Health, +1)) { }
+        mine.CycleSwatch(PlayerClass.Fish, 0, +5);
+        int paint = mine.SwatchIndex(PlayerClass.Fish, 0);
+        int hull = mine.Health, ammo = mine.Ammo;
+        if (hull == 5 || ammo == 5) return "the test failed to make a build worth sending";
+
+        s.All[1].Room!.ConfirmPodForTest();          // presses READY at the pod
+        s.All[0].Room!.PickForTest(PlayerClass.Tank);
+        s.All[2].Room!.PickForTest(PlayerClass.Spider);
+        s.Step(60);
+
+        int seat = s.All[1].Net.LocalSeat;
+        if (seat < 0) return "the builder was never seated";
+
+        // In the room, before anybody launches: the host is simulating that seat and has to
+        // have been told what it is.
+        Loadout? onHost = s.Host.Net.BuildOf(seat);
+        if (onHost is null) return "the host never learned the build";
+        if (onHost.Health != hull || onHost.Ammo != ammo)
+            return $"the host has the seat at {onHost.Health} hull / {onHost.Ammo} ammo, sent {hull}/{ammo}";
+        if (onHost.SwatchIndex(PlayerClass.Fish, 0) != paint)
+            return "the host did not get the paint";
+
+        s.Launch();
+        s.Step(240);
+
+        // And every machine — the host, the builder, and the third player who was never told
+        // anything directly — draws and simulates that craft from the same build.
+        for (int who = 0; who < 3; who++)
+        {
+            if (!s.All[who].InMatch) return $"player {who} never came into the match";
+            World.World w = s.All[who].World;
+            if (seat >= w.Players.Count) return $"player {who} cannot see the builder's seat";
+            PlayerTank craft = w.Players[seat];
+
+            // Build.Class, not Class: the renderer reads Build, and the two drifting apart is
+            // exactly the bug that made everyone see the host as their own chassis.
+            if (craft.Build.Class != PlayerClass.Fish)
+                return $"player {who} sees the builder as {craft.Build.Class}, not a FISH";
+            if (craft.Build.Health != hull)
+                return $"player {who} has the builder on {craft.Build.Health} hull, not {hull}";
+            if (craft.Build.SwatchIndex(PlayerClass.Fish, 0) != paint)
+                return $"player {who} draws the builder in the wrong paint";
+            // The points have to reach the LIVE stats, not just sit on the build — this is
+            // what decides how much punishment the host lets that craft take.
+            if (MathF.Abs(craft.MaxHealth - craft.Build.MaxHealth) > 0.01f)
+                return $"player {who} simulates the builder with the wrong hull";
+            if (craft.MaxAmmo != craft.Build.MaxAmmo)
+                return $"player {who} simulates the builder with the wrong magazine";
         }
         return null;
     }

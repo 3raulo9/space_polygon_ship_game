@@ -579,6 +579,9 @@ public sealed partial class World : IDescentField
         for (int i = 0; i < 5; i++) ScatterMaterials(boss.Position);
         DropSalvage(boss.Position, PickupKind.Battery);
         DropSalvage(boss.Position, PickupKind.Ammo);
+        // And a kit. Whoever just fought that has holes in them, and the boss is the one body
+        // on the field that is certainly worth enough to have carried one.
+        DropSalvage(boss.Position, PickupKind.RepairKit);
 
         // TWINNED: its death is not the end of it. Two halves, each carrying one layer, rolled
         // off the parent's own seed so they are visibly its children rather than two new
@@ -695,11 +698,15 @@ public sealed partial class World : IDescentField
     {
         for (int i = 0; i < count; i++)
         {
+            // The salvage window between waves is where a run is repaired, and hull is the
+            // thing a run loses permanently — so this is the one table where a repair kit is
+            // reliably on offer rather than a lucky drop off a body.
             PickupKind kind = Random.Shared.NextSingle() switch
             {
-                < 0.40f => PickupKind.Battery,
-                < 0.75f => PickupKind.Ammo,
-                < 0.90f => PickupKind.ScrapMetal,
+                < 0.34f => PickupKind.Battery,
+                < 0.50f => PickupKind.RepairKit,
+                < 0.78f => PickupKind.Ammo,
+                < 0.91f => PickupKind.ScrapMetal,
                 < 0.97f => PickupKind.SpaceGunpowder,
                 _ => PickupKind.CopperWire,
             };

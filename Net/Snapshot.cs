@@ -58,11 +58,16 @@ public static class Snapshot
         Away = 1 << 4,
     }
 
-    /// <summary>Bytes per craft: seat, class, flags, x, y, height, heading, pitch, shield,
+    /// <summary>Bytes per craft: seat, class, flags, x, y, height, heading, pitch, shield, hull,
     /// hyper, lives, ammo, virus-host, virus-decay. The last two are meaningful only on a VIRUS
     /// seat (0/0 otherwise) and are what let every other machine draw the body a mote has seized
-    /// rather than a permanent naked cloud — the whole reason the class was invisible in play.</summary>
-    private const int PlayerBytes = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1;
+    /// rather than a permanent naked cloud — the whole reason the class was invisible in play.
+    ///
+    /// <para>Hull is its own two bytes beside the shield rather than folded into it. It is the
+    /// pool that decides whether a craft is about to die, every machine draws a bar of it over
+    /// every team-mate, and a client that could only be told about its shields would show a
+    /// full-health mate a heartbeat before they went down.</para></summary>
+    private const int PlayerBytes = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1;
     private const int EnemyBytes = 1 + 2 + 2 + 2 + 1;   // id, x, y, heading, elite
     private const int RoundBytes = 2 + 2 + 2 + 2 + 2 + 1 + 1;
 
@@ -120,6 +125,7 @@ public static class Snapshot
             BitConverter.TryWriteBytes(dst.Slice(at, 2), QAngle(p.Heading)); at += 2;
             BitConverter.TryWriteBytes(dst.Slice(at, 2), QAngle(p.Pitch)); at += 2;
             BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(p.Shield, 4f)); at += 2;
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(p.Health, 4f)); at += 2;
             dst[at++] = (byte)Math.Clamp(p.HyperFraction * 255f, 0f, 255f);
             dst[at++] = (byte)Math.Clamp(p.Lives, 0, 255);
             dst[at++] = (byte)Math.Clamp(p.Ammo, 0, 255);
@@ -178,6 +184,7 @@ public static class Snapshot
                 float head = BitConverter.ToInt16(src.Slice(at, 2)) / AngScale; at += 2;
                 float pitch = BitConverter.ToInt16(src.Slice(at, 2)) / AngScale; at += 2;
                 float shield = BitConverter.ToInt16(src.Slice(at, 2)) / 4f; at += 2;
+                float health = BitConverter.ToInt16(src.Slice(at, 2)) / 4f; at += 2;
                 float hyper = src[at++] / 255f;
                 int lives = src[at++];
                 int ammo = src[at++];
@@ -206,6 +213,7 @@ public static class Snapshot
                 {
                     PlayerTank me = world.Players[seat];
                     me.Shield = shield;
+                    me.Health = health;
                     me.Lives = lives;
                     me.Ammo = ammo;
                     me.Hyper = hyper * me.MaxHyper;
@@ -220,8 +228,13 @@ public static class Snapshot
                 // A client's roster starts as placeholder tanks; the first snapshot that names
                 // a seat's real chassis rebuilds it as the right one. Only ever on the frame the
                 // class first differs, since a craft's chassis never changes after that.
+                //
+                // Rebuilt from the seat's KNOWN BUILD, not from the bare chassis byte: the
+                // reliable Build packet has already said what that player spent and how they
+                // painted it, and making a default craft here would throw all of it away at the
+                // one moment the player is definitely being looked at.
                 if (world.Players[seat].Class != chassis)
-                    world.ReplacePlayer(seat, chassis);
+                    world.ReplacePlayer(seat, world.BuildFor(seat, chassis));
 
                 PlayerTank p = world.Players[seat];
                 // Transform is eased, not snapped: hand it to the craft as a target the client's
@@ -229,6 +242,7 @@ public static class Snapshot
                 // second moves smoothly instead of strobing. Status below is taken outright.
                 p.NetTarget(Torus.Wrap(new Vector2(x, y)), h, head, pitch);
                 p.Shield = shield;
+                p.Health = health;
                 p.Hyper = hyper * p.MaxHyper;
                 p.Lives = lives;
                 p.Ammo = ammo;

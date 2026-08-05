@@ -79,7 +79,12 @@ public sealed class Renderer : IDisposable
     /// <summary>Renders the world from the player's eye into the low-res target.</summary>
     public void DrawWorld(World.World world) => DrawWorld(world, null);
 
-    public void DrawWorld(World.World world, Net.NoticeFeed? notices)
+    /// <param name="instruments">False to leave the dashboard off — the bars, the radar, the
+    /// equip row and the mode's own readouts. Only the end-of-run panel asks for this: the run
+    /// is finished, so the instruments are describing a craft that is not going anywhere, and
+    /// the DESCENT readout in particular prints its own ending banner in exactly the place the
+    /// panel puts its title.</param>
+    public void DrawWorld(World.World world, Net.NoticeFeed? notices, bool instruments = true)
     {
         // Whose eyes this frame is drawn from. Normally this machine's own craft; once its
         // revives are spent it is a living team-mate's instead (see World.ViewSeat), because
@@ -350,7 +355,7 @@ public sealed class Renderer : IDisposable
 
         // Flat instrument panel over the scene: vital bars + radar along the top, plus
         // the R/T/Y/U equip slots showing their 3D item icons.
-        HudRenderer.Draw(world, _itemIcons);
+        if (instruments) HudRenderer.Draw(world, _itemIcons);
 
         // The join/quit feed sits under the instruments, bottom-right. Only in a match.
         if (notices != null) HudRenderer.DrawNotices(notices);
@@ -468,9 +473,16 @@ public sealed class Renderer : IDisposable
             const int bw = 24, bh = 3;
             int bx = (int)s.X - bw / 2, by = (int)s.Y;
             Raylib.DrawRectangle(bx - 1, by - 1, bw + 2, bh + 2, new Color(5, 7, 10, 200));
-            float f = Math.Clamp(mate.ShieldFraction, 0f, 1f);
+            // The bar is their HULL — the thing that decides whether they are about to need
+            // help. Their remaining shield charges ride above it as ticks, so a glance says
+            // both "how close are they" and "have they got anything left in front of it".
+            float f = Math.Clamp(mate.HealthFraction, 0f, 1f);
             Raylib.DrawRectangle(bx, by, (int)(bw * f), bh,
                 f > 0.35f ? Palette.GridNear : Palette.Warning);
+
+            int charges = Math.Min(mate.ChargesLeft, 10);
+            for (int c = 0; c < charges; c++)
+                Raylib.DrawRectangle(bx + c * 2, by - 3, 1, 2, Palette.BatteryCore);
 
             // And what they are carrying, under the shield bar. This is the whole social point
             // of the fragments: a run's five drops are visible on the people who took them, from
@@ -598,7 +610,11 @@ public sealed class Renderer : IDisposable
     /// side panels rather than centred on the screen — the panels are what the player
     /// is reading, and the craft has to sit beside them, not behind them.
     /// </summary>
-    public void DrawClassSelect(UI.ClassSelectScreen screen, float elapsed)
+    /// <param name="goLabel">What the confirm button reads. The multiplayer pod passes READY,
+    /// because it is this same screen and only the host launches a match.</param>
+    /// <param name="note">A line the caller wants under the briefing, or null.</param>
+    public void DrawClassSelect(UI.ClassSelectScreen screen, float elapsed,
+        string goLabel = "LAUNCH", string? note = null)
     {
         var specimen = Vector2.Zero;
 
@@ -662,7 +678,7 @@ public sealed class Renderer : IDisposable
         _entities.DrawLoadoutShowcase(screen.Loadout, specimen, elapsed * 0.6f, eye, elapsed);
         Raylib.EndMode3D();
 
-        ClassSelectRenderer.Draw(screen, elapsed);
+        ClassSelectRenderer.Draw(screen, elapsed, goLabel, note);
 
         Raylib.EndTextureMode();
     }
@@ -700,6 +716,24 @@ public sealed class Renderer : IDisposable
 
     public void DrawLobbyRoom(World.LobbyRoom room, float elapsed)
     {
+        // Standing in the pod IS the hangar, so it is drawn by the hangar — the same
+        // turntable, the same three panes, the same paint bay a solo player gets. Not a
+        // reimplementation of it in room chrome: the identical call, on the identical screen
+        // object, so the two can never drift into being two different benches.
+        if (room.Where == World.LobbyRoom.Focus.Pod)
+        {
+            // The two things the hangar cannot know for itself: that its confirm button
+            // readies you rather than launching anybody, and who else is still deciding.
+            int waiting = room.Avatars.Values.Count(a => !a.Ready);
+            DrawClassSelect(room.Hangar, elapsed, goLabel: "READY", note: waiting switch
+            {
+                0 => null,
+                1 => "1 PLAYER STILL CHOOSING",
+                _ => $"{waiting} PLAYERS STILL CHOOSING",
+            });
+            return;
+        }
+
         var eye = new Vector3(room.Position.X, World.LobbyRoom.EyeHeight + room.Height, room.Position.Y);
         float cp = MathF.Cos(room.Pitch), sp = MathF.Sin(room.Pitch);
         var dir = new Vector3(MathF.Sin(room.Heading) * cp, sp, MathF.Cos(room.Heading) * cp);
@@ -723,6 +757,7 @@ public sealed class Renderer : IDisposable
 
         Raylib.EndTextureMode();
     }
+
 
     public void DrawTest(UI.TestScreen screen, float elapsed)
     {
@@ -830,6 +865,24 @@ public sealed class Renderer : IDisposable
 
         Raylib.BeginTextureMode(_target);
         MenuRenderer.DrawPause(menu, elapsed, t);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The end of a solo run, over the world it happened in. The world is still drawn and still
+    /// stepping behind the dim — the wreck sits where it fell, the smoke goes on drifting — so
+    /// the panel reads as something laid over the place rather than as a cut away from it.
+    /// Dimmed harder than the pause panel: nobody is coming back to this frame to read it.
+    /// </summary>
+    public void DrawRunOver(World.World world, UI.RunOverScreen screen, float elapsed, float t)
+    {
+        DrawWorld(world, null, instruments: false);
+        DimWorld(t);
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(5, 7, 10, (int)(90 * Math.Clamp(t, 0f, 1f))));
+        MenuRenderer.DrawRunOver(screen, elapsed, t);
         Raylib.EndTextureMode();
     }
 

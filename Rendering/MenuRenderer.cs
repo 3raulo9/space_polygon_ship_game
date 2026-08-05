@@ -199,6 +199,90 @@ internal static class MenuRenderer
         DrawFooterHint("ESC / ENTER RESUME", alpha, null, 10);
     }
 
+    // --- The end of a run ---------------------------------------------------------
+    //
+    // Built out of the pause panel's own parts — the breathing heading, the bracketed rows,
+    // the same dim underneath — because it is the same kind of object: a panel laid over a
+    // world that is still there. A run ending is not the moment to introduce a screen the
+    // player has never seen the grammar of.
+
+    /// <summary>
+    /// The ending panel. <paramref name="t"/> brings the whole thing in from nothing, so the
+    /// loop can hold the frame for a beat after the craft goes and let the death be seen before
+    /// a menu is put over it.
+    /// </summary>
+    public static void DrawRunOver(UI.RunOverScreen screen, float elapsed, float t)
+    {
+        float a = Math.Clamp((t - 0.2f) / 0.6f, 0f, 1f);
+        if (a <= 0f) return;
+        byte alpha = (byte)(a * 255);
+
+        Font font = Raylib.GetFontDefault();
+
+        // The heading takes the outcome's colour: the battery's charged green for a world
+        // cleared, the hunters' own dried red for a craft that is not coming back. Nothing
+        // else on this screen is coloured, so the first thing read is what happened.
+        Color head = screen.Won ? Palette.BatteryCore : Palette.EnemyFill;
+        const int hs = 22;
+        // Clear of the dashboard strip (StripH = 40), which is still drawn under the dim — the
+        // world behind this panel has not gone anywhere. Starting where the pause panel's
+        // heading does put the title straight through the equip row and the shield gauges.
+        const int titleY = 44;
+        Vector2 hm = Raylib.MeasureTextEx(font, screen.Title, hs, Spacing);
+        float breathe = 0.8f + 0.2f * MathF.Abs(MathF.Sin(elapsed * 0.9f));
+        Raylib.DrawTextEx(font, screen.Title, new Vector2((W - hm.X) * 0.5f, titleY), hs, Spacing,
+            Fade(Scale(head, breathe), alpha));
+
+        int ruleW = (int)hm.X;
+        Raylib.DrawRectangle((W - ruleW) / 2, titleY + hs + 5, ruleW, 1,
+            Fade(Scale(Palette.GridFar, 0.6f), alpha));
+
+        PixelFont.DrawCentered(screen.Epitaph, W / 2, titleY + hs + 12, 1,
+            Fade(Scale(Palette.HudChrome, 0.6f), alpha));
+
+        DrawRunLines(screen, alpha);
+
+        int y = RowsTop;
+        foreach (var row in System.Enum.GetValues<UI.RunOverScreen.Row>())
+        {
+            DrawCentredRow(font, screen.LabelOf(row), screen.Selected == row, y, alpha);
+            y += RowStep;
+        }
+
+        // What the focused row actually keeps. The three choices differ by exactly what they
+        // carry over from the run that just ended, and that is not guessable from three
+        // two-word labels.
+        PixelFont.DrawCentered(screen.HintOf(screen.Selected), W / 2, RowsTop + RowStep * 3 + 2, 1,
+            Fade(Scale(Palette.Flag, 0.75f), alpha));
+
+        DrawFooterHint("UP DN CHOOSE - ENTER CONFIRM - ESC MENU", alpha, null, 10);
+    }
+
+    private const int RowsTop = 158;
+    private const int RowStep = 18;
+
+    /// <summary>
+    /// The run's account of itself: a centred column of label/value pairs, labels dim and
+    /// values bright, so the eye runs down the right-hand side reading only the numbers.
+    /// </summary>
+    private static void DrawRunLines(UI.RunOverScreen screen, byte alpha)
+    {
+        const int colW = 186;
+        int left = (W - colW) / 2;
+        // Bottom-anchored against the rows rather than top-anchored under the epitaph: a
+        // sandbox run has four of these lines and a DESCENT with fragments has six, and a
+        // block that grows downward would run into the buttons on the longest one.
+        int y = RowsTop - 8 - screen.Lines.Count * 10;
+
+        foreach (var (label, value) in screen.Lines)
+        {
+            PixelFont.Draw(label, left, y, 1, Fade(Scale(Palette.HudChrome, 0.45f), alpha));
+            PixelFont.Draw(value, left + colW - PixelFont.Measure(value, 1), y, 1,
+                Fade(Palette.HudChrome, alpha));
+            y += 10;
+        }
+    }
+
     // --- Settings: the front page ---
 
     private static void DrawSettingsRoot(SettingsScreen screen, float elapsed, byte alpha)

@@ -66,6 +66,13 @@ public static class Crafting
                 new[] { ItemKind.Lead, ItemKind.Zinc, ItemKind.Lithium },
             },
             ItemKind.Battery, 1),
+
+        // A repair kit: plate to weld over the hole, alloy to back it, and wire to tie it
+        // into whatever it interrupted. No powder and no anode metal, which is what keeps it
+        // clear of the other two — the bench never has to guess which of them you meant.
+        new("REPAIR KIT",
+            new[] { One(ItemKind.ScrapMetal), One(ItemKind.DenseAlloy), One(ItemKind.CopperWire) },
+            ItemKind.RepairKit, 1),
     };
 
     /// <summary>The six orders three corners can be read in. The bench does not care which
@@ -148,6 +155,12 @@ public static class Crafting
         [ItemKind.Bullet] = new Teardown(
             new[] { ItemKind.SpaceGunpowder, ItemKind.DenseAlloy, ItemKind.ScrapMetal },
             Array.Empty<ItemKind>()),
+
+        // A kit: the plate and the alloy back out every time, the wire about half — some of
+        // it went into the hull and is not coming out again.
+        [ItemKind.RepairKit] = new Teardown(
+            new[] { ItemKind.ScrapMetal, ItemKind.DenseAlloy },
+            new[] { ItemKind.CopperWire }),
 
         // And the crafted core comes back apart into the three shards it was pressed from,
         // so a player who built one and then wanted the fragments back is not simply stuck.

@@ -41,6 +41,10 @@ public enum PickupKind
     Lithium,
     /// <summary>Thrown out of a pack: a finished CRAB CORE, lying where it was tossed.</summary>
     CrabCore,
+
+    /// <summary>A repair kit — the only thing on the grid that mends hull. Scarcer than a
+    /// cell, and worth crossing a street for.</summary>
+    RepairKit,
 }
 
 /// <summary>

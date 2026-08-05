@@ -44,8 +44,13 @@ public sealed class Game : IDisposable
     /// A pause counts as being in the world on purpose. The sim is frozen, but the
     /// music is not scoring the sim — it is scoring the session, and killing it the
     /// moment the panel opens makes stepping back from the game feel like quitting it.
-    /// Death and the level-clear screen count for the same reason: both are still the
-    /// match, and both are the last places you would want the sound to fall away.
+    ///
+    /// <para>The end of a run still counts too, but for the opposite reason to the one that
+    /// used to be written here. It is the one moment the sound <em>should</em> fall away — and
+    /// this flag being true is what keeps the stream open and fed so it can be faded rather
+    /// than cut. The fading itself is <see cref="Audio.SetWorldFade"/>, driven from
+    /// <see cref="UpdateRunOver"/>; dropping out of the world here instead would hand the
+    /// music its own separate fade on its own separate clock, and the two would not agree.</para>
     /// </summary>
     private bool InWorld => _state
         is GameState.Playing or GameState.Paused or GameState.Dead
@@ -299,6 +304,17 @@ public sealed class Game : IDisposable
                 continue;
             }
 
+            // The run is over — solo only. Checked before the pause branch so a player cannot
+            // be sitting in the pause panel while their run quietly ends underneath it.
+            if (_state == GameState.Dead)
+            {
+                UpdateRunOver();
+                if (_state != GameState.Dead) continue;   // a choice tore the world down
+                StepSim(readInput: false);                // the wreck goes on smoking behind it
+                DrawRunOver();
+                continue;
+            }
+
             // Paused: the panel is up over the dimmed world.
             //
             // Single player freezes the run behind it. A networked match does not, and must
@@ -395,6 +411,12 @@ public sealed class Game : IDisposable
             }
 
             StepSim(readInput: true);
+
+            // Did that step end the run? Solo only: a match has team-mates to spectate and a
+            // host who decides when it is over, so nobody there gets a panel because one craft
+            // went down. Checked after the step rather than before, so the frame the craft dies
+            // on is drawn as a frame of the game.
+            NoteRunOver();
 
             // The live world, with the crafting panel laid over it when it's open.
             if (_inventoryOpen) DrawInventory();
@@ -525,7 +547,11 @@ public sealed class Game : IDisposable
                 // now a place you walk into: a fresh room in its antechamber, host/join undecided
                 // until the player reaches a pillar.
                 Net.SteamNet.Start();
-                _room = new World.LobbyRoom();
+                // The room's pod is the hangar, and it edits the loop's own long-lived build —
+                // so a player who spent points in single player walks into the lobby still
+                // wearing that craft, and whatever they change at the pod is still theirs when
+                // they next play alone. One bench, one build, both modes.
+                _room = new World.LobbyRoom(_loadout);
                 BeginFade(() => _state = GameState.Lobby);
                 break;
             case Menu.Action.OpenSettings:
@@ -755,6 +781,12 @@ public sealed class Game : IDisposable
             case GameState.Settings: _renderer.DrawSettings(_settingsScreen, _menuTime); break;
             case GameState.Test: _renderer.DrawTest(_testScreen, _menuTime); break;
             case GameState.StarMap: _renderer.DrawStarMap(_soloChart, _soloMode, _menuTime); break;
+            // The ending panel dissolves out still up. Falling through to the default branch
+            // drew the bare world instead, so choosing a row made the panel vanish a frame
+            // before the fade it was supposed to be leaving on.
+            case GameState.Dead when _world != null:
+                _renderer.DrawRunOver(_world, _runOver, _menuTime, 1f);
+                break;
             case GameState.Lobby:
                 if (_room != null) _renderer.DrawLobbyRoom(_room, _menuTime);
                 else _renderer.DrawMenu(_menu, _menuTime);
@@ -886,10 +918,12 @@ public sealed class Game : IDisposable
             // else, but a client never overwrites its own seat from a snapshot — so without
             // this the player would drive the placeholder TANK they were seated as, not the
             // chassis they picked.
-            if (_room?.MyChassis is { } chosen)
+            if (_room is { MyChassis: not null } picked)
             {
-                _loadout.Class = chosen;
-                jw.ReplacePlayer(joined.LocalSeat, _loadout);
+                // The whole bench, not just the chassis: this player spent points and chose
+                // colours at the pod like everybody else, and dropping in is not the moment to
+                // forget them.
+                jw.ReplacePlayer(joined.LocalSeat, picked.MyBuild);
             }
             // Carry the room's roster of names into the match so team-mates wear a tag. Only
             // where the host has not already named the seat: its SeatName packets are the
@@ -991,8 +1025,106 @@ public sealed class Game : IDisposable
         if (Raylib.IsKeyPressed(KeyboardKey.Escape)) BeginFade(() => _state = GameState.ClassSelect);
     }
 
+    // --- The end of a solo run -------------------------------------------------------
+    //
+    // Both endings used to go nowhere. A dead player sat inside their own wreck for ever with
+    // no team-mate to spectate and no prompt of any kind, and a player who cleared all five
+    // waves of a DESCENT got two words in the top strip and then sat there too — GameState.Dead
+    // was declared at the top of this file and nothing in the game had ever entered it.
+
+    private readonly UI.RunOverScreen _runOver = new();
+
+    /// <summary>How long the world is left alone after the run ends before the panel starts to
+    /// come in. A craft coming apart has an explosion, a concussion and a shower of debris
+    /// attached to it, and putting a menu over that half a frame later throws away the only
+    /// moment the game has to let a death land.</summary>
+    private const float RunOverHold = 2.2f;
+    private float _runOverAge;
+
+    /// <summary>
+    /// Notices that a solo run has finished — the craft is spent, or a DESCENT reached its own
+    /// end either way — and opens the ending screen on whatever the world looked like at that
+    /// moment.
+    /// </summary>
+    private void NoteRunOver()
+    {
+        if (_world is null) return;
+        if (!UI.RunOverScreen.ShouldOpen(_world, networked: _session != null)) return;
+
+        _runOver.Open(_world);
+        _runOverAge = 0f;
+        _inventoryOpen = false;
+        _state = GameState.Dead;
+    }
+
+    private void UpdateRunOver()
+    {
+        _menuTime += Raylib.GetFrameTime();
+        _runOverAge += Raylib.GetFrameTime();
+
+        // The world goes quiet on the way to the panel, reaching silence as the panel finishes
+        // resolving. Not a cut: the hum, the wind, the fire still in the air and the soundtrack
+        // all lose their level together over the whole approach, so the last thing that happens
+        // is the place itself receding rather than the audio device being switched off. Menu
+        // sound is exempt (see Audio.SetWorldFade), so the rows still answer the keys.
+        Audio.SetWorldFade(1f - SmoothStep(RunOverFadeIn(_runOverAge)));
+
+        // Nothing is listening until the panel is actually up. A player still holding fire as
+        // their craft came apart must not confirm a row they have not been shown yet.
+        if (_runOverAge < RunOverHold) return;
+
+        switch (_runOver.Update())
+        {
+            case UI.RunOverScreen.Action.Retry:
+                // The same world and the same craft, from the top. Deliberately a fresh World
+                // rather than anything reset in place: a run is a world, and half-clearing one
+                // is how a "new" run ends up carrying the last one's rubble.
+                BeginFade(EnterSinglePlayer);
+                break;
+            case UI.RunOverScreen.Action.Hangar:
+                BeginFade(() =>
+                {
+                    Audio.ResumeWorldSound();
+                    _world = null;
+                    _state = GameState.ClassSelect;
+                });
+                break;
+            case UI.RunOverScreen.Action.Menu:
+                BeginFade(ReturnToMenu);
+                break;
+        }
+    }
+
+    private void DrawRunOver()
+    {
+        // The panel fades in over the held frame rather than appearing on it.
+        float t = Math.Clamp((_runOverAge - RunOverHold) / PanelFadeDur, 0f, 1f);
+        _renderer.DrawRunOver(_world!, _runOver, _menuTime, t);
+        _renderer.Present();
+    }
+
+    private const float PanelFadeDur = 0.7f;
+
+    /// <summary>
+    /// 0..1 across the whole approach to the ending panel — the held beat plus the panel's own
+    /// dissolve. The sound is walked down this rather than down the panel's <c>t</c> alone, so
+    /// the fade starts the instant the craft goes rather than sitting at full volume for two
+    /// seconds and then dropping away in a rush at the end.
+    /// </summary>
+    private static float RunOverFadeIn(float age)
+        => Math.Clamp(age / (RunOverHold + PanelFadeDur), 0f, 1f);
+
+    /// <summary>Eases a 0..1 ramp in and out of its ends. A linear fade of a level reads as a
+    /// sound being dragged down by hand; this one lets go of the world gently and settles into
+    /// the silence instead of arriving at it.</summary>
+    private static float SmoothStep(float t) => t * t * (3f - 2f * t);
+
     private void EnterSinglePlayer()
     {
+        // A new run always opens at full voice. This is the path TRY AGAIN comes back through,
+        // and the fade that took the last run's world away is still wound all the way down.
+        Audio.ResumeWorldSound();
+
         // Explicitly the solo match: one seat, sealed, nobody can be dropped into it — now
         // with the mode chosen at the title and the world chosen at the chart.
         MatchSettings solo = MatchSettings.SinglePlayer;
@@ -1032,13 +1164,17 @@ public sealed class Game : IDisposable
         _accumulator = 0;
         _pauseBlur = 0f;
         _resuming = false;
-        _room = new World.LobbyRoom();
+        _room = new World.LobbyRoom(_loadout);
         _room.Fail(why);
         _state = GameState.Lobby;
     }
 
     private void ReturnToMenu()
     {
+        // Whatever took the world's sound away, the title screen is not part of that world and
+        // must not inherit its silence. Cheap and unconditional: this is the one door every
+        // way out of a run goes through.
+        Audio.ResumeWorldSound();
         TearDownMatch();
         _world = null;
         _state = GameState.Menu;
@@ -1101,6 +1237,30 @@ public sealed class Game : IDisposable
             return true;
         }
 
+        // The end of a run. UNRENDERED_CAPTURE_RUNOVER=lost spends the craft where it stands;
+        // =won puts a DESCENT into its cleared phase. Both need a real world underneath, which
+        // is why this cannot live with the worldless menu grabs above.
+        if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_RUNOVER") is { } ending)
+        {
+            if (ending == "won") _world!.Run?.SkipTo(DescentPhase.Cleared, Descent.WaveCount, _world);
+            else
+            {
+                _world!.Player.Shield = 0f;
+                _world.Player.Health = 0f;
+                _world.Player.Lives = 0;
+                _world.Run?.SkipTo(DescentPhase.Lost, 3, _world);
+            }
+            _runOver.Open(_world!);
+            _menuTime += (float)Config.FixedDt;
+            for (int i = 0; i < 2; i++)
+            {
+                _renderer.DrawRunOver(_world!, _runOver, _menuTime, 1f);
+                _renderer.Present();
+            }
+            Raylib.TakeScreenshot(_capturePath!);
+            return true;
+        }
+
         // Inventory variant: seed a representative pack (a bit of every item, a recipe loaded
         // into the assembly triangle so its preview shows, a cell sitting on the take-apart
         // bench so its arrows are out, one weapon equipped) and grab the panel — lets both
@@ -1121,11 +1281,20 @@ public sealed class Game : IDisposable
             inv.Add(ItemKind.Lead, 2);
             inv.Add(ItemKind.Zinc, 1);
             inv.Add(ItemKind.Lithium, 1);
+            inv.Add(ItemKind.RepairKit, 2);
             if (invShot == "rounds")
             {
                 inv.Craft[0] = new ItemStack(ItemKind.SpaceGunpowder, 1);
                 inv.Craft[1] = new ItemStack(ItemKind.DenseAlloy, 1);
                 inv.Craft[2] = new ItemStack(ItemKind.ScrapMetal, 1);
+            }
+            // UNRENDERED_CAPTURE_INV=kit loads the repair-kit recipe, so the new assembly can
+            // be photographed with its preview lit like the other two.
+            else if (invShot == "kit")
+            {
+                inv.Craft[0] = new ItemStack(ItemKind.ScrapMetal, 1);
+                inv.Craft[1] = new ItemStack(ItemKind.DenseAlloy, 1);
+                inv.Craft[2] = new ItemStack(ItemKind.CopperWire, 1);
             }
             else
             {
@@ -1533,11 +1702,12 @@ public sealed class Game : IDisposable
     /// <summary>Capture-only: builds a representative lobby room so the dome, the planet, the
     /// stations and a few avatars can be photographed headlessly. UNRENDERED_ROOM=antechamber
     /// grabs the entry face; UNRENDERED_ROOM=vote opens a destination vote with ballots already
-    /// cast, so the holo chart and its pips can be seen doing something.</summary>
+    /// cast, so the holo chart and its pips can be seen doing something; UNRENDERED_ROOM=pod
+    /// stands the player in the pod, which is the hangar, with somebody still deciding.</summary>
     private World.LobbyRoom CaptureRoom()
     {
         if (_room != null) return _room;
-        var room = new World.LobbyRoom { IsHost = true };
+        var room = new World.LobbyRoom(_loadout) { IsHost = true };
         if (Environment.GetEnvironmentVariable("UNRENDERED_ROOM") == "antechamber")
             return _room = room;
 
@@ -1551,6 +1721,14 @@ public sealed class Game : IDisposable
         // avatars and the planet glowing up through the glass at once.
         room.Position = new System.Numerics.Vector2(0f, -14f);
         room.Pitch = -0.22f;
+
+        // Standing in the pod: the hangar, opened where the player is, with one avatar left
+        // un-ready so the "still choosing" line has something to say.
+        if (Environment.GetEnvironmentVariable("UNRENDERED_ROOM") == "pod")
+        {
+            room.Position = World.LobbyRoom.Pod;
+            room.EnterPodForTest();
+        }
 
         if (Environment.GetEnvironmentVariable("UNRENDERED_ROOM") == "vote")
         {

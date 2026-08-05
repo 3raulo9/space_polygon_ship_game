@@ -38,6 +38,7 @@ public sealed class EntityRenderer
     private readonly PolyMesh _zinc = Meshes.Crystal(Palette.ZincPale);
     private readonly PolyMesh _lithium = Meshes.Rod(Palette.HudChrome, Palette.LithiumRose);
     private readonly PolyMesh _core = Meshes.CrabCoreGem(Palette.NeonMagenta);
+    private readonly PolyMesh _kit = Meshes.RepairKit(Palette.RepairShell, Palette.RepairMark);
 
     // The DESCENT bosses. One renderer for all five lineages and every roll: unlike the crab
     // and the mouth, whose bodies are typed out, these are built from a genome at the moment
@@ -274,6 +275,13 @@ public sealed class EntityRenderer
                 // the street.
                 case PickupKind.CrabCore:
                     _core.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 0.9f);
+                    break;
+
+                // A kit floats at cell height rather than lying with the scrap: it is one of
+                // the two things worth driving across a field for, and it should be visible
+                // from the same distance the cell it does not replace is.
+                case PickupKind.RepairKit:
+                    _kit.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 1.1f);
                     break;
 
                 default: _bullet.Draw(at, pk.Spin, pk.BobHeight, cameraPos); break;

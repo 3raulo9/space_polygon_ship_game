@@ -465,6 +465,18 @@ public sealed class Descent
                 OpenBoss(field, colossus: phase == DescentPhase.Colossus);
                 break;
 
+            case DescentPhase.Cleared:
+                // The one phase that cannot be "opened" — it is what is left when the Colossus
+                // falls. Set outright so the ending screen's winning face can be photographed
+                // and tested without killing five bosses first.
+                Phase = DescentPhase.Cleared;
+                Wave = WaveCount;
+                break;
+
+            case DescentPhase.Lost:
+                Phase = DescentPhase.Lost;
+                break;
+
             default:
                 OpenWave(field);
                 break;

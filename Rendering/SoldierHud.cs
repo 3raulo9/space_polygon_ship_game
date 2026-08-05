@@ -223,9 +223,13 @@ internal static class SoldierHud
     // --- Damage ----------------------------------------------------------------
 
     /// <summary>
-    /// The shield bar in the strip says what the numbers are. This says what it feels
-    /// like: blood on the inside of the lens, thickening as the shield goes, and — under
-    /// about a third — a heartbeat thumping a red wash in and out at the edges.
+    /// The gauges in the strip say what the numbers are. This says what it feels like:
+    /// blood on the inside of the lens, thickening as the body does, and — under about a
+    /// third — a heartbeat thumping a red wash in and out at the edges.
+    ///
+    /// It reads the HULL, not the shields. A person with their shields down and no holes in
+    /// them is not bleeding, and a soldier whose lens went red the moment a charge popped
+    /// was the loudest lie on the screen.
     ///
     /// The spatter pattern comes from a fixed hash rather than being rolled, so it holds
     /// still on the glass instead of crawling: blood that reshuffles every frame reads
@@ -233,7 +237,7 @@ internal static class SoldierHud
     /// </summary>
     private static void DrawDamage(PlayerTank p, float elapsed)
     {
-        float hurt = 1f - p.ShieldFraction;
+        float hurt = 1f - p.HealthFraction;
         if (hurt <= 0.02f) return;
 
         int blobs = (int)(hurt * 26);
