@@ -368,6 +368,7 @@ public static partial class SelfTest
 
         // Spend our lives. The spectator picker should hand us the survivor.
         world.Player.Shield = 0f;
+        world.Player.Health = 0f;
         world.Player.Lives = 0;
         world.StepForTest(1f / 60f);
 
@@ -387,6 +388,63 @@ public static partial class SelfTest
     /// <summary>The world wraps, so a sound just over the seam is beside you rather than
     /// four hundred units away. Everything else in the sim measures the short way round;
     /// the ears have to as well.</summary>
+    /// <summary>
+    /// The hand that takes the world away at the end of a run. Two claims, and the second is
+    /// the one worth the test: wound to zero it silences everything the world makes, and it
+    /// leaves the UI bus alone, so the ending screen the player is being handed still answers
+    /// their keys. Fading the menu out with the world would leave them pressing buttons at a
+    /// screen that made no sound, which reads as a hung game rather than as a quiet one.
+    /// </summary>
+    private static string? WorldFadeSilencesTheWorldNotTheUi()
+    {
+        const float Dt = 1f / 60f;
+        var block = new float[AudioEngine.BufferFrames * 2];
+
+        // How loud a thing is over a second of rendering, with the fade at a given level.
+        float Peak(Cue cue, float fade, bool spatial)
+        {
+            var (engine, clip) = Bench();
+            engine.Mix.WorldFade = fade;          // no ease: this is the level under test
+            engine.Mix.WorldFadeTarget = fade;
+            var ear = EarAt(Vector2.Zero);
+            engine.Update(ear, Dt);
+
+            float peak = 0f;
+            for (int frame = 0; frame < 60; frame++)
+            {
+                if (frame % 12 == 0)
+                {
+                    if (spatial) engine.Play((int)cue, clip, new Vector2(0f, 6f));
+                    else engine.PlayFlat((int)cue, clip);
+                }
+                engine.Update(ear, Dt);
+                engine.RenderOffline(block, AudioEngine.BufferFrames);
+                foreach (float f in block) { float a = MathF.Abs(f); if (a > peak) peak = a; }
+            }
+            return peak;
+        }
+
+        // A gun going off out in the world.
+        float worldOpen = Peak(Cue.Detonation, 1f, spatial: true);
+        if (worldOpen <= 0.01f) return "the test failed to make any world noise at all";
+        float worldFaded = Peak(Cue.Detonation, 0f, spatial: true);
+        if (worldFaded > 0.001f)
+            return $"the world was still audible with the fade shut ({worldFaded:0.0000})";
+
+        // Half way down is half way down, not a switch.
+        float worldHalf = Peak(Cue.Detonation, 0.5f, spatial: true);
+        if (!(worldHalf < worldOpen * 0.85f && worldHalf > worldOpen * 0.2f))
+            return $"a half fade did not read as half a world ({worldHalf:0.000} of {worldOpen:0.000})";
+
+        // ...and the panel keeps its voice through all of it.
+        float uiOpen = Peak(Cue.Pickup, 1f, spatial: false);
+        if (uiOpen <= 0.01f) return "the test failed to make any menu noise at all";
+        float uiFaded = Peak(Cue.Pickup, 0f, spatial: false);
+        if (uiFaded < uiOpen * 0.95f)
+            return $"the fade took the menu's voice with the world's ({uiFaded:0.000} of {uiOpen:0.000})";
+        return null;
+    }
+
     private static string? TheTorusDoesNotBreakTheEars()
     {
         var spec = CueBank.BuildTable()[(int)Cue.Detonation];

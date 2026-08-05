@@ -13,7 +13,7 @@ namespace Unrendered.World;
 /// render/loop plumbing so the rules read in one place. Milestone 2 seeds a
 /// single enemy at range so it materializes out of the fog and hunts.
 /// </summary>
-public sealed class World : IAnchorField
+public sealed partial class World : IAnchorField
 {
     /// <summary>
     /// Everyone in the seat, host first. In a solo run this is one craft and every read of
@@ -203,6 +203,9 @@ public sealed class World : IAnchorField
                 // cell — the echo of this pack is what the player actually ends up with.
                 inv.BreakOne();
                 break;
+            case InvOp.Throw:
+                ThrowOne(seat, it.From, it.FromIndex);
+                break;
         }
     }
 
@@ -283,8 +286,13 @@ public sealed class World : IAnchorField
     /// climbing or dropping a couple of metres through the shot's flight slips it.</summary>
     private const float EnemyHitVertical = 1.6f;
 
-    // Shield fraction at which the low-health alarm sounds. Crossing *down*
-    // through this line fires warning.wav once — not once per frame below it.
+    // Hull fraction at which the low-health alarm sounds. Crossing *down* through this
+    // line fires warning.wav once — not once per frame below it.
+    //
+    // It watches the HULL, not the shields. Shields are meant to be spent: a craft standing
+    // at 1/5 with a full hull is a player who is doing fine and knows it, and an alarm there
+    // is the alarm nobody listens to. It goes off when the layer that cannot be bought back
+    // starts going.
     private const float LowShieldWarning = 0.45f;
 
     // --- The TANK's siege kit (world side) --------------------------------------
@@ -321,10 +329,15 @@ public sealed class World : IAnchorField
     private const float SmokeLife = 6f;
     private const float SmokeRadius = 7.5f;
 
-    // What one battery is worth when spent from the pack: 30% of the shield *and* 30%
-    // of the Hyper reserve. Public so the inventory panel's right-click charge reads
-    // the same figure the salvage used to apply on contact.
+    // What one battery is worth when spent from the pack: one whole shield charge (see
+    // PlayerTank.ChargeShield) and 30% of the Hyper reserve. Public so the inventory
+    // panel's right-click charge reads the same figure the salvage used to apply on contact.
     public const float BatteryChargeFraction = 0.30f;
+
+    /// <summary>What one repair kit mends: a third of the hull, whatever the build. Hull is
+    /// the layer no battery reaches and nothing regrows, so a kit is deliberately worth more
+    /// than a cell and deliberately rarer.</summary>
+    public const float RepairKitFraction = 0.34f;
 
     // --- Dynamic horizon spawning -------------------------------------------------
     // Nothing is pinned to a fixed spot. Hunters, salvage and the rare Crab-Core all
@@ -841,6 +854,7 @@ public sealed class World : IAnchorField
     private const float PickupSpawnInterval = 7f;
     private const float PickupSpawnChance = 0.6f;
     private const float BatteryShare = 0.6f;   // this fraction of new salvage is batteries
+    private const float AmbientKitShare = 0.10f; // and this fraction is repair kits
     private float _pickupTimer;
 
     // The Crab-Core is no longer a rare boss — it is a regular inhabitant of the field:
@@ -931,6 +945,25 @@ public sealed class World : IAnchorField
         // it opens, not just this one — see OpenSeat.
         Player.GravityScale = Ground.Gravity;
 
+        // DESCENT stands its run up here, before a single hostile is seeded. It turns the
+        // sandbox's director off outright (see OpenDescent): a descent hands out an exact
+        // roster and counts it down, and anything wandering in off the horizon would leave the
+        // wave bar permanently disagreeing with the field. A capture override still wins, so
+        // the screenshot harness can pose a scene on a DESCENT world.
+        if (Match.Mode == GameMode.Descent && !capture)
+        {
+            // UNRENDERED_DESCENT_SEED pins the whole session — the five lineages, their
+            // bodies, their moves, their names — so a rolled monster can actually be
+            // photographed and regression-tested. Without it a run is a fresh roll.
+            int? seed = int.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_DESCENT_SEED"),
+                out int s) ? s : null;
+            OpenDescent(seed);
+        }
+
+        // And the hatch that stands one rolled boss in front of the lens, on any world and in
+        // either mode, so a procedurally-built body can be looked at rather than taken on trust.
+        StageRolledBossForCapture();
+
         // Salvage. Capture seeds one battery and one round dead ahead; play seeds a
         // small starter field at random fog bearings — no fixed spots — so there's
         // salvage on the horizon from the first frame, then the director tops it up.
@@ -956,7 +989,11 @@ public sealed class World : IAnchorField
             Enemies.Add(new EnemyTank(new Vector2(4f, 16f), elite: false));
         else if (nearEnemy == "elite")
             Enemies.Add(new EnemyTank(new Vector2(4f, 16f), elite: true));
-        else if (Match.SpawnEnemies)
+        // ...and never in DESCENT, where the first thing you meet is wave one and it arrives
+        // when the landing is over, not before it — nor when the capture hatch has staged a
+        // rolled boss, since a hunter parked in front of the lens is the thing the picture ends
+        // up being about.
+        else if (Match.SpawnEnemies && !IsDescent && Bosses.Count == 0)
             Enemies.Add(new EnemyTank(RandomPointAroundPlayer(60f, 80f), elite: false));
 
         // The Crab-Core is no longer pre-placed on the field. A capture override drops
@@ -1045,6 +1082,22 @@ public sealed class World : IAnchorField
 
     /// <summary>The name over a seat's craft, or an empty string if none is known.</summary>
     public string NameOf(int seat) => SeatNames.TryGetValue(seat, out var n) ? n : "";
+
+    /// <summary>
+    /// Each seat's hangar build, as the session was told it. The snapshot names only a
+    /// <em>chassis</em> for a seat — one byte, twenty times a second — so when a client has to
+    /// rebuild a craft it looks the full build up here rather than making a default one, and
+    /// the points and paint that arrived on the reliable channel survive the rebuild.
+    /// </summary>
+    public readonly Dictionary<int, Loadout> SeatBuilds = new();
+
+    /// <summary>The build to make a seat's craft from when the snapshot says it is flying
+    /// <paramref name="chassis"/>: the one the session was told, if that is the same craft, and
+    /// otherwise a plain one — a build we were told about a different chassis says nothing
+    /// about this one.</summary>
+    public Loadout BuildFor(int seat, PlayerClass chassis)
+        => SeatBuilds.TryGetValue(seat, out var b) && b.Class == chassis
+            ? b : new Loadout { Class = chassis };
 
     /// <summary>A name for the feed and the scoreboard, falling back to the seat number so a
     /// line is never about nobody. Solo has no roster at all and reads as PILOT.</summary>
@@ -1495,6 +1548,18 @@ public sealed class World : IAnchorField
         // did without either of them knowing seats exist.
         _inputs[LocalIndex] = input;
 
+        // Whether anybody at all is holding READY this tick. Polled across every seat rather
+        // than just this machine's, because in a room the break ends when *somebody* is done
+        // with it — see FileReady. Read before anything else so the director sees this frame's
+        // hold rather than last frame's.
+        if (IsDescent)
+        {
+            bool held = false;
+            for (int i = 0; i < Players.Count && i < _inputs.Length; i++)
+                if (!Players[i].Away && _inputs[i].ReadyDown) { held = true; break; }
+            FileReady(held);
+        }
+
         // The hour, before anything reads it. Turned on every machine — a client that only
         // moved its sun when a packet arrived would strobe — and reconciled toward the host's
         // account in NetSetDayPhase.
@@ -1699,7 +1764,17 @@ public sealed class World : IAnchorField
         ApplyNightNerve();
         // The director tops up hunters, bosses, maws and squads — everything hostile. A host
         // who turned enemies off in the lobby keeps the city and the salvage but never the fight.
+        //
+        // DESCENT never reaches it: OpenDescent clears DynamicSpawning at the drop, and the run
+        // director below hands out its exact roster instead. The two must never both be running
+        // — a wave bar counting down while the sandbox quietly tops the field back up is the one
+        // failure mode of this whole mode.
         if (DynamicSpawning && Match.SpawnEnemies) UpdateSpawning(dt);
+        if (IsDescent && Match.SpawnEnemies) StepDescent(dt);
+        // The rolled bosses step whether or not a run put them there — the capture harness can
+        // stand one on a SANDBOX world, and an entity that is never stepped is one frozen
+        // mid-arrival, half sunk into the grid.
+        StepRolledBosses(dt);
         AgeMarkers(dt);
         Debris.Update(dt);
         // After the debris has moved this tick, bill any falling structural chunk that came
@@ -2858,10 +2933,18 @@ public sealed class World : IAnchorField
     /// </summary>
     private void AdvanceDay(float dt)
     {
+        RunTime += dt;
         if (!Ground.HasCycle) return;
         DayPhase += dt / Planet.DayLength;
         if (DayPhase >= 1f) DayPhase -= MathF.Floor(DayPhase);
     }
+
+    /// <summary>
+    /// Seconds this world has been stepped for. Kept beside the day clock because it is turned
+    /// by the same tick, but it deliberately does <em>not</em> wrap: it is how long the run
+    /// lasted, which is the only number a sandbox has to show for itself when it ends.
+    /// </summary>
+    public float RunTime { get; private set; }
 
     /// <summary>
     /// The host's account of the hour, off the field packet. Eased rather than snapped: the
@@ -2956,7 +3039,7 @@ public sealed class World : IAnchorField
                 // quietly disappearing out from under the player who earned it.
                 if (AmbientSalvage() >= MaxPickups)
                     RemoveFarthest(Pickups, pk => pk.Position, IsAmbient);
-                var kind = Random.Shared.NextSingle() < BatteryShare ? PickupKind.Battery : PickupKind.Ammo;
+                var kind = RollSalvage(BatteryShare, AmbientKitShare);
                 DropSalvage(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), kind);
             }
         }
@@ -3051,20 +3134,14 @@ public sealed class World : IAnchorField
 
         // A small sparkle in the pickup's colour marks the grab, reusing the debris
         // system (cosmetic only — it never touches damage or collision).
-        Color spark = pk.Kind switch
-        {
-            PickupKind.Battery        => Palette.BatteryCore,
-            PickupKind.CrabFragment   => Palette.NeonRed,
-            PickupKind.ScrapMetal     => Palette.ScrapSteel,
-            PickupKind.CopperWire     => Palette.CopperWire,
-            PickupKind.SpaceGunpowder => Palette.PowderGrain,
-            _                         => Palette.Flag,
-        };
-        Debris.Burst(new Vector3(pk.Position.X, pk.BobHeight, pk.Position.Y), spark, elite: false);
+        Debris.Burst(new Vector3(pk.Position.X, pk.BobHeight, pk.Position.Y),
+                     SalvageColour(pk.Kind), elite: false);
 
         // Only the ambient drift is endless. A fragment or a part off a body is spent when
         // it is taken — it came from something that died, and there is no honest way for it
-        // to reappear out in the fog a minute later.
+        // to reappear out in the fog a minute later. Nor is anything somebody threw away: a
+        // cell that respawned out in the fog every time it was thrown and re-scooped would be
+        // a printing press for batteries.
         if (!IsAmbient(pk))
         {
             pk.Consumed = true;
@@ -3077,9 +3154,10 @@ public sealed class World : IAnchorField
         pk.Age = 0f;
     }
 
-    /// <summary>What one piece of salvage becomes in a pack. The one place the two
-    /// enumerations are tied together — the field's kinds and the pack's kinds are separate
-    /// on purpose, because most of what a pack can hold never lies on the grid.</summary>
+    /// <summary>What one piece of salvage becomes in a pack. One of the two places the
+    /// enumerations are tied together — they stay separate types because they answer different
+    /// questions: <see cref="PickupKind"/> is what is lying on the grid and how it is drawn,
+    /// <see cref="ItemKind"/> is what a slot holds and how it stacks.</summary>
     public static ItemKind ItemOf(PickupKind kind) => kind switch
     {
         PickupKind.Battery        => ItemKind.Battery,
@@ -3087,8 +3165,93 @@ public sealed class World : IAnchorField
         PickupKind.ScrapMetal     => ItemKind.ScrapMetal,
         PickupKind.CopperWire     => ItemKind.CopperWire,
         PickupKind.SpaceGunpowder => ItemKind.SpaceGunpowder,
+        PickupKind.DenseAlloy     => ItemKind.DenseAlloy,
+        PickupKind.Lead           => ItemKind.Lead,
+        PickupKind.Zinc           => ItemKind.Zinc,
+        PickupKind.Lithium        => ItemKind.Lithium,
+        PickupKind.CrabCore       => ItemKind.CrabCore,
+        PickupKind.RepairKit      => ItemKind.RepairKit,
         _                         => ItemKind.Bullet,
     };
+
+    /// <summary>The way back: what a thrown item looks like lying on the grid. Total, because
+    /// anything a pack can hold can be thrown out of it — and it round-trips, so an item
+    /// thrown away and picked back up is the same item.</summary>
+    public static PickupKind SalvageOf(ItemKind kind) => kind switch
+    {
+        ItemKind.Battery        => PickupKind.Battery,
+        ItemKind.RepairKit      => PickupKind.RepairKit,
+        ItemKind.CrabFragment   => PickupKind.CrabFragment,
+        ItemKind.CrabCore       => PickupKind.CrabCore,
+        ItemKind.ScrapMetal     => PickupKind.ScrapMetal,
+        ItemKind.CopperWire     => PickupKind.CopperWire,
+        ItemKind.SpaceGunpowder => PickupKind.SpaceGunpowder,
+        ItemKind.DenseAlloy     => PickupKind.DenseAlloy,
+        ItemKind.Lead           => PickupKind.Lead,
+        ItemKind.Zinc           => PickupKind.Zinc,
+        ItemKind.Lithium        => PickupKind.Lithium,
+        _                       => PickupKind.Ammo,
+    };
+
+    /// <summary>The colour a piece of salvage reads as — the sparkle when it is taken, and its
+    /// blip on the radar. One table, because a shard that flashes red when scooped and shows
+    /// yellow on the radar is two different pieces of salvage as far as the player is
+    /// concerned.</summary>
+    public static Color SalvageColour(PickupKind kind) => kind switch
+    {
+        PickupKind.Battery        => Palette.BatteryCore,
+        PickupKind.CrabFragment   => Palette.NeonRed,
+        PickupKind.CrabCore       => Palette.NeonMagenta,
+        PickupKind.ScrapMetal     => Palette.ScrapSteel,
+        PickupKind.CopperWire     => Palette.CopperWire,
+        PickupKind.SpaceGunpowder => Palette.PowderGrain,
+        PickupKind.DenseAlloy     => Palette.AlloyIngot,
+        PickupKind.Lead           => Palette.LeadGrey,
+        PickupKind.Zinc           => Palette.ZincPale,
+        PickupKind.Lithium        => Palette.LithiumRose,
+        _                         => Palette.Flag,
+    };
+
+    /// <summary>
+    /// How far in front of the craft a thrown item lands. Past the collect reach
+    /// (<see cref="PlayerTank.Radius"/> + <see cref="Pickup.Radius"/> = 2.5) by a clear margin,
+    /// because a throw that lands inside your own pickup radius is one the next tick hands
+    /// straight back — the item would blink out of the pack and reappear in it, and the panel
+    /// would look broken.
+    /// </summary>
+    private const float ThrowReach = 3.6f;
+
+    /// <summary>
+    /// Throws one unit off a seat's slot out onto the grid: it leaves the pack and becomes a
+    /// piece of salvage lying just in front of that craft, which anybody — including the person
+    /// who threw it — can drive over and pick back up.
+    ///
+    /// <para>Both ends of the wire run this. The half that empties the slot runs everywhere, so
+    /// a client's mirror answers the click at once; the half that puts something on the field
+    /// runs only where the field is real, because salvage is the host's to place and a client
+    /// inventing a piece of it would watch it vanish on the next snapshot. Same shape as every
+    /// other inventory action here — see <see cref="ApplyInvIntent"/>.</para>
+    /// </summary>
+    public bool ThrowOne(int seat, InvRegion region, int index)
+    {
+        if ((uint)seat >= (uint)Players.Count) return false;
+        if (!InventoryOf(seat).TakeOne(region, index, out ItemKind kind)) return false;
+        if (!Authoritative) return true;   // the mirror's slot is emptied; the host places it
+
+        PlayerTank who = Players[seat];
+        Vector2 at = Torus.Wrap(who.Position + who.Forward * ThrowReach);
+        TossSalvage(at, SalvageOf(kind));
+        return true;
+    }
+
+    /// <summary>One thrown item onto the field, under the same ceiling everything else obeys.
+    /// Worth exactly one — a round thrown away is one round back, not the handful a stray
+    /// pickup off the field carries.</summary>
+    private void TossSalvage(Vector2 at, PickupKind kind)
+    {
+        while (Pickups.Count >= MaxFieldSalvage) RemoveFarthest(Pickups, pk => pk.Position);
+        Pickups.Add(new Pickup(ReachablePoint(at), kind, amount: 1, thrown: true));
+    }
 
     /// <summary>What a rocket costs in bullet salvage. Dear enough that a soldier is choosing
     /// between a full magazine and something that can take a building down.</summary>
@@ -3100,11 +3263,14 @@ public sealed class World : IAnchorField
     /// asked for it (see <see cref="ApplyInvIntent"/>), and both ends must spend exactly the
     /// same thing.
     ///
-    /// A battery is worth the same shield <em>and</em> hyper the salvage used to give, the
-    /// whole stack at once. A stack of rounds loads only what the magazine has room for, so
-    /// right-clicking 12 into a 40/50 magazine loads 10 and leaves 2 behind — and on a soldier
-    /// every ten rounds also seats a rocket, because they have to come from somewhere and the
-    /// alternative is a second kind of pickup for one chassis.
+    /// One battery cell is worth exactly one shield charge — spend two at 1/5 and stand at
+    /// 3/5 — plus its old share of the hyper reserve, the whole stack at once. A repair kit
+    /// is the only thing that touches the hull, and it never touches the shields: the two
+    /// items mend the two layers and neither substitutes for the other. A stack of rounds
+    /// loads only what the magazine has room for, so right-clicking 12 into a 40/50 magazine
+    /// loads 10 and leaves 2 behind — and on a soldier every ten rounds also seats a rocket,
+    /// because they have to come from somewhere and the alternative is a second kind of
+    /// pickup for one chassis.
     /// </summary>
     public bool ChargeFromSlot(PlayerTank player, Inventory inv, int index)
     {
@@ -3117,11 +3283,34 @@ public sealed class World : IAnchorField
         switch (slot.Kind)
         {
             case ItemKind.Battery:
-                player.RefillShield(BatteryChargeFraction * slot.Count);
+            {
+                // Refused outright when there is nothing to put back, rather than quietly
+                // eating the stack: a full shield is exactly the case where the player wants
+                // to keep the cells for later.
+                if (player.Shield >= player.MaxShield && player.Hyper >= player.MaxHyper)
+                {
+                    if (local) Audio.PlayFull();
+                    return false;
+                }
+                player.ChargeShield(slot.Count);
                 player.RefillHyper(BatteryChargeFraction * slot.Count);
                 slot = ItemStack.Empty;
                 if (local) Audio.PlayPickup(player.Position);
                 return true;
+            }
+
+            case ItemKind.RepairKit:
+            {
+                if (player.Health >= player.MaxHealth)
+                {
+                    if (local) Audio.PlayFull();
+                    return false;
+                }
+                player.RepairHull(RepairKitFraction * slot.Count);
+                slot = ItemStack.Empty;
+                if (local) Audio.PlayPickup(player.Position);
+                return true;
+            }
 
             case ItemKind.Bullet:
             {
@@ -4159,6 +4348,35 @@ public sealed class World : IAnchorField
                 else Emit(Cue.MawHurt, maw.Position, 1f - maw.CrystalFraction);
             }
         }
+
+        // And the rolled bosses, on the same stride. Walked separately from the two crystals
+        // above because a lance rakes a boss's whole body rather than threading one weak point
+        // — there is no promised weak point on a shape nobody designed by hand — so it bills
+        // each one it crosses once and carries on to whatever is behind it.
+        if (Bosses.Count > 0) BurnBossesAlong(origin, direction, length, radius, damage, by);
+    }
+
+    /// <summary>
+    /// A beam's pass over the DESCENT bosses. Each is billed at most once per shot however much
+    /// of the shaft crosses it — otherwise a lance held on a stationary boss would deal damage
+    /// per sample step, which is a hundred times what the same beam does to anything else.
+    /// </summary>
+    private void BurnBossesAlong(Vector3 origin, Vector3 direction, float length, float radius,
+        float damage, int by)
+    {
+        var originXZ = new Vector2(origin.X, origin.Z);
+        foreach (var boss in Bosses)
+        {
+            if (!boss.Alive) continue;
+            bool struck = false;
+            for (float d = 0f; d <= length && !struck; d += 1f)
+            {
+                Vector3 at = origin + direction * d;
+                if (!boss.Hits(new Vector2(at.X, at.Z), at.Y)) continue;
+                struck = true;
+                StrikeBosses(new Vector2(at.X, at.Z), at.Y, damage, by, originXZ);
+            }
+        }
     }
 
     // --- The SOLDIER chassis ----------------------------------------------------
@@ -4241,6 +4459,10 @@ public sealed class World : IAnchorField
         gone.Away = true;
         gone.Lives = 0;
         gone.Shield = 0f;
+        // And the hull, which is what Alive actually reads. Emptying only the shield left the
+        // abandoned craft standing — every renderer, tag, hunter and spectator-picker still
+        // counted a player who had walked out of the room.
+        gone.Health = 0f;
     }
 
     /// <summary>
@@ -5468,6 +5690,10 @@ public sealed class World : IAnchorField
         // A soldier is carrying a launcher, a spool and a harness full of machinery, and all
         // of it breaks the same way a hunter's does.
         ScatterMaterials(s.Position);
+
+        // One unit off a DESCENT wave. A squad costs the wave four of its roster when it
+        // arrives, so it has to give four back as its people fall, or the bar never empties.
+        CountDescentKill();
     }
 
     /// <summary>
@@ -6745,6 +6971,31 @@ public sealed class World : IAnchorField
                     continue;
                 }
 
+                // The DESCENT bosses. Tested before the hunters and after the two hand-built
+                // monsters, and unlike either of those it is the whole body that answers rather
+                // than one exposed crystal: a rolled boss is a different shape every session, so
+                // "shoot the bit that glows" cannot be the rule — there is no promise the glow
+                // is ever reachable on a body nobody designed by hand.
+                //
+                // What replaces it is the exposure window (ModularBoss.Exposed): a boss that has
+                // just committed to something is worth double for a beat. Same bargain — a
+                // skilled player kills it in half the shots — but it reads off behaviour, which
+                // every rolled body has, rather than off geometry, which not all of them do.
+                if (Bosses.Count > 0)
+                {
+                    float bite = p.IsGrenade && !p.IsCrabBomb ? GrenadeDamage
+                        : p.IsPiercing ? SlugDamage
+                        : PlayerShotDamage;
+                    if (StrikeBosses(p.Position, p.Height, bite, p.Owner, p.Position - p.Velocity))
+                    {
+                        // The slug bulls on through a boss the way it does through a line of
+                        // hunters; a rocket goes off against it; everything else stops here.
+                        if (p.IsRocket) DetonateRocket(p);
+                        if (!p.IsPiercing) p.Active = false;
+                        if (!p.IsPiercing) continue;
+                    }
+                }
+
                 // A round riding high over a hunter's hull passes over it. The mortar joins
                 // the rocket here: while it is still up the arc it sails over the hunters
                 // massed in front of the target, and only meets them once it has come back
@@ -6987,7 +7238,7 @@ public sealed class World : IAnchorField
         }
         else
             Emit(Cue.Hit, victim.Position);
-        if (victim.Alive && victim.ShieldFraction <= LowShieldWarning)
+        if (victim.Alive && victim.HealthFraction <= LowShieldWarning)
             Emit(Cue.Warning, victim.Position, owner: Seat(victim), personal: true);
     }
 
@@ -7025,17 +7276,49 @@ public sealed class World : IAnchorField
             // salvage is. Left on the field rather than out in the fog, so clearing a
             // firefight is worth doubling back through. Unlike the ambient drip it ignores the
             // salvage cap — a kill you earned always leaves its reward.
-            var kind = Random.Shared.NextSingle() < DropBatteryShare
-                ? PickupKind.Battery : PickupKind.Ammo;
+            var kind = RollSalvage(DropBatteryShare, DropKitShare);
             DropSalvage(enemy.Position, kind);
             ScatterMaterials(enemy.Position);
+
+            // One unit off a DESCENT wave's count. A no-op in SANDBOX and a no-op during a
+            // herald fight, so only the crowd the bar is actually drawing gets counted.
+            CountDescentKill();
+
+            // And whatever a LEECHing boss takes back off the body. Only that quirk feeds; for
+            // everything else this is a branch that never runs.
+            foreach (var b in Bosses)
+                if (b.Alive && Torus.Distance(b.Position, enemy.Position) < LeechRadius)
+                    b.Leech(LeechPerBody);
         }
     }
+
+    /// <summary>How near one of its own has to die for a LEECHing boss to feed off it, and what
+    /// one body is worth. Deliberately a short reach: the counterplay is to kill the adds away
+    /// from the boss, and that only exists if the boss has to be close.</summary>
+    private const float LeechRadius = 26f;
+    private const float LeechPerBody = 3.5f;
 
     /// <summary>What fraction of a kill's drop is a battery (the "heal"); the rest are stray
     /// rounds. Weighted toward ammo so a firefight feeds the gun it was fought with, and the
     /// battery is the rarer prize.</summary>
     private const float DropBatteryShare = 0.45f;
+
+    /// <summary>And the rarest of the three: a repair kit. Hull is the layer nothing else in
+    /// the game gives back, so the thing that gives it back has to be scarce enough that a
+    /// player counts them — one kill in twelve, against nearly one in two for a cell.</summary>
+    private const float DropKitShare = 0.08f;
+
+    /// <summary>
+    /// Rolls one piece of salvage: a kit, a cell, or rounds. One place rather than three, so
+    /// the drip that keeps the field stocked and the two kill drops can never quietly drift
+    /// into offering different odds.
+    /// </summary>
+    private static PickupKind RollSalvage(float batteryShare, float kitShare)
+    {
+        float r = Random.Shared.NextSingle();
+        if (r < kitShare) return PickupKind.RepairKit;
+        return r < kitShare + batteryShare ? PickupKind.Battery : PickupKind.Ammo;
+    }
 
     // --- What a body is worth in parts --------------------------------------------
     // Everything on this field is a machine or is carrying one, and killing it breaks that
@@ -7129,9 +7412,11 @@ public sealed class World : IAnchorField
     /// </summary>
     private const int MaxFieldSalvage = 40;
 
-    /// <summary>The drift that keeps the field stocked, as opposed to what a body left. Only
-    /// this is subject to <see cref="MaxPickups"/>.</summary>
-    private static bool IsAmbient(Pickup pk) => pk.Kind is PickupKind.Battery or PickupKind.Ammo;
+    /// <summary>The drift that keeps the field stocked, as opposed to what a body left or what
+    /// somebody threw away. Only this is subject to <see cref="MaxPickups"/>, and only this
+    /// reappears out in the fog when it is taken.</summary>
+    private static bool IsAmbient(Pickup pk)
+        => !pk.Thrown && pk.Kind is PickupKind.Battery or PickupKind.Ammo;
 
     private int AmbientSalvage()
     {

@@ -152,6 +152,36 @@ public static class Audio
     /// <summary>Set by the world each frame from what is actually on the field.</summary>
     public static void SetIntensity(float value) => _intensityTarget = Math.Clamp(value, 0f, 1f);
 
+    // --- Taking the world away ------------------------------------------------------
+
+    /// <summary>
+    /// How much of the world is still audible: 1 the whole of it, 0 silence. One control over
+    /// both halves of the sound — the mixer's spatial world and the soundtrack streaming
+    /// beside it — because "everything except the menu" is a single idea and having to
+    /// remember two places to say it is how one of them ends up still making noise.
+    ///
+    /// <para>Menu sound (the <see cref="Bus.Ui"/> bus) deliberately survives this: it is how a
+    /// screen answers the keys being pressed on it.</para>
+    ///
+    /// <para>Used by the end of a solo run, which walks it to zero as the ending panel comes
+    /// in. Reset to 1 whenever a run starts, by <see cref="ResumeWorldSound"/>.</para>
+    /// </summary>
+    public static float WorldFade { get; private set; } = 1f;
+
+    /// <summary>Sets how much of the world can still be heard. The caller owns the curve —
+    /// this is a level, not a fade, and it is expected to be written every frame.</summary>
+    public static void SetWorldFade(float amount)
+    {
+        WorldFade = Math.Clamp(amount, 0f, 1f);
+        _engine.Mix.WorldFadeTarget = WorldFade;
+        MusicBox.WorldFade = WorldFade;
+    }
+
+    /// <summary>Hands the world its voice back — on entering a run, and on leaving a faded
+    /// one for any screen at all. A fade nobody clears is a game that boots silent the second
+    /// time it is played.</summary>
+    public static void ResumeWorldSound() => SetWorldFade(1f);
+
     private static float _intensityTarget;
 
     /// <summary>How far the music is pushed down at full intensity, and how fast it moves.

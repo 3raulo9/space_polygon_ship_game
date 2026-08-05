@@ -70,6 +70,25 @@ public sealed class Mixer
     /// pull this down; it eases back rather than snapping.</summary>
     public float MasterGain = 1f, MasterTarget = 1f;
 
+    /// <summary>
+    /// A second, independent hand on the world's level, for taking the whole place away —
+    /// currently only the end of a run, which fades every noise the world makes down to
+    /// nothing as the ending panel comes in.
+    ///
+    /// <para>Deliberately NOT <see cref="MasterGain"/>, which the ducker and the concussion
+    /// system are already writing every frame: a blast going off on the frame the craft died
+    /// would have shoved the fade back up on its way to silence.</para>
+    ///
+    /// <para>Applied where the ducker is applied, which means it lands on everything
+    /// <em>except</em> the UI bus. That is exactly right and is why the seam was worth using:
+    /// the world going quiet must not take the menu blips of the screen you are being handed
+    /// with it — a menu whose keys make no sound reads as a hung game.</para>
+    ///
+    /// <para>The game thread writes the target and owns the curve; the eased value below is
+    /// only here to keep a per-frame step from zippering across an audio block.</para>
+    /// </summary>
+    public float WorldFade = 1f, WorldFadeTarget = 1f;
+
     /// <summary>The corner the whole mix is put through. Wide open normally; slammed shut
     /// by a blast going off in your face, by being swallowed, by hyperspace.</summary>
     public float MasterCutoff = Spatializer.NearCutoff, MasterCutoffTarget = Spatializer.NearCutoff;
@@ -370,6 +389,7 @@ public sealed class Mixer
         float k = 1f - MathF.Exp(-EaseRate * dt);
         WetLevel += (WetTarget - WetLevel) * k;
         MasterGain += (MasterTarget - MasterGain) * k;
+        WorldFade += (WorldFadeTarget - WorldFade) * k;
         RingLevel += (RingTarget - RingLevel) * k;
         MasterCutoff = MathF.Exp(MathF.Log(MathF.Max(MasterCutoff, 20f))
             + (MathF.Log(MathF.Max(MasterCutoffTarget, 20f))
@@ -416,8 +436,12 @@ public sealed class Mixer
                 r += ring;
             }
 
-            l *= MasterGain;
-            r *= MasterGain;
+            // The world's level, and the hand that can take the world away. Everything summed
+            // above this line goes with it — the room, its reverb tail and the concussion ring
+            // included — which is what makes a fade to zero here actual silence rather than a
+            // quiet mix with a sine still sitting on top of it.
+            l *= MasterGain * WorldFade;
+            r *= MasterGain * WorldFade;
 
             l += uiL[i] * uiGain;
             r += uiR[i] * uiGain;

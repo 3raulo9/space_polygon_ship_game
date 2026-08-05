@@ -1,6 +1,7 @@
 using System.Numerics;
 using Raylib_cs;
 using Unrendered.Core;
+using Unrendered.Input;
 using Unrendered.Rendering;
 
 namespace Unrendered.UI;
@@ -199,14 +200,36 @@ public sealed class InventoryScreen
 
         // Right-click, while carrying a stack (left still held), peels a single unit off
         // into the slot under the cursor — the way one fragment at a time goes into each
-        // craft corner. With empty hands instead, right-click either spends a battery/bullet
-        // stack straight into the craft or, on the take-apart bench, opens one item.
+        // craft corner. With empty hands instead: held with shift it throws one unit out of
+        // the stack onto the grid, and plain it either spends a battery/bullet stack straight
+        // into the craft or, on the take-apart bench, opens one item.
+        //
+        // Shift is tested before the plain readings rather than after, so shift-clicking a
+        // stack of batteries throws one away instead of charging the shield with all four.
         if (Raylib.IsMouseButtonPressed(MouseButton.Right))
         {
             if (!Held.IsEmpty) PlaceOne(world, inv, region, index);
+            else if (InputMap.ShiftHeld) ThrowOne(world, region, index);
             else if (region == InvRegion.Break) BreakOne(world, inv);
             else RightClickCharge(world, region, index);
         }
+    }
+
+    /// <summary>
+    /// Shift + right-click: one unit off the stack under the cursor, out of the pack
+    /// altogether and onto the grid in front of the craft, where it lies as salvage anybody
+    /// can drive over — including whoever threw it.
+    ///
+    /// <para>Optimistic like the rest of the panel: the slot empties here and now on every
+    /// machine, and on a client the item itself only appears on the field a round trip later,
+    /// when the host — the one machine that owns where things lie — has actually put it there.
+    /// The world runs both halves so the two ends spend exactly the same thing.</para>
+    /// </summary>
+    private void ThrowOne(World.World world, InvRegion region, int index)
+    {
+        if (!world.ThrowOne(world.LocalIndex, region, index)) return;
+        world.FileInvIntent(new InvIntent(InvOp.Throw, region, (byte)index,
+                                          InvRegion.None, 0, 1));
     }
 
     /// <summary>

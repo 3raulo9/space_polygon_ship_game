@@ -123,6 +123,19 @@ public enum Msg : byte
     /// nobody can see move is worse than one that arrives a frame late.
     /// </summary>
     Vote = 24,
+
+    /// <summary>
+    /// Host → all, reliable: one seat's whole hangar build — chassis, the four spent tracks,
+    /// and every part's paint.
+    ///
+    /// <para>A pick used to be a single chassis byte, so a player's points and colours died on
+    /// the machine that chose them: everyone else saw a default-painted craft with the
+    /// machine's default build, and the host simulated that default. This is the packet that
+    /// makes the bench mean something to anybody but its owner. Reliable and rare — one per
+    /// player per time they change their mind — and re-sent to a late joiner with the roster,
+    /// because a build is state, not an event.</para>
+    /// </summary>
+    Build = 25,
 }
 
 /// <summary>
@@ -336,7 +349,7 @@ public sealed class Session
         if (IsHost)
         {
             if (room.PickDirty && LocalSeat >= 0)
-                ApplyPick(LocalSeat, room.MyChassis ?? PlayerClass.Tank);
+                ApplyPick(LocalSeat, room.MyBuild.Clone());
             if (room.NameDirty) { LocalName = room.MyName; Rename(LocalSeat, room.MyName); }
             if (room.Chart.CastDirty) room.Chart.Cast(LocalSeat, room.Chart.Cursor);
 
@@ -368,7 +381,8 @@ public sealed class Session
         {
             if (room.PickDirty)
             {
-                PlayerClass chosen = room.MyChassis ?? PlayerClass.Tank;
+                Loadout chosen = room.MyBuild.Clone();
+                _buildOfSeat[LocalSeat] = chosen;
                 SendPick(chosen);
                 // Install the pick on this client's OWN craft immediately. The host is
                 // authoritative on this seat for everyone else and its snapshot names the
@@ -376,7 +390,8 @@ public sealed class Session
                 // without this the player keeps driving the placeholder tank they were seated
                 // as while the host simulates the chassis they actually picked, and the two
                 // move so differently that the craft is never where anyone thinks it is.
-                if (World is { } w && LocalSeat < w.Players.Count && w.Players[LocalSeat].Class != chosen)
+                if (World is { } w && LocalSeat < w.Players.Count
+                    && !w.Players[LocalSeat].Build.SameAs(chosen))
                     w.ReplacePlayer(LocalSeat, chosen);
             }
             if (room.NameDirty) SendName(room.MyName);
@@ -407,26 +422,52 @@ public sealed class Session
     /// lets somebody who joined a match already in progress choose a craft at all, rather than
     /// being stuck for ever in the placeholder tank they were seated as.
     /// </summary>
-    private void ApplyPick(int seat, PlayerClass chassis)
+    /// <param name="build">The whole bench: chassis, points and paint. Every seat's arrives
+    /// this way now — the host's own from its pod, everyone else's off the wire — so there is
+    /// one path that installs a craft and it is the one that carries all of it.</param>
+    private void ApplyPick(int seat, Loadout build)
     {
+        if (seat < 0) return;
+        PlayerClass chassis = build.Class;
         if (!Enum.IsDefined(chassis)) return;   // a malformed byte is not a chassis
+
         _pickOfSeat[seat] = (chassis, true);
+        _buildOfSeat[seat] = build;
+        if (World is { } known) known.SeatBuilds[seat] = build;
         Room?.ApplyPick(seat, chassis, ready: true);
-        if (World is not { } w || seat < 0 || seat >= w.Players.Count) return;
-        if (w.Players[seat].Class == chassis) return;
-        // The host's own seat keeps its full hangar build — paint and points, not just the
-        // chassis. Everyone else's paint does not cross the wire, so they get a clean one.
-        if (seat == LocalSeat) { w.Loadout.Class = chassis; w.ReplacePlayer(seat, w.Loadout); }
-        else w.ReplacePlayer(seat, chassis);
+
+        // The host is the only one entitled to say what anybody is flying, so it passes the
+        // build on to the rest of the room. Everyone in it — not just the pod's owner — has to
+        // be able to draw that craft, in the lobby and in the match.
+        if (IsHost) BroadcastBuild(seat, build);
+
+        if (World is not { } w || seat >= w.Players.Count) return;
+        // Rebuilt whenever anything about the craft changed, not just its chassis: a player
+        // who only repainted, or only moved a point off SPEED onto HULL, has changed the craft
+        // and the old test (class differs?) would have kept the old one for the whole match.
+        if (w.Players[seat].Build.SameAs(build)) return;
+        w.ReplacePlayer(seat, build);
     }
 
-    private void SendPick(PlayerClass chassis)
+    /// <summary>Host → all: this seat is flying this build. Also the packet a late joiner is
+    /// caught up with, so it arrives already knowing what everyone looks like.</summary>
+    private void BroadcastBuild(int seat, Loadout build)
     {
-        Span<byte> p = stackalloc byte[3];
+        if (!IsHost) return;
+        Span<byte> p = stackalloc byte[2 + 64];
+        p[0] = (byte)Msg.Build;
+        p[1] = (byte)seat;
+        build.Write(p.Slice(2));
+        _net.Broadcast(p.Slice(0, 2 + Loadout.Bytes), reliable: true);
+    }
+
+    private void SendPick(Loadout build)
+    {
+        Span<byte> p = stackalloc byte[2 + 64];
         p[0] = (byte)Msg.Pick;
-        p[1] = (byte)chassis;
-        p[2] = 1;   // ready
-        _net.Send(0, p, reliable: true);
+        p[1] = 1;   // ready
+        build.Write(p.Slice(2));
+        _net.Send(0, p.Slice(0, 2 + Loadout.Bytes), reliable: true);
     }
 
     private void SendName(string name)
@@ -570,6 +611,19 @@ public sealed class Session
     /// <summary>Each seat's chosen chassis and ready flag in the room. Host-side, so the host
     /// can build the match with the right craft in each seat and gate LAUNCH on all-ready.</summary>
     private readonly Dictionary<int, (PlayerClass Chassis, bool Ready)> _pickOfSeat = new();
+
+    /// <summary>
+    /// Each seat's whole hangar build, on <em>every</em> machine — the host learns them from
+    /// picks and relays them, and a client keeps the copy it was told so it can rebuild that
+    /// craft in the right colours whenever the snapshot names a new chassis for the seat.
+    ///
+    /// <para>Without this a client that rebuilt a seat from a snapshot's chassis byte threw
+    /// the paint away the moment the craft changed, which is exactly when it is most obvious.</para>
+    /// </summary>
+    private readonly Dictionary<int, Loadout> _buildOfSeat = new();
+
+    /// <summary>The build this machine has been told a seat is flying, or null.</summary>
+    public Loadout? BuildOf(int seat) => _buildOfSeat.GetValueOrDefault(seat);
 
     public Session(INetTransport net, bool host)
     {
@@ -791,6 +845,19 @@ public sealed class Session
         Span<byte> p = stackalloc byte[3 + 32];
         foreach (var kv in _nameOfSeat)
             _net.Send(peer, p.Slice(0, WriteSeatName(p, kv.Key, kv.Value)), reliable: true);
+
+        // And what everyone is flying. A build is state rather than an event, so a machine
+        // that was not listening when a pick was made has no other way to ever learn it —
+        // before this, a late joiner saw every craft that had already been chosen in the
+        // machine's default paint for the rest of the match.
+        Span<byte> b = stackalloc byte[2 + 64];
+        foreach (var kv in _buildOfSeat)
+        {
+            b[0] = (byte)Msg.Build;
+            b[1] = (byte)kv.Key;
+            kv.Value.Write(b.Slice(2));
+            _net.Send(peer, b.Slice(0, 2 + Loadout.Bytes), reliable: true);
+        }
     }
 
     /// <summary>Posts a line to this machine's feed and, on the host, mirrors it to everyone
@@ -1481,9 +1548,31 @@ public sealed class Session
             // --- The 3D lobby room ------------------------------------------------
             case Msg.Pick when IsHost:
             {
-                if (payload.Length < 3) break;
+                if (payload.Length < 2 + Loadout.Bytes) break;
                 if (!_seatOfPeer.TryGetValue(from, out int seat)) break;
-                ApplyPick(seat, (PlayerClass)payload[1]);
+                // Read, not trusted: Loadout.Read clamps every track and walks an over-budget
+                // build back down, so a hand-written packet cannot buy a craft the hangar
+                // would refuse to make.
+                ApplyPick(seat, Loadout.Read(payload.AsSpan(2)));
+                break;
+            }
+
+            case Msg.Build when !IsHost:
+            {
+                // The host telling this machine what somebody is flying. Applies to the room's
+                // avatar and to the seat's craft alike — the same fact, and both places draw it.
+                if (payload.Length < 2 + Loadout.Bytes) break;
+                int seat = payload[1];
+                Loadout build = Loadout.Read(payload.AsSpan(2));
+                _buildOfSeat[seat] = build;
+                if (World is { } known) known.SeatBuilds[seat] = build;
+                Room?.ApplyPick(seat, build.Class, ready: true);
+                // Never over our own craft: this machine's build is the one at its own pod,
+                // and the echo of our own pick coming back would rebuild the craft we are
+                // flying — dropping whatever the sim had already given it — for no gain.
+                if (seat == LocalSeat) break;
+                if (World is { } w && seat < w.Players.Count && !w.Players[seat].Build.SameAs(build))
+                    w.ReplacePlayer(seat, build);
                 break;
             }
 

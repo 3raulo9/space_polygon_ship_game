@@ -60,6 +60,10 @@ public enum Btn : uint
 
     /// <summary>Use the thing in front of you. Only the multiplayer room reads it.</summary>
     Interact   = 1u << 21,
+
+    /// <summary>Held to cut a DESCENT salvage window short. Read only during an
+    /// intermission — everywhere else in the game this bit is set and ignored.</summary>
+    Ready      = 1u << 22,
 }
 
 /// <summary>
@@ -273,6 +277,12 @@ public readonly struct InputFrame
 
     /// <summary>Use the thing in front of you. Only the multiplayer room reads it.</summary>
     public bool InteractPressed => Hit(Btn.Interact);
+
+    /// <summary>Held — not tapped — to end a DESCENT salvage window early. A hold rather than a
+    /// press because in a room it is a commitment several people can see building, and because
+    /// nobody should skip a ninety-second break by fat-fingering a key on the frame a boss
+    /// dies. See <see cref="Descent.ReadyHold"/>.</summary>
+    public bool ReadyDown => this[Btn.Ready];
 
     // --- Wire format --------------------------------------------------------------
     // Fixed thirteen bytes, little-endian, no version tag. The tag belongs on the packet

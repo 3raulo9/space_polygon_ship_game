@@ -105,6 +105,14 @@ public static class MusicBox
     /// of the way of a boss dying without anybody having to author the moment.</summary>
     public static float Duck = 1f;
 
+    /// <summary>
+    /// The same hand that takes the world's noise away at the end of a run — see
+    /// <see cref="Audio.WorldFade"/>. The soundtrack does not go through the mixer, so the
+    /// fade has to be applied here too or the one sound left playing over a dead craft would
+    /// be the music, which is the exact opposite of the intended effect.
+    /// </summary>
+    public static float WorldFade = 1f;
+
     private static double _began;           // wall clock the current piece started
     private static double _nextRoll;        // wall clock the next piece may begin
 
@@ -187,7 +195,7 @@ public static class MusicBox
             // The player's fader and the ducker ride on top of the fade rather than being
             // folded into it, so a piece that is currently swelling in still ducks under a
             // boss dying — and comes back to the right level rather than to full.
-            Raylib.SetMusicVolume(_music, _volume * Fader * Duck);
+            Raylib.SetMusicVolume(_music, _volume * Fader * Duck * WorldFade);
             Raylib.UpdateMusicStream(_music);
 
             // Done when the piece runs out, or when it has finished fading away

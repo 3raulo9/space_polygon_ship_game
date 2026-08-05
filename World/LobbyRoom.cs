@@ -124,7 +124,24 @@ public sealed class LobbyRoom
     public bool VoteDirty { get; private set; }
 
     /// <summary>The chassis highlighted in the pod, which Enter commits.</summary>
-    public int PodIndex { get; private set; }
+    public int PodIndex => Hangar.ClassIndex;
+
+    /// <summary>
+    /// The pod IS the hangar — the same screen single player picks a craft on, opened where
+    /// the player is standing. Roster, turntable, the BUILD budget and the paint bay, all of
+    /// it, driven by the same <see cref="UI.ClassSelectScreen"/> that has always driven it;
+    /// only its LAUNCH is read as READY here, because in a room the host decides when anyone
+    /// goes anywhere.
+    ///
+    /// <para>Before this the pod was a bare left/right carousel of chassis names. A player in
+    /// a match could not spend a single build point or choose a single colour — the whole
+    /// bench existed, and multiplayer simply did not open the door to it.</para>
+    /// </summary>
+    public UI.ClassSelectScreen Hangar { get; }
+
+    /// <summary>The build the local player settled on at the pod: chassis, points and paint.
+    /// This is what goes on the wire and what their craft is made from at launch.</summary>
+    public Loadout MyBuild => Hangar.Loadout;
 
     /// <summary>The local player's confirmed chassis (null until they pick).</summary>
     public PlayerClass? MyChassis { get; private set; }
@@ -150,8 +167,12 @@ public sealed class LobbyRoom
     private const float JumpVel = 9f;
     private const float Gravity = 26f;
 
-    public LobbyRoom()
+    /// <param name="build">The loop's own long-lived build, so a player who set one up in
+    /// single player walks into the room still wearing it and the hangar's edits persist back
+    /// out. Tests pass nothing and get a fresh one.</param>
+    public LobbyRoom(Loadout? build = null)
     {
+        Hangar = new UI.ClassSelectScreen(build ?? new Loadout());
         // Everyone starts in the antechamber, back from the two pillars, facing them.
         Position = new Vector2(0f, -16f);
         Heading = 0f; // faces +Z, toward the pillars/stations
@@ -190,8 +211,14 @@ public sealed class LobbyRoom
     }
 
     /// <summary>Test hook: choose a chassis without going through the pod's key handling — the
-    /// same effect as confirming a pick at the pod.</summary>
-    public void PickForTest(PlayerClass chassis) { MyChassis = chassis; PickDirty = true; }
+    /// same effect as confirming a pick at the pod. Goes through the hangar's own loadout so
+    /// the build that leaves on the wire names the chassis the test asked for.</summary>
+    public void PickForTest(PlayerClass chassis)
+    {
+        Hangar.Loadout.Class = chassis;
+        MyChassis = chassis;
+        PickDirty = true;
+    }
 
     /// <summary>Test hook: put the destination to the room without going through the console's
     /// key handling — the same effect as the host confirming the VOTE row.</summary>
@@ -309,7 +336,9 @@ public sealed class LobbyRoom
             }
             else if (Stage == Phase.InRoom)
             {
-                if (Near(Pod)) { Where = Focus.Pod; PodIndex = MyChassis.HasValue ? (int)MyChassis.Value : 0; }
+                // The hangar remembers where it was left — walking back to the pod reopens it
+                // on the craft you were last looking at, with the points you had already spent.
+                if (Near(Pod)) Where = Focus.Pod;
                 else if (Near(ChartStation)) { Where = Focus.Chart; }
                 else if (IsHost && Near(ConsoleStation)) { Where = Focus.Console; }
             }
@@ -327,23 +356,43 @@ public sealed class LobbyRoom
 
     // --- The chassis pod --------------------------------------------------------------
 
+    /// <summary>
+    /// Standing in the pod, which is the hangar. The screen owns every key while it is up —
+    /// including Escape, which backs out of the paint bay before it backs out of the pod —
+    /// so this hands the frame straight over and only acts on the two things it answers with.
+    /// </summary>
     private Action UpdatePod(in InputFrame input)
     {
-        if (Raylib.IsKeyPressed(KeyboardKey.Escape)) { Where = Focus.Walking; return Action.None; }
-
-        int n = ClassCatalog.All.Count;
-        // Edges, not held: a held key must step one craft, not flick through the whole roster.
-        if (input.Hit(Btn.TurnLeft)) PodIndex = (PodIndex - 1 + n) % n;
-        if (input.Hit(Btn.TurnRight)) PodIndex = (PodIndex + 1) % n;
-
-        if (Raylib.IsKeyPressed(KeyboardKey.Enter) || input.InteractPressed)
+        switch (Hangar.Update())
         {
-            var chassis = ClassCatalog.All[PodIndex].Kind;
-            MyChassis = chassis;
-            PickDirty = true;      // the loop pushes this to the wire / the host's own avatar
-            Where = Focus.Walking; // step back out; you are now READY
+            case UI.ClassSelectScreen.Action.Launch:
+                // READY, not launch. The build is settled and goes on the wire; the host is
+                // the only one who says when the room leaves.
+                MyChassis = Hangar.Loadout.Class;
+                PickDirty = true;
+                Where = Focus.Walking;   // step back out of the pod; you are now READY
+                break;
+
+            case UI.ClassSelectScreen.Action.Back:
+                // Walked away without confirming. Whatever was being browsed stays on the
+                // bench for next time, but it is not a pick until they press READY — a player
+                // who wandered off mid-decision is not ready and the launch gate must know it.
+                Where = Focus.Walking;
+                break;
         }
         return Action.None;
+    }
+
+    /// <summary>Test/capture hook: step into the pod without walking there and pressing E.</summary>
+    public void EnterPodForTest() => Where = Focus.Pod;
+
+    /// <summary>Test hook: drive the pod's screen without a keyboard — commits whatever build
+    /// the hangar currently holds, exactly as pressing READY does.</summary>
+    public void ConfirmPodForTest()
+    {
+        MyChassis = Hangar.Loadout.Class;
+        PickDirty = true;
+        Where = Focus.Walking;
     }
 
     // --- The holo chart ---------------------------------------------------------------

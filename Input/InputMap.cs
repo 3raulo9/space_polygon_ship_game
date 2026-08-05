@@ -81,11 +81,16 @@ public static class InputMap
     public static bool MenuDelete => Raylib.IsKeyPressed(KeyboardKey.Delete)
                                      || Raylib.IsKeyPressed(KeyboardKey.Backspace);
 
+    /// <summary>Either shift key, held. A modifier rather than an action: it never does
+    /// anything on its own, it only changes what the click or key beside it means, so it is
+    /// fixed and not rebindable — there is nothing to rebind it away from.</summary>
+    public static bool ShiftHeld => Raylib.IsKeyDown(KeyboardKey.LeftShift)
+                                    || Raylib.IsKeyDown(KeyboardKey.RightShift);
+
     // Tab walks between the panes of a multi-column screen (the class-select hangar
     // is the only one so far); Shift-Tab walks back. Fixed, like the rest of menu nav.
     public static bool MenuTab => Raylib.IsKeyPressed(KeyboardKey.Tab);
-    public static bool MenuTabBack => Raylib.IsKeyDown(KeyboardKey.LeftShift)
-                                      || Raylib.IsKeyDown(KeyboardKey.RightShift);
+    public static bool MenuTabBack => ShiftHeld;
 
     // Secret keybind: physical 'L' position drops into the (empty for now) test
     // screen. Undocumented on purpose — a maintenance hatch into the machine.

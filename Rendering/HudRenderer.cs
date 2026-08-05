@@ -8,7 +8,7 @@ namespace Unrendered.Rendering;
 /// <summary>
 /// The in-world dashboard, drawn flat over the low-res target after the 3D pass
 /// so it shares the chunky pixels. A thin strip runs across the TOP of the
-/// viewport: the vital bars (Shields / Ammo / Hyper) grouped on the left, the
+/// viewport: the vital bars (Hull / Shields / Ammo / hYper) grouped on the left, the
 /// tactical radar on the right. Cold chrome on the void, no warmth — an
 /// instrument panel bolted to the inside of the cockpit, not a friendly HUD.
 ///
@@ -27,8 +27,12 @@ internal static class HudRenderer
     private const int BarTop = 6;
     private const int BarBottom = StripH - 6;
     private const int BarW = 7;
-    private const int BarGap = 16;   // centre-to-centre spacing of the three bars
-    private const int BarsLeft = 10; // left edge of the first (Shields) bar
+    // Centre-to-centre spacing. Set by the widest LABEL rather than by the widest bar: the
+    // shield gauge is captioned with a count, and "10/10" on a maxed build is five characters
+    // where every other gauge is one. At the old spacing that caption ran straight through the
+    // letters either side of it. There is room — the radar does not start until x=262.
+    private const int BarGap = 24;
+    private const int BarsLeft = 6;  // left edge of the first (Hull) bar
 
     // --- Radar (right group) ---
     private const int RadarSize = 52;               // square side, internal px
@@ -143,6 +147,11 @@ internal static class HudRenderer
         Raylib.DrawRectangle(0, StripH, W, 1, Scale(Palette.GridFar, 0.6f)); // seam line
 
         DrawBars(p);
+        // DESCENT's own instruments — the wave bar, the boss's layer stack, the salvage clock.
+        // Drawn straight after the vitals so they sit in the band under the strip, and behind
+        // everything a chassis adds, so a SOLDIER's or a FISH's own overlay still wins the
+        // pixels it needs. Draws nothing at all in SANDBOX.
+        if (world.IsDescent) DescentHud.Draw(world);
         DrawWeaponSlots(world.InventoryOf(world.ViewSeat));
         if (world.Spectating) DrawSpectating(world);
         DrawRadar(world, p);
@@ -383,19 +392,71 @@ internal static class HudRenderer
         Raylib.DrawRectangle(cx, cy, 1, 1, line);
     }
 
-    // --- Vital bars: three vertical gauges, letter-labelled S / A / H ---
+    // --- Vital bars: four vertical gauges, letter-labelled H / S / A / Y ---
+    //
+    // Hull leads because it is the one that ends the run: the shield in front of it is
+    // spendable and replaceable, and hull is neither. Hyper gives up its H to it and takes
+    // the Y — the letter matters less than which gauge a player finds first when something
+    // is going wrong, and that has to be the one they can die from.
 
     private static void DrawBars(PlayerTank p)
     {
-        // Shields dip to the warning red when critically low — the one gauge whose
-        // emptiness ends the run, so it earns the alarm colour.
-        Color shieldColor = p.ShieldFraction <= 0.25f
-            ? Lerp(Palette.Warning, Palette.HudChrome, p.ShieldFraction / 0.25f)
+        // Hull dips to the warning red when critically low. It is the only gauge that earns
+        // the alarm colour now — a spent shield is a bad afternoon, an empty hull is the end
+        // of one, and giving both the same red taught the player to ignore it.
+        Color hullColor = p.HealthFraction <= 0.25f
+            ? Lerp(Palette.Warning, Palette.HudChrome, p.HealthFraction / 0.25f)
             : Palette.HudChrome;
 
-        DrawBar(BarsLeft + BarGap * 0, "S", p.ShieldFraction, shieldColor);
-        DrawBar(BarsLeft + BarGap * 1, "A", p.AmmoFraction, Palette.Flag);
-        DrawBar(BarsLeft + BarGap * 2, "H", p.HyperFraction, Palette.GridNear);
+        DrawBar(BarsLeft + BarGap * 0, "H", p.HealthFraction, hullColor);
+        DrawCharges(BarsLeft + BarGap * 1, p);
+        DrawBar(BarsLeft + BarGap * 2, "A", p.AmmoFraction, Palette.Flag);
+        DrawBar(BarsLeft + BarGap * 3, "Y", p.HyperFraction, Palette.GridNear);
+    }
+
+    /// <summary>
+    /// The shield stack, which is not a bar: it is a count. The build buys whole charges and
+    /// the player spends whole charges, so the gauge is drawn as that many stacked blocks
+    /// filling from the bottom, with the count written under it — 3/5 and falling reads as
+    /// something being taken off you, which a sliding bar never did.
+    ///
+    /// <para>The topmost standing charge is dimmed by how far into it the next hit has to
+    /// bite. That is the only continuous thing on this gauge, and it is what stops a charge
+    /// with a sliver left looking exactly like a fresh one.</para>
+    /// </summary>
+    private static void DrawCharges(int x, PlayerTank p)
+    {
+        int barH = BarBottom - BarTop;
+        int n = Math.Max(1, p.ShieldCharges);
+        int left = p.ChargesLeft;
+
+        Raylib.DrawRectangle(x, BarTop, BarW, barH, new Color(10, 20, 24, 220));
+
+        // One cell per charge, stacked bottom-up with a hairline of well showing between
+        // them so ten of them still read as ten and not as a solid column.
+        float cell = barH / (float)n;
+        for (int i = 0; i < n; i++)
+        {
+            int y1 = BarBottom - (int)MathF.Round(cell * i);
+            int y0 = BarBottom - (int)MathF.Round(cell * (i + 1));
+            int h = Math.Max(1, y1 - y0 - (n > 1 ? 1 : 0));
+            if (i >= left) continue;
+
+            // The top standing charge fades as it is eaten into; every one below it is whole.
+            float lit = i == left - 1 ? 0.35f + 0.65f * p.TopChargeFraction : 1f;
+            Raylib.DrawRectangle(x, y0, BarW, h, Scale(Palette.BatteryCore, lit));
+        }
+        Raylib.DrawRectangleLines(x, BarTop, BarW, barH, Scale(Palette.HudChrome, 0.5f));
+
+        // "3/5" under the stack instead of a letter. It is the one gauge with a number worth
+        // reading, and the number is the whole point of it.
+        Font font = Raylib.GetFontDefault();
+        const int size = 8;
+        string text = left + "/" + n;
+        Vector2 m = Raylib.MeasureTextEx(font, text, size, 1);
+        Raylib.DrawTextEx(font, text,
+            new Vector2(x + (BarW - m.X) * 0.5f, StripH - size + 1), size, 1,
+            Scale(left > 0 ? Palette.HudChrome : Palette.Warning, left > 0 ? 0.85f : 1.6f));
     }
 
     private static void DrawBar(int x, string label, float fraction, Color fill)
@@ -502,7 +563,8 @@ internal static class HudRenderer
         }
 
         // Floating salvage shows as friendly blips so the player can steer toward a
-        // resupply: charged green for batteries, flag-yellow for stray rounds.
+        // resupply — each in its own colour, so a thrown core and a stray round are not the
+        // same dot.
         foreach (var pk in world.Pickups)
         {
             Vector2 rel = Torus.Delta(p.Position, pk.Position);
@@ -514,8 +576,7 @@ internal static class HudRenderer
             px = Math.Clamp(px, x0 + 1, x0 + RadarSize - 2);
             py = Math.Clamp(py, y0 + 1, y0 + RadarSize - 2);
 
-            Color blip = pk.Kind == PickupKind.Battery ? Palette.BatteryCore : Palette.Flag;
-            Raylib.DrawRectangle((int)px, (int)py, 1, 1, blip);
+            Raylib.DrawRectangle((int)px, (int)py, 1, 1, World.World.SalvageColour(pk.Kind));
         }
 
         // Player: a small chrome triangle fixed at centre, always pointing up.

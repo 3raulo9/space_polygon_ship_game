@@ -172,12 +172,32 @@ public sealed class PlayerTank
     public static float JumpApex => JumpVel * JumpVel / (2f * Gravity);
 
     // --- Combat state (Doc 03) ---
-    public float MaxShield = 100f;
+
+    /// <summary>
+    /// The shield stack, as a pool of damage it will still soak. It is spent in whole
+    /// <see cref="Loadout.ChargeStrength"/>-sized charges — the build buys a count of them
+    /// and the HUD counts them off — but it is stored as one number so a hit that is worth
+    /// two and a half charges spends two and a half of them instead of being rounded into
+    /// either a free hit or a stolen one.
+    /// </summary>
+    public float MaxShield = 50f;
     public float Shield;
+
+    /// <summary>How many charges this craft's build bought. The denominator on the HUD.</summary>
+    public int ShieldCharges = 5;
+
+    /// <summary>
+    /// The hull under the shield: what damage reaches once every charge is gone, and the
+    /// thing that actually ends a life. Nothing regenerates it and no battery touches it —
+    /// only a repair kit does.
+    /// </summary>
+    public float MaxHealth = 50f;
+    public float Health;
+
     public int Lives = 3;
     public int MaxAmmo = 50;
     public int Ammo = 40;
-    public bool Alive => Shield > 0f || Lives > 0;
+    public bool Alive => Health > 0f || Lives > 0;
 
     /// <summary>
     /// Comebacks left, which is one fewer than lives: a craft on its last life has none.
@@ -187,7 +207,7 @@ public sealed class PlayerTank
     public int RevivesLeft => Math.Max(0, Lives - 1);
 
     /// <summary>
-    /// Out of comebacks and out of shield: the run is over for this player, but not for
+    /// Out of comebacks and out of hull: the run is over for this player, but not for
     /// the match. They keep a camera and watch whoever is left — see the spectator handling
     /// in the loop. Solo, this is simply death, which is what it has always been.
     /// </summary>
@@ -466,6 +486,8 @@ public sealed class PlayerTank
         // is settled when the craft is built.
         Build = loadout.Clone();
         MaxShield = loadout.MaxShield;
+        ShieldCharges = loadout.ShieldCharges;
+        MaxHealth = loadout.MaxHealth;
         MaxAmmo = loadout.MaxAmmo;
         _speedScale = loadout.SpeedScale;
         // Open on four fifths of the magazine, as the craft always has.
@@ -484,6 +506,7 @@ public sealed class PlayerTank
         if (Class == PlayerClass.Virus) Virus = new VirusRig();
 
         Shield = MaxShield;
+        Health = MaxHealth;
         Hyper = MaxHyper;
     }
 
@@ -971,12 +994,25 @@ public sealed class PlayerTank
     }
 
     /// <summary>
-    /// Tops up the shield by a fraction of its maximum, capped at full — the
-    /// battery pickup's repair charge. A fraction of 0.3 restores 30 points on the
-    /// 100-point shield.
+    /// Puts shield charges back on the stack — one battery cell, one charge. Whole charges
+    /// rather than a percentage, because that is what the player is counting: a cell spent
+    /// at 2/5 leaves 3/5, every time, on every build. (A fractionally-drained top charge is
+    /// carried, not rounded away, so the number on the HUD always rises by exactly the
+    /// number of cells spent.)
     /// </summary>
-    public void RefillShield(float fraction)
-        => Shield = MathF.Min(MaxShield, Shield + MaxShield * fraction);
+    public void ChargeShield(int charges)
+    {
+        if (charges <= 0) return;
+        Shield = MathF.Min(MaxShield, Shield + Loadout.ChargeStrength * charges);
+    }
+
+    /// <summary>
+    /// Mends the hull — the repair kit, and the only thing that does. Deliberately a
+    /// fraction rather than a count: hull is a continuous pool, and a kit is worth the
+    /// same share of a tough craft as of a fragile one.
+    /// </summary>
+    public void RepairHull(float fraction)
+        => Health = MathF.Min(MaxHealth, Health + MaxHealth * fraction);
 
     /// <summary>
     /// Tops up the Hyper reserve by a fraction of its maximum, capped at full — the
@@ -992,8 +1028,29 @@ public sealed class PlayerTank
     public void RefillAmmo(float fraction)
         => Ammo = Math.Min(MaxAmmo, Ammo + (int)MathF.Ceiling(MaxAmmo * fraction));
 
-    /// <summary>Applies incoming damage; spends a life and resets shield at zero.</summary>
+    /// <summary>Applies incoming damage; spends a life and rebuilds the craft at zero hull.</summary>
     public void TakeDamage(float amount) => TakeDamage(amount, null);
+
+    /// <summary>
+    /// Charges still standing, counted the way the HUD counts them: a charge is not broken
+    /// until it is empty, so a stack with a sliver left of its third charge still reads 3.
+    /// </summary>
+    public int ChargesLeft => Shield <= 0f
+        ? 0
+        : Math.Min(ShieldCharges, (int)MathF.Ceiling(Shield / Loadout.ChargeStrength));
+
+    /// <summary>How far into the topmost standing charge the next hit has to bite before it
+    /// breaks — 0..1. The HUD dims that one pip by this, so a charge about to go looks like
+    /// one about to go.</summary>
+    public float TopChargeFraction
+    {
+        get
+        {
+            if (Shield <= 0f) return 0f;
+            float within = Shield % Loadout.ChargeStrength;
+            return within <= 0f ? 1f : within / Loadout.ChargeStrength;
+        }
+    }
 
     /// <summary>
     /// The same, told where the hit came from. Only the SOLDIER does anything with it —
@@ -1011,16 +1068,30 @@ public sealed class PlayerTank
         FlinchAmount = Math.Clamp(amount / 20f, 0.25f, 1f);
         FlinchSeq++;
 
-        Shield -= amount;
-        if (Shield <= 0f)
+        // Shields first, and they spill: a hit worth more than the charges left breaks all
+        // of them and the remainder goes on into the hull, so nothing is ever soaked for
+        // free and nothing is ever wasted. A rocket that lands on a craft with one charge
+        // standing costs it that charge AND most of what is behind it.
+        if (Shield > 0f)
         {
-            Shield = 0f;
-            if (Lives > 0)
-            {
-                Lives--;
-                if (Lives > 0) Shield = MaxShield; // respawn with a fresh shield
-            }
+            float soaked = MathF.Min(amount, Shield);
+            Shield -= soaked;
+            amount -= soaked;
+            if (Shield < 0f) Shield = 0f;
         }
+        if (amount <= 0f) return;
+
+        Health -= amount;
+        if (Health > 0f) return;
+
+        Health = 0f;
+        if (Lives <= 0) return;
+        Lives--;
+        // A comeback rebuilds the craft whole: every charge back on the stack and the hull
+        // mended. Running out of hull is the only thing that spends a life now — the shield
+        // reaching zero used to, which would make a craft with charges to spare and a hull
+        // full of holes immortal.
+        if (Lives > 0) { Shield = MaxShield; Health = MaxHealth; }
     }
 
     /// <summary>
@@ -1230,6 +1301,7 @@ public sealed class PlayerTank
 
     // --- 0..1 fractions for the HUD bars ---
     public float ShieldFraction => MaxShield > 0f ? Math.Clamp(Shield / MaxShield, 0f, 1f) : 0f;
+    public float HealthFraction => MaxHealth > 0f ? Math.Clamp(Health / MaxHealth, 0f, 1f) : 0f;
     public float AmmoFraction => MaxAmmo > 0 ? Math.Clamp((float)Ammo / MaxAmmo, 0f, 1f) : 0f;
     public float HyperFraction => MaxHyper > 0f ? Math.Clamp(Hyper / MaxHyper, 0f, 1f) : 0f;
 

@@ -128,7 +128,7 @@ public sealed class ClassSelectScreen
 
     private void UpdateStats()
     {
-        int count = 3;
+        int count = Loadout.StatCount;
         if (InputMap.MenuUp) { StatRow = (Loadout.Stat)(((int)StatRow - 1 + count) % count); Audio.PlayBlip(); }
         if (InputMap.MenuDown) { StatRow = (Loadout.Stat)(((int)StatRow + 1) % count); Audio.PlayBlip(); }
 

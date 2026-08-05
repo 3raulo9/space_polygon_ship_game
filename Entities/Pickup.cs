@@ -26,6 +26,25 @@ public enum PickupKind
     SpaceGunpowder,
     /// <summary>A coil of wire, out of whatever was driving the thing. Rarest.</summary>
     CopperWire,
+
+    // The rest of what a pack can hold. Nothing on the field ever spawns as one of these —
+    // they exist because a player can now throw any item back out of their inventory, and
+    // whatever comes out has to be able to lie on the grid like everything else.
+
+    /// <summary>Thrown out of a pack: the mass in front of a round.</summary>
+    DenseAlloy,
+    /// <summary>Thrown out of a pack: a cell's anode metal.</summary>
+    Lead,
+    /// <summary>Thrown out of a pack: a cell's anode metal.</summary>
+    Zinc,
+    /// <summary>Thrown out of a pack: a cell's anode metal.</summary>
+    Lithium,
+    /// <summary>Thrown out of a pack: a finished CRAB CORE, lying where it was tossed.</summary>
+    CrabCore,
+
+    /// <summary>A repair kit — the only thing on the grid that mends hull. Scarcer than a
+    /// cell, and worth crossing a street for.</summary>
+    RepairKit,
 }
 
 /// <summary>
@@ -67,12 +86,29 @@ public sealed class Pickup
     /// a client's copy has its own roll, and never gets to act on it.</summary>
     public readonly int Amount;
 
-    public Pickup(Vector2 position, PickupKind kind)
+    /// <summary>
+    /// True when a player threw this out of their pack rather than the field putting it there.
+    /// Host-side only, like <see cref="Amount"/> — it never travels, because it changes nothing
+    /// a client draws.
+    ///
+    /// <para>It changes two things the host does. A thrown cell is not part of the ambient
+    /// drift, so it neither counts against that budget nor teleports back out into the fog
+    /// when somebody scoops it up — which would quietly mint a battery every time one was
+    /// thrown away. And it is spent when taken, exactly like a part off a body.</para>
+    /// </summary>
+    public readonly bool Thrown;
+
+    /// <param name="amount">How many items it is worth, or 0 to let the kind decide — which
+    /// is what the field's own salvage does. A thrown stack names its own count, so throwing
+    /// one round out gives back one round rather than a fresh handful.</param>
+    public Pickup(Vector2 position, PickupKind kind, int amount = 0, bool thrown = false)
     {
         Position = position;
         Kind = kind;
         _phase = Random.Shared.NextSingle() * MathF.Tau;
-        Amount = kind == PickupKind.Ammo ? Random.Shared.Next(5, 21) : 1;
+        Amount = amount > 0 ? amount
+               : kind == PickupKind.Ammo ? Random.Shared.Next(5, 21) : 1;
+        Thrown = thrown;
     }
 
     public void Update(float dt) => Age += dt;

@@ -191,6 +191,7 @@ public static partial class SelfTest
         if (world.Spectating) return "a living player was moved into somebody else's craft";
 
         world.Players[0].Shield = 0f;
+        world.Players[0].Health = 0f;
         world.Players[0].Lives = 0;
         StepWithoutInput(world);
         if (world.ViewSeat != 1) return $"the camera did not settle on the nearest survivor (seat {world.ViewSeat})";
@@ -210,6 +211,7 @@ public static partial class SelfTest
 
         // A spent team-mate is skipped rather than watched.
         world.Players[2].Shield = 0f;
+        world.Players[2].Health = 0f;
         world.Players[2].Lives = 0;
         StepWithoutInput(world);
         if (world.ViewSeat != 1) return "the camera stayed on a player who is out";
