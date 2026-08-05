@@ -471,6 +471,22 @@ public sealed class Renderer : IDisposable
             float f = Math.Clamp(mate.ShieldFraction, 0f, 1f);
             Raylib.DrawRectangle(bx, by, (int)(bw * f), bh,
                 f > 0.35f ? Palette.GridNear : Palette.Warning);
+
+            // And what they are carrying, under the shield bar. This is the whole social point
+            // of the fragments: a run's five drops are visible on the people who took them, from
+            // across the arena, for the rest of the session. A player carrying nothing has no
+            // tag at all — which is what makes having one worth anything.
+            if (world.Run is { } run && run.Carrying(seat))
+            {
+                string tag = run.TagFor(seat);
+                // Suns are the flag's jaundiced yellow and moons the HUD's cold chrome: the two
+                // colours the palette already keeps for "the warm one" and "the cold one", so a
+                // glance separates them at a range where the letters are illegible.
+                Color tint = run.MoonsOf(seat) == 0 ? Palette.Flag
+                    : run.SunsOf(seat) == 0 ? Palette.HudChrome
+                    : Palette.BatteryCore;   // carrying both
+                PixelFont.DrawCentered(tag, (int)s.X, by + bh + 3, 1, tint);
+            }
         }
     }
 

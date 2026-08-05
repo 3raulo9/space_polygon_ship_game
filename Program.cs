@@ -38,7 +38,19 @@ if (args.Contains("--audioscene"))
     return SelfTest.RenderScene(path);
 }
 
-Raylib.SetConfigFlags(ConfigFlags.VSyncHint);
+// A capture run still needs a real GL context — it draws the actual frame and screenshots it —
+// but it has no business putting a window on somebody's desktop. HiddenWindow keeps the context
+// and the framebuffer and never maps the window, so the harness can grab frames while whoever is
+// at the keyboard carries on with what they were doing. Only ever set when UNRENDERED_CAPTURE is,
+// so a played game is unaffected.
+//
+// UNRENDERED_CAPTURE_SHOW=1 puts the window back, for the rare case of actually wanting to watch
+// a scripted capture play out.
+bool capturing = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE"))
+    && Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_SHOW") != "1";
+Raylib.SetConfigFlags(capturing
+    ? ConfigFlags.VSyncHint | ConfigFlags.HiddenWindow
+    : ConfigFlags.VSyncHint);
 Raylib.InitWindow(Config.WindowWidth, Config.WindowHeight, "UNRENDERED");
 Raylib.SetExitKey(KeyboardKey.Null); // Escape is handled in the loop, not by Raylib
 Raylib.SetTargetFPS(60);

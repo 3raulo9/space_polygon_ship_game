@@ -74,6 +74,10 @@ public enum InvOp : byte
     /// <summary>Pull one item off the take-apart bench into its parts. Addresses nothing:
     /// the bench has one input slot and the table decides the rest.</summary>
     Break,
+    /// <summary>Throw one unit off the named slot out onto the grid, where it becomes a
+    /// piece of salvage anybody can drive over. <c>To</c> addresses nothing — where it lands
+    /// is the thrower's own position, which only the host knows for certain.</summary>
+    Throw,
 }
 
 /// <summary>
@@ -378,6 +382,27 @@ public sealed class Inventory
     {
         slot.Count -= count;
         if (slot.Count <= 0) slot = ItemStack.Empty;
+    }
+
+    /// <summary>
+    /// Peels one unit off the named slot and hands back what it was, for a caller that is
+    /// taking it out of the pack entirely — the throw. Any slot the pack can address will
+    /// give one up, including the benches: a corner of the triangle or a part off a teardown
+    /// is as much yours to be rid of as anything on the grid.
+    ///
+    /// <para>The half a throw that is only about slots, so both ends of the wire run exactly
+    /// this and their packs agree whatever the host then does with the item. Returns false and
+    /// changes nothing if the slot is not there or is empty.</para>
+    /// </summary>
+    public bool TakeOne(InvRegion region, int index, out ItemKind kind)
+    {
+        kind = default;
+        if (!Addressable(region, index)) return false;
+        ref ItemStack slot = ref SlotRef(region, index);
+        if (slot.IsEmpty) return false;
+        kind = slot.Kind;
+        Spend(ref slot, 1);
+        return true;
     }
 
     /// <summary>

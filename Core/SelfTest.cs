@@ -184,6 +184,8 @@ public static partial class SelfTest
         failures += Check("a client's inventory move is the host's to make", InventoryIntentsAreHostAuthoritative);
         failures += Check("a seat's pack survives the wire intact", InventoryCrossesTheWire);
         failures += Check("which metal falls out of a cell is the host's roll", BreakingIsTheHostsRoll);
+        failures += Check("a thrown item leaves the pack and lands on the grid", ThrowingOneLandsItOnTheField);
+        failures += Check("a client's throw is the host's to place", ThrowingIsHostAuthoritative);
         failures += Check("a spent player watches a living team-mate", SpentPlayerSpectatesASurvivor);
         failures += Check("cables and stolen lances cross to onlookers", RigsCrossTheWire);
         failures += Check("a laggy client's shot is scored where they saw it", LagCompensationRewindsTheTarget);
@@ -272,6 +274,10 @@ public static partial class SelfTest
             FlinchThrowsTheHeadAwayFromTheHit);
         failures += Check("no run of nonsense can put a NaN in a joint",
             NothingProducesANonNumber);
+
+        // DESCENT: the run director, the rolled bosses and the seam that keeps the mode from
+        // quietly becoming SANDBOX with a bar over it. Its own block so the output reads as one.
+        failures += RunDescentChecks();
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -6612,6 +6618,104 @@ public static partial class SelfTest
         // And the mirror is the host's pack, roll and all — not the client's guess at it.
         if (cw.InventoryOf(1).Fingerprint() != pack.Fingerprint())
             return "the client kept its own roll instead of the host's";
+        return null;
+    }
+
+    /// <summary>
+    /// Shift + right-click on a stack: one unit leaves the pack and is lying on the grid in
+    /// front of the craft — near enough to walk back to, far enough that the very next tick
+    /// does not hand it straight back. And it is worth exactly what was thrown: one round out
+    /// is one round back, not the handful a stray pickup off the field carries.
+    /// </summary>
+    private static string? ThrowingOneLandsItOnTheField()
+    {
+        var world = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Pickups.Clear();
+
+        Inventory pack = world.Inventory;
+        pack.Slots[0] = new ItemStack(ItemKind.Bullet, 7);
+
+        if (!world.ThrowOne(world.LocalIndex, InvRegion.Slots, 0))
+            return "the throw was refused on a slot holding seven rounds";
+        if (pack.Slots[0].Count != 6)
+            return $"the throw took {7 - pack.Slots[0].Count} rounds off the stack, not one";
+        if (world.Pickups.Count != 1)
+            return $"{world.Pickups.Count} pieces of salvage landed for one thrown round";
+        if (world.Pickups[0].Kind != PickupKind.Ammo)
+            return "the thrown round landed as something else";
+        if (world.Pickups[0].Amount != 1)
+            return $"the thrown round is worth {world.Pickups[0].Amount} coming back";
+
+        // Out past the collect reach, so it does not bounce straight back into the pack.
+        float reach = PlayerTank.Radius + Pickup.Radius;
+        if (Torus.Distance(world.Pickups[0].Position, world.Player.Position) <= reach)
+            return "the thrown round landed inside the craft's own pickup radius";
+
+        // A tick with nobody moving leaves it where it fell.
+        StepWithoutInput(world);
+        if (world.Pickups.Count != 1 || pack.Slots[0].Count != 6)
+            return "the thrown round was scooped straight back up";
+
+        // Driven over, it comes back as one round and is spent — a thrown item is not ambient
+        // drift, so it must not reappear out in the fog and start printing rounds.
+        world.Player.Position = world.Pickups[0].Position;
+        StepWithoutInput(world);
+        if (CountItems(pack, ItemKind.Bullet) != 7)
+            return $"picking the thrown round back up gave {CountItems(pack, ItemKind.Bullet) - 6}";
+        if (world.Pickups.Count != 0)
+            return "the thrown round respawned out in the fog instead of being spent";
+
+        // Every kind a pack can hold can be thrown, and each survives the round trip as itself.
+        foreach (ItemKind kind in Enum.GetValues<ItemKind>())
+            if (World.World.ItemOf(World.World.SalvageOf(kind)) != kind)
+                return $"{ItemNames.Of(kind)} came back off the grid as something else";
+        return null;
+    }
+
+    /// <summary>
+    /// A client throwing an item away empties its own slot at once, but does not get to say
+    /// where the item lands — salvage lies on the host's field or nowhere. The host replays the
+    /// throw against the real pack and puts the item on the grid; the echo settles the client.
+    /// </summary>
+    private static string? ThrowingIsHostAuthoritative()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+        hw.Pickups.Clear();
+
+        Inventory pack = hw.InventoryOf(1);
+        pack.Add(ItemKind.CrabFragment, 3);
+        for (int i = 0; i < 10; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+        if (CountItems(cw.InventoryOf(1), ItemKind.CrabFragment) != 3)
+            return "the host's pack never reached the client";
+
+        // The client throws one, exactly as the panel does.
+        cw.Authoritative = false;
+        int before = cw.Pickups.Count;
+        if (!cw.ThrowOne(cw.LocalIndex, InvRegion.Slots, 0))
+            return "the client's mirror refused the throw";
+        if (CountEverywhere(cw.InventoryOf(1), ItemKind.CrabFragment) != 2)
+            return "the client's mirror did not answer the throw at once";
+        if (cw.Pickups.Count != before)
+            return "the client invented a piece of salvage the host never placed";
+
+        cw.FileInvIntent(new InvIntent(InvOp.Throw, InvRegion.Slots, 0, InvRegion.None, 0, 1));
+        for (int i = 0; i < 20; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+
+        if (CountEverywhere(pack, ItemKind.CrabFragment) != 2)
+            return "the client's throw never reached the host's pack";
+        if (hw.Pickups.Count != 1 || hw.Pickups[0].Kind != PickupKind.CrabFragment)
+            return "the host never laid the thrown fragment on the field";
+        // Thrown by seat 1, so it lies by seat 1's craft — not at the host's feet.
+        if (Torus.Distance(hw.Pickups[0].Position, hw.Players[1].Position) > 6f)
+            return "the thrown fragment landed somewhere other than by the craft that threw it";
+        if (cw.InventoryOf(1).Fingerprint() != pack.Fingerprint())
+            return "the host's echo and the client's mirror disagree after a throw";
+        // And the salvage the host placed is drawn on the client that threw it.
+        if (cw.Pickups.Count != 1 || cw.Pickups[0].Kind != PickupKind.CrabFragment)
+            return "the thrown fragment never came back down the wire to be seen";
         return null;
     }
 

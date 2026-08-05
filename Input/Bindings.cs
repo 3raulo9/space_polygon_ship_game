@@ -60,6 +60,12 @@ public sealed class Bindings
             InputAction.Mark => M(MouseButton.Middle, KeyboardKey.B),
             InputAction.Scoreboard => One(KeyboardKey.Tab),
 
+            // V, which nothing else in the game uses. Only ever read during a DESCENT salvage
+            // window, so it is free the rest of the time — but it still gets its own key rather
+            // than sharing, because the one moment it is read is a moment somebody is also
+            // driving around collecting parts.
+            InputAction.Ready => One(KeyboardKey.V),
+
             InputAction.TankLurch => One(KeyboardKey.Q),
             InputAction.TankSmoke => One(KeyboardKey.E),
             InputAction.TankSlug => One(KeyboardKey.R),

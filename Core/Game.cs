@@ -1003,6 +1003,13 @@ public sealed class Game : IDisposable
         // to walk, so UNRENDERED_PLANET picks the destination and UNRENDERED_HOUR (0 dawn,
         // .25 noon, .5 dusk, .75 midnight) sets the clock. Both are ignored in normal play.
         if (_capturePath != null) solo.Destination = CapturePlanet();
+        // ...and UNRENDERED_DESCENT drops the harness straight into a run. Any value turns the
+        // mode on; the value itself is read further in (see World.OpenDescent) to name a phase —
+        // "colossus", "herald", "intermission" — so the layer stack and the salvage clock can be
+        // photographed without playing four waves to reach them.
+        if (_capturePath != null
+            && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("UNRENDERED_DESCENT")))
+            solo.Mode = GameMode.Descent;
 
         _world = new World.World(_loadout, solo);
         if (_capturePath != null

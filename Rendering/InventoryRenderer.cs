@@ -56,9 +56,14 @@ internal static class InventoryRenderer
             DrawSlot(InventoryLayout.GridSlot(i), inv.Slots[i]);
 
         // --- Hints along the bottom ---
+        // Three lines of 7px glyphs, the topmost sitting one pixel under the grid's last row.
+        // "PLACE ONE" rather than the old "DROP ONE": there is a real drop now, and the two
+        // must not read as the same gesture.
         PixelFont.DrawCentered("LCLICK-MOVE STACK    RCLICK-USE OR BREAK ONE",
+            W / 2, H - 23, 1, Scale(Ink, 0.6f));
+        PixelFont.DrawCentered("HOLD LCLICK THEN RCLICK-PLACE ONE",
             W / 2, H - 15, 1, Scale(Ink, 0.6f));
-        PixelFont.DrawCentered("HOLD LCLICK THEN RCLICK-DROP ONE    F-CLOSE",
+        PixelFont.DrawCentered("SHIFT+RCLICK-THROW ONE OUT    F-CLOSE",
             W / 2, H - 7, 1, Scale(Ink, 0.6f));
 
         // --- The hover label, then the dragged stack, then the pointer ---

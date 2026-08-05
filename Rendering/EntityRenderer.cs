@@ -29,6 +29,21 @@ public sealed class EntityRenderer
     private readonly PolyMesh _wire = Meshes.WireCoil(Palette.CopperWire);
     private readonly PolyMesh _powder = Meshes.PowderPile(Palette.PowderDark, Palette.PowderGrain);
 
+    // The rest of the pack, for the ones a player has thrown back out. Nothing on the field
+    // spawns as any of these, but once thrown they lie there like anything else — and they are
+    // the same meshes the panel's icons turn, so an ingot on the grid is recognisably the
+    // ingot that was in the slot.
+    private readonly PolyMesh _ingot = Meshes.Ingot(Palette.AlloyIngot, Palette.HudChrome);
+    private readonly PolyMesh _lead = Meshes.MetalBlock(Palette.LeadGrey, Palette.ScrapSteel);
+    private readonly PolyMesh _zinc = Meshes.Crystal(Palette.ZincPale);
+    private readonly PolyMesh _lithium = Meshes.Rod(Palette.HudChrome, Palette.LithiumRose);
+    private readonly PolyMesh _core = Meshes.CrabCoreGem(Palette.NeonMagenta);
+
+    // The DESCENT bosses. One renderer for all five lineages and every roll: unlike the crab
+    // and the mouth, whose bodies are typed out, these are built from a genome at the moment
+    // they are first drawn and cached from then on. See BossModel.
+    private readonly BossRenderer _boss = new();
+
     // Death debris: a jagged chunk and a bright spark. Both are drawn white and
     // tinted per-instance so each piece can carry its own (fading) colour.
     private readonly PolyMesh _shard = Meshes.Shard(Color.White);
@@ -159,6 +174,23 @@ public sealed class EntityRenderer
             _maw.DrawLasers(maw, cameraPos, mawShift);
         }
 
+        // The DESCENT bosses. Drawn after the two hand-built monsters and before the craft,
+        // because on the frames all three exist — a run's boss standing in a field the sandbox
+        // never seeded — the rolled one is the biggest object in the scene and everything else
+        // should read as being in front of it.
+        foreach (var rolled in world.Bosses)
+        {
+            if (rolled.Dead) continue;
+            Vector2 at = Torus.NearestImage(rolled.Position, eyeXZ);
+            _boss.Draw(rolled, cameraPos, at - rolled.Position);
+        }
+
+        // And the shards rising out of the corpses. After the bosses, so a shard leaves a body
+        // that has already been placed.
+        foreach (var shard in world.Shards)
+            _boss.DrawShard(shard, cameraPos,
+                Torus.NearestImage(shard.Position, eyeXZ) - shard.Position);
+
         // The other players. This is a first-person game, so a craft on screen never existed
         // outside the hangar's turntable — which is exactly the draw reused here, one per
         // seat that is not the eye behind the camera. Drawn at each craft's own height, so a
@@ -222,6 +254,28 @@ public sealed class EntityRenderer
                 case PickupKind.SpaceGunpowder:
                     _powder.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.4f);
                     break;
+
+                // Thrown out of somebody's pack. Down near the deck with the rest of the
+                // parts — they were dropped, not left drifting.
+                case PickupKind.DenseAlloy:
+                    _ingot.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.4f);
+                    break;
+                case PickupKind.Lead:
+                    _lead.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.3f);
+                    break;
+                case PickupKind.Zinc:
+                    _zinc.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.3f);
+                    break;
+                case PickupKind.Lithium:
+                    _lithium.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.2f);
+                    break;
+                // A finished core hangs at full height and full size. It is the most valuable
+                // thing that can be lying on a floor, and it should look like it from across
+                // the street.
+                case PickupKind.CrabCore:
+                    _core.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 0.9f);
+                    break;
+
                 default: _bullet.Draw(at, pk.Spin, pk.BobHeight, cameraPos); break;
             }
         }

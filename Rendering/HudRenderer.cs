@@ -143,6 +143,11 @@ internal static class HudRenderer
         Raylib.DrawRectangle(0, StripH, W, 1, Scale(Palette.GridFar, 0.6f)); // seam line
 
         DrawBars(p);
+        // DESCENT's own instruments — the wave bar, the boss's layer stack, the salvage clock.
+        // Drawn straight after the vitals so they sit in the band under the strip, and behind
+        // everything a chassis adds, so a SOLDIER's or a FISH's own overlay still wins the
+        // pixels it needs. Draws nothing at all in SANDBOX.
+        if (world.IsDescent) DescentHud.Draw(world);
         DrawWeaponSlots(world.InventoryOf(world.ViewSeat));
         if (world.Spectating) DrawSpectating(world);
         DrawRadar(world, p);
@@ -502,7 +507,8 @@ internal static class HudRenderer
         }
 
         // Floating salvage shows as friendly blips so the player can steer toward a
-        // resupply: charged green for batteries, flag-yellow for stray rounds.
+        // resupply — each in its own colour, so a thrown core and a stray round are not the
+        // same dot.
         foreach (var pk in world.Pickups)
         {
             Vector2 rel = Torus.Delta(p.Position, pk.Position);
@@ -514,8 +520,7 @@ internal static class HudRenderer
             px = Math.Clamp(px, x0 + 1, x0 + RadarSize - 2);
             py = Math.Clamp(py, y0 + 1, y0 + RadarSize - 2);
 
-            Color blip = pk.Kind == PickupKind.Battery ? Palette.BatteryCore : Palette.Flag;
-            Raylib.DrawRectangle((int)px, (int)py, 1, 1, blip);
+            Raylib.DrawRectangle((int)px, (int)py, 1, 1, World.World.SalvageColour(pk.Kind));
         }
 
         // Player: a small chrome triangle fixed at centre, always pointing up.

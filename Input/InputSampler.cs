@@ -66,6 +66,7 @@ public sealed class InputSampler
         if (b.Down(InputAction.Slot4)) down |= Btn.Slot4;
 
         if (b.Down(InputAction.Interact)) down |= Btn.Interact;
+        if (b.Down(InputAction.Ready)) down |= Btn.Ready;
 
         _frame = new InputFrame(down, down & ~_prevDown, Raylib.GetMouseDelta());
         _prevDown = down;

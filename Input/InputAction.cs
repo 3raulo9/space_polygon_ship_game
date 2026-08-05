@@ -27,6 +27,12 @@ public enum InputAction : byte
     Mark,
     Scoreboard,
 
+    /// <summary>Held during a DESCENT salvage window to cut the break short. Its own row rather
+    /// than a reuse of INTERACT — which is otherwise never read inside a match — because
+    /// INTERACT defaults to E, and E is already the TANK's smoke and the SOLDIER's right hook.
+    /// A key that lays a screen and votes to end the break in the same press is not one key.</summary>
+    Ready,
+
     // --- TANK ------------------------------------------------------------------------
     // PLANT is deliberately absent: the heavy chassis digs in on the jump binding, which is
     // the key that used to leave the ground and now refuses to. Giving it a second row here
@@ -90,7 +96,7 @@ public static class InputActions
 
     public static InputSection SectionOf(InputAction a) => a switch
     {
-        <= InputAction.Scoreboard => InputSection.General,
+        <= InputAction.Ready => InputSection.General,
         <= InputAction.TankSlug => InputSection.Tank,
         <= InputAction.SpiderPounce => InputSection.Spider,
         <= InputAction.HighJump => InputSection.Soldier,
@@ -144,6 +150,7 @@ public static class InputActions
         InputAction.Inventory => "INVENTORY",
         InputAction.Mark => "MARK",
         InputAction.Scoreboard => "SCOREBOARD",
+        InputAction.Ready => "READY (DESCENT)",
 
         InputAction.TankLurch => "LURCH",
         InputAction.TankSmoke => "SMOKE",
