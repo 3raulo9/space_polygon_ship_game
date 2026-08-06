@@ -1,36 +1,94 @@
-using Raylib_cs;
+using Unrendered.Acoustics;
+using Unrendered.Input;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
-/// Player-configurable controls, persisted to a small text file next to the game
-/// so choices survive a relaunch (the "swap for initial launch" preference has to
-/// stick). Deliberately narrow: a turn-direction swap, a movement scheme, and a
-/// fire key. No arbitrary rebinding UI — a couple of curated schemes keep the cold
-/// terminal feel and stay unbreakable.
+/// Everything the player can change about how the game reads them and how it sounds,
+/// persisted to a small text file next to the executable so choices survive a relaunch.
+///
+/// <para>This used to be three curated schemes — a turn swap, a WASD/arrows choice and a
+/// three-way fire key — chosen over a rebinding UI because "a couple of curated schemes keep
+/// the cold terminal feel and stay unbreakable". They are gone. The game grew five chassis
+/// with thirty bindings between them, and by then the presets covered a tenth of the keys and
+/// answered none of the questions people actually had. What replaced them is
+/// <see cref="Bindings"/>: every one of the three is expressible there, and so is everything
+/// they could not say.</para>
 /// </summary>
 public sealed class Settings
 {
-    /// <summary>Which keys drive/turn the craft.</summary>
-    public enum Scheme
+    /// <summary>The control layout. Mutated in place by the settings screen, which is why
+    /// <see cref="InputMap.Active"/> can hold a reference and see changes at once.</summary>
+    public Bindings Bindings { get; } = new();
+
+    /// <summary>The multiplayer nickname the player last set in the lobby room. Empty means
+    /// "use the Steam persona name" — the room falls back to that so a first-time player still
+    /// has a name over their head without having to type one.</summary>
+    public string Nickname { get; set; } = "";
+
+    // --- Audio --------------------------------------------------------------------
+    // One fader per bus the mixer actually has. Split this way — rather than one SFX knob —
+    // because the four things below are what people ask for separately: the soundtrack under
+    // the guns, the guns under the monsters, and the whole loud end down at two in the
+    // morning. See Unrendered.Acoustics.Bus for which cue lands where.
+
+    public float MasterVolume { get; set; } = 1f;
+    public float MusicVolume { get; set; } = 1.4f;
+    public float ShootingVolume { get; set; } = 1f;
+    public float ExplosionsVolume { get; set; } = 1f;
+    public float EnemiesVolume { get; set; } = 1f;
+    public float PlayerVolume { get; set; } = 1f;
+
+    /// <summary>Folds the two channels together. For anyone playing on one speaker, or
+    /// deaf in one ear — without it, half of a game that now puts sounds hard left and
+    /// hard right is simply lost.</summary>
+    public bool MonoAudio { get; set; }
+
+    /// <summary>Squashes the loud end of the mix toward the quiet end. The engine has real
+    /// dynamics now — a boss dying is genuinely far louder than a footstep — and that is not
+    /// something everyone wants at three in the morning.</summary>
+    public bool SoftenLoudSounds { get; set; }
+
+    /// <summary>Reads a fader by the bus it drives, so the settings screen can walk the
+    /// mixer rather than restating it. Buses with no fader of their own answer 1 — they are
+    /// governed by the master and nothing else.</summary>
+    public float VolumeOf(Bus bus) => bus switch
     {
-        Wasd,    // W/A/S/D drive+turn, arrows mirror them
-        Arrows,  // arrow keys primary, WASD mirror
+        Bus.Music => MusicVolume,
+        Bus.Shooting => ShootingVolume,
+        Bus.Explosions => ExplosionsVolume,
+        Bus.Enemies => EnemiesVolume,
+        // A menu blip, a pickup chime and the low-shield alarm are sounds your own machine
+        // makes at you, so they ride the player's fader rather than having one of their own.
+        Bus.Player or Bus.Ui => PlayerVolume,
+        _ => 1f,
+    };
+
+    public void SetVolume(Bus bus, float v)
+    {
+        v = Math.Clamp(v, 0f, 1f);
+        switch (bus)
+        {
+            case Bus.Music: MusicVolume = v; break;
+            case Bus.Shooting: ShootingVolume = v; break;
+            case Bus.Explosions: ExplosionsVolume = v; break;
+            case Bus.Enemies: EnemiesVolume = v; break;
+            case Bus.Player or Bus.Ui: PlayerVolume = v; break;
+        }
     }
 
-    /// <summary>Which key fires.</summary>
-    public enum FireKey
+    /// <summary>Steps a fader by one notch and keeps it in range. Tenths: fine enough to
+    /// find a level, coarse enough to reach either end without holding a key.</summary>
+    public static float StepVolume(float v, int dir)
+        => MathF.Round(Math.Clamp(v + dir * 0.1f, 0f, 1f) * 10f) / 10f;
+
+    /// <summary>A fader as the settings screen shows it — a bar, not a number, because a
+    /// number tells you nothing about how loud it will be.</summary>
+    public static string VolumeLabel(float v)
     {
-        Ctrl,    // either Control (default)
-        Space,   // Space (jump then moves to Shift — see MovesJumpToShift)
-        Enter,
+        int filled = (int)MathF.Round(Math.Clamp(v, 0f, 1f) * 10f);
+        return filled == 0 ? "OFF" : new string('|', filled).PadRight(10, '.');
     }
-
-    /// <summary>When true, TurnLeft and TurnRight inputs are exchanged.</summary>
-    public bool SwapTurn { get; set; }
-
-    public Scheme Movement { get; set; } = Scheme.Wasd;
-    public FireKey Fire { get; set; } = FireKey.Ctrl;
 
     // Config file lives beside the executable so it's found regardless of CWD.
     private static string FilePath =>
@@ -51,19 +109,50 @@ public sealed class Settings
 
                 int eq = line.IndexOf('=');
                 if (eq <= 0) continue;
-                string key = line[..eq].Trim().ToLowerInvariant();
+                string key = line[..eq].Trim();
                 string val = line[(eq + 1)..].Trim();
 
-                switch (key)
+                // Bindings own their own key space and get first refusal.
+                if (s.Bindings.Load(key, val)) continue;
+
+                switch (key.ToLowerInvariant())
                 {
+                    case "nickname":
+                        s.Nickname = val;
+                        break;
+                    case "master":
+                        if (float.TryParse(val, out float mv)) s.MasterVolume = Math.Clamp(mv, 0f, 1f);
+                        break;
+                    case "music":
+                        if (float.TryParse(val, out float muv)) s.MusicVolume = Math.Clamp(muv, 0f, 1f);
+                        break;
+                    case "shooting":
+                        if (float.TryParse(val, out float shv)) s.ShootingVolume = Math.Clamp(shv, 0f, 1f);
+                        break;
+                    case "explosions":
+                        if (float.TryParse(val, out float exv)) s.ExplosionsVolume = Math.Clamp(exv, 0f, 1f);
+                        break;
+                    case "enemies":
+                        if (float.TryParse(val, out float env)) s.EnemiesVolume = Math.Clamp(env, 0f, 1f);
+                        break;
+                    case "player":
+                        if (float.TryParse(val, out float plv)) s.PlayerVolume = Math.Clamp(plv, 0f, 1f);
+                        break;
+                    case "mono":
+                        s.MonoAudio = val is "1" or "true";
+                        break;
+                    case "softenloud":
+                        s.SoftenLoudSounds = val is "1" or "true";
+                        break;
+
+                    // Retired: the three curated schemes and the single SFX fader they sat
+                    // beside. Skipped rather than mapped forward — a swap-turn flag cannot be
+                    // honoured against a table the player may since have rebound by hand, and
+                    // guessing would silently move somebody's controls.
                     case "swapturn":
-                        s.SwapTurn = val is "1" or "true";
-                        break;
                     case "movement":
-                        if (Enum.TryParse(val, ignoreCase: true, out Scheme sc)) s.Movement = sc;
-                        break;
                     case "fire":
-                        if (Enum.TryParse(val, ignoreCase: true, out FireKey fk)) s.Fire = fk;
+                    case "sfx":
                         break;
                 }
             }
@@ -81,69 +170,25 @@ public sealed class Settings
     {
         try
         {
-            File.WriteAllText(FilePath,
-                "# VOID TANKS controls\n" +
-                $"swapTurn={(SwapTurn ? 1 : 0)}\n" +
-                $"movement={Movement}\n" +
-                $"fire={Fire}\n");
+            var sb = new System.Text.StringBuilder();
+            sb.Append("# UNRENDERED controls\n");
+            sb.Append($"nickname={Nickname}\n");
+            sb.Append($"master={MasterVolume:0.0}\n");
+            sb.Append($"music={MusicVolume:0.0}\n");
+            sb.Append($"shooting={ShootingVolume:0.0}\n");
+            sb.Append($"explosions={ExplosionsVolume:0.0}\n");
+            sb.Append($"enemies={EnemiesVolume:0.0}\n");
+            sb.Append($"player={PlayerVolume:0.0}\n");
+            sb.Append($"mono={(MonoAudio ? 1 : 0)}\n");
+            sb.Append($"softenLoud={(SoftenLoudSounds ? 1 : 0)}\n");
+            sb.Append("\n# controls — primary , secondary\n");
+            foreach (string line in Bindings.Save()) sb.Append(line).Append('\n');
+
+            File.WriteAllText(FilePath, sb.ToString());
         }
         catch
         {
             // Read-only disk / permissions — the session's settings still apply.
         }
     }
-
-    // --- Resolved key sets (consulted by InputMap) ---
-
-    public bool ForwardDown() =>
-        Movement == Scheme.Wasd
-            ? Down(KeyboardKey.W) || Down(KeyboardKey.Up)
-            : Down(KeyboardKey.Up) || Down(KeyboardKey.W);
-
-    public bool BackDown() =>
-        Down(KeyboardKey.S) || Down(KeyboardKey.Down);
-
-    // Left/right honour the swap: with SwapTurn on, pressing "left" turns right.
-    public bool TurnLeftDown() => RawTurn(left: !SwapTurn);
-    public bool TurnRightDown() => RawTurn(left: SwapTurn);
-
-    private static bool RawTurn(bool left) =>
-        left ? Down(KeyboardKey.A) || Down(KeyboardKey.Left)
-             : Down(KeyboardKey.D) || Down(KeyboardKey.Right);
-
-    public bool FireDown() => Fire switch
-    {
-        FireKey.Space => Down(KeyboardKey.Space),
-        FireKey.Enter => Down(KeyboardKey.Enter),
-        _ => Down(KeyboardKey.LeftControl) || Down(KeyboardKey.RightControl),
-    } || Raylib.IsMouseButtonDown(MouseButton.Left);
-
-    // Heavy grenade (the pad's "B"): a distinct button, held is fine — the tank's
-    // own longer cooldown paces it. Right mouse mirrors it for mouse-only play.
-    public bool GrenadeDown() =>
-        Down(KeyboardKey.G) || Raylib.IsMouseButtonDown(MouseButton.Right);
-
-    // Hyperspace warp (the pad's "X"): a single deliberate press, not a hold —
-    // you commit to the gamble once, you don't chain-warp.
-    public bool HyperspacePressed() => Pressed(KeyboardKey.X);
-
-    // Jump is Space unless Space is the fire key, in which case it moves to Shift
-    // so the two never collide.
-    public bool JumpPressed() =>
-        Fire == FireKey.Space
-            ? Pressed(KeyboardKey.LeftShift) || Pressed(KeyboardKey.RightShift)
-            : Pressed(KeyboardKey.Space);
-
-    private static bool Down(KeyboardKey k) => Raylib.IsKeyDown(k);
-    private static bool Pressed(KeyboardKey k) => Raylib.IsKeyPressed(k);
-
-    // --- Human-readable labels for the settings screen ---
-    public string SwapLabel => SwapTurn ? "ON" : "OFF";
-    public string MovementLabel => Movement == Scheme.Wasd ? "WASD" : "ARROWS";
-    public string FireLabel => Fire switch
-    {
-        FireKey.Space => "SPACE",
-        FireKey.Enter => "ENTER",
-        _ => "CTRL",
-    };
 }

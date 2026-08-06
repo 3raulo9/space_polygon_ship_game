@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Draws the flat-shaded solids (enemies, projectiles) inside the 3D pass.
@@ -21,6 +21,30 @@ public sealed class EntityRenderer
     // Floating salvage: a battery cell (shield + hyper) and a stray round (ammo).
     private readonly PolyMesh _battery = Meshes.Battery(Palette.BatteryFill, Palette.BatteryCore);
     private readonly PolyMesh _bullet = Meshes.Bullet(Palette.Flag, Palette.HudChrome);
+
+    // And what a body leaves lying where it fell. Deliberately duller and smaller than the
+    // two drifting salvage cells: parts are worth doubling back for, not worth crossing a
+    // field under fire for, and the silhouette should say so from a distance.
+    private readonly PolyMesh _scrap = Meshes.ScrapPlate(Palette.ScrapSteel);
+    private readonly PolyMesh _wire = Meshes.WireCoil(Palette.CopperWire);
+    private readonly PolyMesh _powder = Meshes.PowderPile(Palette.PowderDark, Palette.PowderGrain);
+
+    // The rest of the pack, for the ones a player has thrown back out. Nothing on the field
+    // spawns as any of these, but once thrown they lie there like anything else — and they are
+    // the same meshes the panel's icons turn, so an ingot on the grid is recognisably the
+    // ingot that was in the slot.
+    private readonly PolyMesh _ingot = Meshes.Ingot(Palette.AlloyIngot, Palette.HudChrome);
+    private readonly PolyMesh _lead = Meshes.MetalBlock(Palette.LeadGrey, Palette.ScrapSteel);
+    private readonly PolyMesh _zinc = Meshes.Crystal(Palette.ZincPale);
+    private readonly PolyMesh _lithium = Meshes.Rod(Palette.HudChrome, Palette.LithiumRose);
+    private readonly PolyMesh _core = Meshes.CrabCoreGem(Palette.NeonMagenta);
+    private readonly PolyMesh _kit = Meshes.RepairKit(Palette.RepairShell, Palette.RepairMark);
+    private readonly PolyMesh _moon = Meshes.MoonShard(Palette.MoonStone, Palette.MoonBreak);
+
+    // The DESCENT bosses. One renderer for all five lineages and every roll: unlike the crab
+    // and the mouth, whose bodies are typed out, these are built from a genome at the moment
+    // they are first drawn and cached from then on. See BossModel.
+    private readonly BossRenderer _boss = new();
 
     // Death debris: a jagged chunk and a bright spark. Both are drawn white and
     // tinted per-instance so each piece can carry its own (fading) colour.
@@ -59,6 +83,17 @@ public sealed class EntityRenderer
     // is never on screen.
     private readonly SoldierModel _soldierModel = new();
 
+    /// <summary>One animator per body drawn through this renderer: the team-mates out in
+    /// the world, the figure on the hangar turntable, the bestiary specimen, and the
+    /// outlines a VIRUS perceives. They have memory, so they outlive the frame.</summary>
+    private readonly SoldierAnimatorSet _figures = new();
+
+    /// <summary>Stable keys for the two figures that are not entities — the hangar's and the
+    /// bestiary's — so each keeps its own animator across frames instead of being rebuilt
+    /// mid-breath.</summary>
+    private readonly object _hangarFigure = new();
+    private readonly object _bestiaryFigure = new();
+
     /// <summary>The soldier's cables and hooks in the live world — drawn from the rig's
     /// own state, not from a mesh, because a cable's shape is decided every frame by
     /// where its anchor is and how hard it is pulling.</summary>
@@ -78,15 +113,26 @@ public sealed class EntityRenderer
     // the player sees is the infection over the frame rather than a craft in front of them.
     private readonly VirusModel _virusModel = new();
 
+    // The FLOWER: the only chassis on the roster that is drawn the same whether it is on the
+    // turntable or out in the run, because it does exactly the same thing in both places.
+    private readonly FlowerModel _flowerModel = new();
+
     /// <summary>The parts of the fish's own body that hang in the player's view — the
     /// snout, the pectorals and the lantern. Drawn in the camera's frame rather than the
     /// world's, so they stay welded to the eye through a forty-degree carve.</summary>
     private readonly FishRenderer _fish = new();
 
+    /// <summary>The FLOWER's petals in flight, the rosettes they open and the reticle of a
+    /// player picking ground. Takes the plant's own model so a thrown petal is literally the
+    /// geometry missing from the ring.</summary>
+    private readonly FlowerRenderer _flower;
+
     // The SPIDER is the boss's rig at a person's size, so it gets its own CrabRenderer
     // rather than borrowing the one above — that one is carrying the live boss's scale
     // and gunmetal, and neither belongs on the player's craft.
     private readonly CrabRenderer _spiderRig = new() { Scale = CrabRig.PlayerScale };
+
+    public EntityRenderer() => _flower = new FlowerRenderer(_flowerModel);
 
     /// <summary>
     /// Draws the skyline on its own, without a world. The title and settings screens
@@ -95,7 +141,7 @@ public sealed class EntityRenderer
     /// those screens can show the same one the player is about to drive into.
     /// </summary>
     public void DrawStructures(Vector3 cameraPos)
-        => _structures.Draw(VoidTanks.World.StructureField.Backdrop, cameraPos);
+        => _structures.Draw(Unrendered.World.StructureField.Backdrop, cameraPos);
 
     public void Draw(World.World world, Vector3 cameraPos)
     {
@@ -104,6 +150,12 @@ public sealed class EntityRenderer
         // over the world's edge is then drawn just past the player rather than a whole
         // arena away, which is what keeps the seam invisible as they roam over it.
         var eyeXZ = new Vector2(cameraPos.X, cameraPos.Z);
+
+        // Open the frame for the figures. Anything drawn between here and the end of the
+        // pass keeps the animator it had; anything that has stopped being drawn eventually
+        // loses it, which is what stops a long match accumulating one per soldier that ever
+        // existed.
+        _figures.Begin();
 
         // The city first: it is the backdrop everything else is fought in front of. This
         // stage's own copy, not the shared backdrop — the towers this run has cut down
@@ -135,6 +187,43 @@ public sealed class EntityRenderer
             _maw.DrawLasers(maw, cameraPos, mawShift);
         }
 
+        // The DESCENT bosses. Drawn after the two hand-built monsters and before the craft,
+        // because on the frames all three exist — a run's boss standing in a field the sandbox
+        // never seeded — the rolled one is the biggest object in the scene and everything else
+        // should read as being in front of it.
+        foreach (var rolled in world.Bosses)
+        {
+            if (rolled.Dead) continue;
+            Vector2 at = Torus.NearestImage(rolled.Position, eyeXZ);
+            _boss.Draw(rolled, cameraPos, at - rolled.Position);
+        }
+
+        // And the shards rising out of the corpses. After the bosses, so a shard leaves a body
+        // that has already been placed.
+        foreach (var shard in world.Shards)
+            _boss.DrawShard(shard, cameraPos,
+                Torus.NearestImage(shard.Position, eyeXZ) - shard.Position);
+
+        // The other players. This is a first-person game, so a craft on screen never existed
+        // outside the hangar's turntable — which is exactly the draw reused here, one per
+        // seat that is not the eye behind the camera. Drawn at each craft's own height, so a
+        // team-mate's jump lifts their whole chassis; skipped for a spent player, whose craft
+        // is gone from the field even though their camera lingers to spectate.
+        for (int seat = 0; seat < world.Players.Count; seat++)
+        {
+            // The seat behind the camera, which while spectating is somebody else's — skipping
+            // our own instead put the craft we were riding directly on top of the lens, so a
+            // spent player watching a team-mate saw the inside of that team-mate's hull.
+            if (seat == world.ViewSeat) continue;
+            PlayerTank mate = world.Players[seat];
+            if (!mate.Alive) continue;
+            // A craft whose player has dropped is still standing there — held for their
+            // return — so it is drawn, but frozen (no idle animation clock) so it reads as
+            // dormant rather than alive.
+            float clock = mate.Away ? 0f : (float)Raylib.GetTime();
+            DrawCraft(mate, Torus.NearestImage(mate.Position, eyeXZ), cameraPos, clock);
+        }
+
         foreach (var e in world.Enemies)
         {
             if (!e.Alive) continue;
@@ -154,17 +243,70 @@ public sealed class EntityRenderer
         _squads.Draw(world, cameraPos, (float)Raylib.GetTime());
 
         // Floating pickups: bob at waist height and turn slowly on the spot, so the
-        // charge band and bullet tip catch the light as they drift in the fog. A CRAB
-        // CORE fragment reuses the battery cell's shape flooded neon-red, so it reads as
-        // a hot shard of the thing it fell out of.
+        // charge band and bullet tip catch the light as they drift in the fog, and the
+        // parts a kill scattered lie turning just off the deck where the body went down.
         foreach (var pk in world.Pickups)
         {
             Vector2 at = Torus.NearestImage(pk.Position, eyeXZ);
-            if (pk.Kind == PickupKind.CrabFragment)
-                _battery.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 1f, Palette.NeonRed);
-            else
-                (pk.Kind == PickupKind.Battery ? _battery : _bullet)
-                    .Draw(at, pk.Spin, pk.BobHeight, cameraPos);
+            switch (pk.Kind)
+            {
+                // A CRAB CORE fragment reuses the cell's shape flooded neon-red, so it reads
+                // as a hot shard of the thing it fell out of.
+                case PickupKind.CrabFragment:
+                    _battery.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 1f, Palette.NeonRed);
+                    break;
+                case PickupKind.Battery: _battery.Draw(at, pk.Spin, pk.BobHeight, cameraPos); break;
+                // Parts sit lower and turn on the spot like everything else, but they hang
+                // nearer the grid — they were dropped, not left floating.
+                case PickupKind.ScrapMetal:
+                    _scrap.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.5f);
+                    break;
+                case PickupKind.CopperWire:
+                    _wire.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.4f);
+                    break;
+                case PickupKind.SpaceGunpowder:
+                    _powder.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.4f);
+                    break;
+
+                // Thrown out of somebody's pack. Down near the deck with the rest of the
+                // parts — they were dropped, not left drifting.
+                case PickupKind.DenseAlloy:
+                    _ingot.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.4f);
+                    break;
+                case PickupKind.Lead:
+                    _lead.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.3f);
+                    break;
+                case PickupKind.Zinc:
+                    _zinc.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.3f);
+                    break;
+                case PickupKind.Lithium:
+                    _lithium.Draw(at, pk.Spin, pk.BobHeight * 0.7f, cameraPos, 1.2f);
+                    break;
+                // A finished core hangs at full height and full size. It is the most valuable
+                // thing that can be lying on a floor, and it should look like it from across
+                // the street.
+                case PickupKind.CrabCore:
+                    _core.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 0.9f);
+                    break;
+
+                // A kit floats at cell height rather than lying with the scrap: it is one of
+                // the two things worth driving across a field for, and it should be visible
+                // from the same distance the cell it does not replace is.
+                case PickupKind.RepairKit:
+                    _kit.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 1.1f);
+                    break;
+
+                // The moon fragment turns slowly and rides high — the only piece of salvage in
+                // the game drawn bigger than it is. It is the rarest object anybody will ever
+                // find on a grid, and a player who is going to cross a whole city for one has
+                // to be able to tell it from a lump of scrap at the range they first see it,
+                // which at 320 pixels across means silhouette and size and nothing else.
+                case PickupKind.MoonFragment:
+                    _moon.Draw(at, pk.Spin * 0.4f, pk.BobHeight + 0.3f, cameraPos, 1.7f);
+                    break;
+
+                default: _bullet.Draw(at, pk.Spin, pk.BobHeight, cameraPos); break;
+            }
         }
 
         foreach (var p in world.Projectiles)
@@ -187,40 +329,13 @@ public sealed class EntityRenderer
         // then the shaft itself. Drawn through the boss's own lance renderer at the
         // salvaged emitter's smaller reach — it is literally the same weapon, cut down,
         // so it should be the same light.
-        if (world.Player.Spider is { } spider)
-        {
-            if (spider.Charging || spider.BeamActive)
-            {
-                // The live flare rides the craft's heading, and the shaft leaves along the
-                // full look line — up or down wherever the ring is aimed.
-                Vector2 look = world.Player.Forward;
-                Vector2 muzzleXZ = world.Player.Position + look * SpiderWeapon.MuzzleForward;
-
-                // While charging the flare rides the live craft; once fired the shaft
-                // stays where it was loosed from, so a player who turns mid-burn sees
-                // the beam hold its line rather than sweep round with them.
-                Vector3 origin = spider.BeamActive
-                    ? spider.BeamOrigin
-                    : new Vector3(muzzleXZ.X,
-                        SpiderWeapon.MuzzleHeight + world.Player.Height, muzzleXZ.Y);
-                Vector3 dir = spider.BeamActive
-                    ? spider.BeamDirection
-                    : world.Player.Forward3;
-
-                // The shaft that is drawn is the shaft that burned: reach and width both
-                // come off the charge it went off at, through the weapon's own solvers, so
-                // a beam that looks like it swept a street is one that swept a street. The
-                // gathering flare shows the same thing before the fact — a meter filling
-                // is a beam visibly getting longer and fatter.
-                float power = spider.BeamActive ? spider.BeamPower : spider.ChargeFraction;
-                _crab.DrawLance(origin, dir,
-                    spider.Charging ? spider.ChargeFraction : 0f,
-                    spider.BeamProgress,
-                    SpiderWeapon.LengthAt(power),
-                    SpiderWeapon.RadiusAt(power),
-                    SpiderWeapon.FlareScale);
-            }
-        }
+        // Every craft's lance, not just this machine's. A team-mate's charged beam cutting a
+        // street in half used to be drawn from the local player's own emitter and nowhere
+        // else — so on the host it was invisible for all nineteen other seats, and on a
+        // client it was invisible for all twenty. Each seat is drawn from whichever source is
+        // actually authoritative for it: the live rig where this machine simulates the craft,
+        // the host's account off the wire where it does not.
+        DrawCraftRigs(world, eyeXZ);
 
         // Thrown CRAB CORE detonations: a cinematic energy burst. A floating light core
         // throws tapering lances out in every direction at once, the whole spray churning
@@ -272,22 +387,8 @@ public sealed class EntityRenderer
         // light — one beam per direction the corrupted core threw it, each flickering on
         // its own phase, because a stable shaft would be the one thing this weapon
         // cannot produce.
-        if (world.Player.Virus is { } virusRig)
-        {
-            float now = (float)Raylib.GetTime();
-            for (int i = 0; i < virusRig.Shafts.Length; i++)
-            {
-                ref readonly var shaft = ref virusRig.Shafts[i];
-                if (shaft.Life <= 0f) continue;
-
-                float progress = 1f - shaft.Life / Entities.VirusRig.LanceBurnTime;
-                float flicker = 0.55f + 0.45f * MathF.Sin(now * 70f + i * 2.4f);
-                _crab.DrawLance(shaft.Origin, shaft.Dir, 0f, progress,
-                    Entities.VirusRig.LanceLength,
-                    Entities.VirusRig.LanceRadius * flicker,
-                    0.4f);
-            }
-        }
+        // (Drawn for every seat by DrawCraftRigs above, along with the spider's lance and the
+        // grapple cables — all three are the same problem and are solved in one place.)
 
         // The SOLDIER's rig: both cables out to wherever their hooks have got to, and
         // the forearms holding the launchers. Drawn near the end so the cables pass in
@@ -298,6 +399,12 @@ public sealed class EntityRenderer
         // And the FISH's own body, for the same reason and in the same slot: it sits
         // centimetres from the eye and has to be over everything the run put behind it.
         _fish.Draw(world, cameraPos, (float)Raylib.GetTime());
+
+        // The FLOWER's petals, the rosettes they open and the ground a player is picking.
+        // Late for the same reason the two viewmodels are: a petal on the way home passes
+        // within a metre of the eye, and one drawn under the city would spend the last third
+        // of its return leg inside a wall it is nowhere near.
+        _flower.Draw(world, cameraPos, (float)Raylib.GetTime());
 
         // A TANK's screening smoke: a soft bank of murk drawn as a small clutch of translucent
         // spheres, swelling and fading with the cloud's own density. Drawn late so it hangs in
@@ -332,6 +439,113 @@ public sealed class EntityRenderer
             // Chunks shrink as they die; sparks stay small and just wink out.
             float size = s.IsSpark ? s.Size : s.Size * (0.4f + 0.6f * f);
             mesh.Draw(posXZ, s.Angle, s.Position.Y, cameraPos, size, tint);
+        }
+
+        _figures.End();
+    }
+
+    /// <summary>
+    /// One shaft of a stolen lance, mid-break — drawn through the boss's own lance renderer
+    /// because it is literally the same light, flickering on its own phase because a stable
+    /// shaft is the one thing this weapon cannot produce.
+    /// </summary>
+    private void DrawStolenShaft(Vector3 origin, Vector3 dir, float life, int index, float now)
+    {
+        float progress = 1f - life / Entities.VirusRig.LanceBurnTime;
+        float flicker = 0.55f + 0.45f * MathF.Sin(now * 70f + index * 2.4f);
+        _crab.DrawLance(origin, dir, 0f, progress,
+            Entities.VirusRig.LanceLength,
+            Entities.VirusRig.LanceRadius * flicker,
+            0.4f);
+    }
+
+    /// <summary>
+    /// Every craft's transient combat light: the VIRUS's stolen lance shafts and the SPIDER's
+    /// gathering flare and burning beam, for all twenty seats rather than only for the one at
+    /// this keyboard. The grapple cables ride along for the remote seats — the local craft's
+    /// are drawn off the viewmodel's own launchers, which is a different and closer thing.
+    ///
+    /// Each seat is taken from whichever source actually knows: a machine that simulates a
+    /// craft reads its live rig, and one that does not reads the host's account of it off the
+    /// wire (<c>Snapshot.WriteRigs</c>). Exactly one of the two applies per seat, so nothing
+    /// is ever drawn twice.
+    /// </summary>
+    private void DrawCraftRigs(World.World world, Vector2 eyeXZ)
+    {
+        float now = (float)Raylib.GetTime();
+
+        for (int seat = 0; seat < world.Players.Count; seat++)
+        {
+            // Does this machine simulate this craft? The host simulates every seat; a client
+            // simulates only its own and is told about the rest.
+            if (!world.Authoritative && seat != world.LocalIndex) continue;
+
+            PlayerTank craft = world.Players[seat];
+
+            if (craft.Virus is { } mote)
+            {
+                for (int i = 0; i < mote.Shafts.Length; i++)
+                {
+                    ref readonly var shaft = ref mote.Shafts[i];
+                    if (shaft.Life <= 0f) continue;
+                    DrawStolenShaft(shaft.Origin, shaft.Dir, shaft.Life, i, now);
+                }
+            }
+
+            if (craft.Spider is { } spider && (spider.Charging || spider.BeamActive))
+            {
+                // While charging the flare rides the live craft; once fired the shaft stays
+                // where it was loosed from, so a player who turns mid-burn sees the beam hold
+                // its line rather than sweep round with them.
+                Vector2 muzzleXZ = craft.Position + craft.Forward * SpiderWeapon.MuzzleForward;
+                Vector3 origin = spider.BeamActive
+                    ? spider.BeamOrigin
+                    : new Vector3(muzzleXZ.X, SpiderWeapon.MuzzleHeight + craft.Height, muzzleXZ.Y);
+                Vector3 dir = spider.BeamActive ? spider.BeamDirection : craft.Forward3;
+
+                // The shaft that is drawn is the shaft that burned: reach and width both come
+                // off the charge it went off at, through the weapon's own solvers, so a beam
+                // that looks like it swept a street is one that swept a street. The gathering
+                // flare shows the same thing before the fact — a meter filling is a beam
+                // visibly getting longer and fatter.
+                float power = spider.BeamActive ? spider.BeamPower : spider.ChargeFraction;
+                _crab.DrawLance(origin, dir,
+                    spider.Charging ? spider.ChargeFraction : 0f,
+                    spider.BeamProgress,
+                    SpiderWeapon.LengthAt(power),
+                    SpiderWeapon.RadiusAt(power),
+                    SpiderWeapon.FlareScale);
+            }
+
+            // Cables, for everybody but the craft the camera is inside — that one's are drawn
+            // off the viewmodel's own launchers half a metre from the eye, which is a much
+            // closer and more detailed thing than a line seen from outside a body.
+            if (seat != world.ViewSeat && craft.Rig is { } rig)
+                SoldierRenderer.DrawBodyCables(craft, rig, eyeXZ);
+        }
+
+        // And the seats this machine is only told about.
+        foreach (var (seat, rig) in world.RemoteRigs)
+        {
+            for (int i = 0; i < rig.ShaftCount && i < rig.Shafts.Length; i++)
+            {
+                ref readonly var shaft = ref rig.Shafts[i];
+                if (shaft.Life <= 0f) continue;
+                DrawStolenShaft(shaft.Origin, shaft.Dir, shaft.Life, i, now);
+            }
+
+            if (rig.HasBeam)
+            {
+                _crab.DrawLance(rig.BeamOrigin, rig.BeamDir,
+                    rig.BeamProgress < 0f ? rig.BeamCharge : 0f,
+                    rig.BeamProgress,
+                    SpiderWeapon.LengthAt(rig.BeamPower),
+                    SpiderWeapon.RadiusAt(rig.BeamPower),
+                    SpiderWeapon.FlareScale);
+            }
+
+            if (rig.HasCables && (uint)seat < (uint)world.Players.Count)
+                SoldierRenderer.DrawRemoteCables(world.Players[seat], rig, eyeXZ);
         }
     }
 
@@ -456,6 +670,7 @@ public sealed class EntityRenderer
     public void DrawUnseen(World.World world, Vector3 cameraPos, float elapsed)
     {
         var eyeXZ = new Vector2(cameraPos.X, cameraPos.Z);
+        _figures.Begin();
 
         foreach (var e in world.Enemies)
         {
@@ -475,15 +690,16 @@ public sealed class EntityRenderer
             Color edge = EdgeFor(s.Velocity.Length());
             if (edge.A == 0) continue;
 
-            var flight = new SoldierModel.FlightPose(
-                Speed: s.PlanarSpeed, Bank: s.Bank,
-                Grounded: s.Move == SoldierMove.Running,
-                Perched: s.Move == SoldierMove.Perched,
-                Blades: s.BladesOut, Stagger: s.Stagger,
-                Time: elapsed + s.Slot * 1.37f);
+            Vector2 at = Torus.NearestImage(s.Position, eyeXZ);
+            SoldierAnimator anim = _figures.For(s);
+            anim.Step(EnemySoldierRenderer.Signals(s, at, cameraPos, elapsed),
+                Raylib.GetFrameTime());
 
-            _soldierModel.DrawGhost(Torus.NearestImage(s.Position, eyeXZ), s.Height, s.Heading,
-                cameraPos, edge, flight, EnemySoldier.Scale);
+            // Every joint comes through unchanged; only the surface is gone. A wireframe of
+            // something articulated still reads as a person moving, which is the whole
+            // reason the mote can track these at all.
+            _soldierModel.DrawGhost(at, s.Height, s.Heading,
+                cameraPos, edge, anim.Pose, s.BladesOut, EnemySoldier.Scale);
         }
 
         // The two big machines are rigs rather than meshes, and wireframing a whole posed
@@ -520,6 +736,8 @@ public sealed class EntityRenderer
             Vector3 tail = head - p.Heading3 * 2.2f;
             Raylib.DrawLine3D(tail, head, Color.White);
         }
+
+        _figures.End();
     }
 
     /// <summary>
@@ -547,6 +765,120 @@ public sealed class EntityRenderer
     /// where it was — which is exactly what a sense built on disturbance would have to do.
     /// </summary>
     private readonly MotionTracker _motion = new();
+
+    /// <summary>
+    /// The pose of a figure standing in a hangar with nothing to do: breathing, shifting its
+    /// weight, scanning the room, and every seven seconds raising a launcher to look at the
+    /// hook seated in it.
+    ///
+    /// It comes out of the same animator everything else does rather than out of a function
+    /// of the clock, which is what it used to be. The beats are unchanged — that idle was
+    /// right — but running them through the layers means the launcher it lifts now has
+    /// weight in it, the head arrives at where it is looking a moment late, and the whole
+    /// figure settles rather than snapping between two sines.
+    /// </summary>
+    private SoldierPose IdlePose(object who, Vector2 pos, float heading, float elapsed)
+    {
+        SoldierAnimator anim = _figures.For(who);
+        anim.Step(new SoldierAnimator.Signals(
+            Position: pos, Height: 0f, Heading: heading, Velocity: Vector3.Zero,
+            Grounded: true, Perched: false, Anchored: false, Reeling: false,
+            LeftTension: 0f, RightTension: 0f, LeftOut: false, RightOut: false,
+            LeftHook: Vector3.Zero, RightHook: Vector3.Zero,
+            Bank: 0f, Stagger: 0f, Blades: false,
+            LookYaw: 0f, LookPitch: 0f, GroundY: 0f, Scale: 1f, Time: elapsed),
+            Raylib.GetFrameTime());
+        return anim.Pose;
+    }
+
+    /// <summary>
+    /// Another player's body out in the world, posed for what it is actually doing.
+    ///
+    /// This is the one draw in the file that had been quietly wrong. Every craft goes
+    /// through the hangar's turntable draw, which is exactly right for the four that are
+    /// machines — a tank is the same tank whether it is parked or moving — and exactly wrong
+    /// for the one that is a person: a team-mate falling forty metres between two towers was
+    /// drawn standing at ease, breathing, checking their launcher.
+    ///
+    /// Nothing about that body is on the wire but where it is, so the momentum is read the
+    /// only way it can be: by remembering where it was. Which is enough — the whole air
+    /// layer is a function of the velocity vector, and a velocity differenced off twenty
+    /// snapshots a second is a perfectly good velocity for deciding how hard a body folds.
+    /// </summary>
+    private void DrawSoldierCraft(PlayerTank craft, Vector2 pos, Vector3 cameraPos, float elapsed)
+    {
+        float scale = WorldScale(PlayerClass.Soldier);
+        Vector3 vel = _drift.Velocity(craft, pos, craft.Height);
+        var planar = new Vector2(vel.X, vel.Z);
+        bool grounded = craft.Height <= 0.02f;
+
+        // Whether they are hanging off a line is not replicated, so it is inferred: a body
+        // this far off the ground and travelling this fast is on a cable, because on this
+        // chassis there is nothing else it could be on. The inference only ever picks
+        // between two silhouettes — folded and carving, or loose and falling — and at the
+        // range a team-mate is usually seen at, picking the right one of those is the whole
+        // of the job.
+        bool anchored = !grounded && planar.Length() > 9f;
+        float tension = anchored ? Math.Clamp(planar.Length() / 22f, 0.2f, 1f) : 0f;
+
+        SoldierAnimator anim = _figures.For(craft);
+        _figures.Flinch(craft, craft.FlinchSeq, craft.FlinchAngle, craft.FlinchAmount);
+
+        anim.Step(new SoldierAnimator.Signals(
+            Position: craft.Position, Height: craft.Height, Heading: craft.Heading,
+            Velocity: vel,
+            Grounded: grounded, Perched: false, Anchored: anchored, Reeling: false,
+            LeftTension: tension, RightTension: tension,
+            LeftOut: anchored, RightOut: anchored,
+            // No anchor point on the wire either, so the hands are pointed up the line the
+            // body is being pulled along — which is where a cable that is carrying you is.
+            LeftHook: new Vector3(pos.X, craft.Height + 14f, pos.Y),
+            RightHook: new Vector3(pos.X, craft.Height + 14f, pos.Y),
+            Bank: 0f, Stagger: 0f, Blades: false,
+            LookYaw: 0f, LookPitch: craft.Pitch,
+            GroundY: 0f, Scale: scale, Time: elapsed),
+            Raylib.GetFrameTime());
+
+        Loadout build = craft.Build;
+        _soldierModel.DrawFlier(pos, craft.Height, craft.Heading, cameraPos,
+            build.PartColor(PlayerClass.Soldier, 0),
+            build.PartColor(PlayerClass.Soldier, 1),
+            build.PartColor(PlayerClass.Soldier, 2),
+            build.PartColor(PlayerClass.Soldier, 3),
+            Palette.SoldierBlade, anim.Pose, blades: false, scale);
+    }
+
+    /// <summary>
+    /// Remembers where a body was so its momentum can be recovered. The snapshot carries a
+    /// position and not a velocity, and differencing one against the last is the only way
+    /// back to the vector every air pose is a function of.
+    /// </summary>
+    private readonly DriftTracker _drift = new();
+
+    private sealed class DriftTracker
+    {
+        private readonly Dictionary<object, (Vector2 At, float Y, Vector3 V)> _seen =
+            new(ReferenceEqualityComparer.Instance);
+
+        public Vector3 Velocity(object who, Vector2 now, float height)
+        {
+            var v = Vector3.Zero;
+            if (_seen.TryGetValue(who, out var was))
+            {
+                float dt = MathF.Max(1e-4f, Raylib.GetFrameTime());
+                Vector2 moved = Torus.Delta(was.At, now);
+                var raw = new Vector3(moved.X / dt, (height - was.Y) / dt, moved.Y / dt);
+                // Heavily smoothed. This is sampled on the render clock against a position
+                // that only changes when a packet lands, so the raw difference is a spike
+                // followed by several frames of nothing — and a body posed off that would
+                // flicker between flying and falling twenty times a second.
+                if (raw.Length() < 200f) v = Vector3.Lerp(was.V, raw, 0.12f);
+                else v = was.V;
+            }
+            _seen[who] = (now, height, v);
+            return v;
+        }
+    }
 
     private sealed class MotionTracker
     {
@@ -582,12 +914,22 @@ public sealed class EntityRenderer
         // standing on the grid is a soldier having a bad day.
         if (kind == EnemyKind.Soldier)
         {
-            var pose = new SoldierModel.FlightPose(
-                Speed: 26f, Bank: 0.30f, Grounded: false, Perched: false,
-                Blades: true, Stagger: 0f, Time: elapsed);
+            // Held at the speed and the bank of a committed run, so the specimen strikes
+            // the shape it kills from rather than standing to attention in a display case.
+            SoldierAnimator anim = _figures.For(_bestiaryFigure);
+            anim.Step(new SoldierAnimator.Signals(
+                Position: pos, Height: 1.9f, Heading: heading,
+                Velocity: new Vector3(MathF.Sin(heading) * 26f, -2f, MathF.Cos(heading) * 26f),
+                Grounded: false, Perched: false, Anchored: true, Reeling: false,
+                LeftTension: 0.8f, RightTension: 0.3f, LeftOut: true, RightOut: false,
+                LeftHook: new Vector3(pos.X, 12f, pos.Y + 8f), RightHook: Vector3.Zero,
+                Bank: 0.30f, Stagger: 0f, Blades: true,
+                LookYaw: 0f, LookPitch: 0.1f, GroundY: 0f, Scale: 1f, Time: elapsed),
+                Raylib.GetFrameTime());
+
             _soldierModel.DrawFlier(pos, 1.9f, heading, cameraPos,
                 Palette.SoldierCloth, Palette.SoldierMark, Palette.SoldierSteel,
-                Palette.SoldierSteel, Palette.SoldierBlade, pose);
+                Palette.SoldierSteel, Palette.SoldierBlade, anim.Pose, blades: true);
             return;
         }
 
@@ -609,6 +951,184 @@ public sealed class EntityRenderer
     /// so in words instead, so nothing is drawn here and the middle of the hangar is
     /// left as empty grid, which is the honest picture of a build the machine can't make.
     /// </summary>
+    /// <summary>
+    /// Draws another player's craft out in the world, as their chosen chassis, at the height
+    /// they are actually at — so a team-mate's jump lifts their whole body and a fish hangs
+    /// where it is swimming.
+    ///
+    /// It reuses the hangar's turntable draw wholesale. That draw places every chassis on the
+    /// grid; the height is added by translating the whole modelview up before it runs, which
+    /// works for all five without a height parameter on any of them, because every part of
+    /// every craft is ultimately a DrawTriangle3D through the current matrix. The pose is the
+    /// idle one the hangar shows — a remote player's exact limbs and recoil are not on the
+    /// wire yet, so what a team-mate reads is the right chassis, moving, jumping and firing,
+    /// rather than the precise crouch of the player driving it.
+    /// </summary>
+    public void DrawCraft(PlayerTank craft, Vector2 pos, Vector3 cameraPos, float elapsed)
+    {
+        // A virus that has seized a body is drawn AS that body, corrupted — not as the naked
+        // mote. This is the whole of the class being visible to the rest of the server: the
+        // hunter, soldier or boss the player is wearing, with the infection crawling over it.
+        // An exposed mote (or any other class) falls through to the normal chassis draw below.
+        if (craft.Class == PlayerClass.Virus && craft.Virus is { Hosted: true } worn)
+        {
+            DrawWornHost(craft, worn, pos, cameraPos, elapsed);
+            return;
+        }
+
+        // The one chassis that is a person rather than a machine, and the one the turntable
+        // draw is wrong for: a body has to be posed for what it is doing, not merely turned.
+        if (craft.Class == PlayerClass.Soldier)
+        {
+            DrawSoldierCraft(craft, pos, cameraPos, elapsed);
+            return;
+        }
+
+        // The flower is the second chassis the turntable draw is wrong for, and for the
+        // opposite reason to the soldier's: not because it moves in ways an idle cannot
+        // express, but because the two things it *does* — bending, and going into the ground —
+        // are the whole of what the player next to it has to be able to read. A flower drawn
+        // idling would stand perfectly straight through a dodge and stay standing through a
+        // replant, which is the two most important frames of the class rendered as a lie.
+        if (craft.Class == PlayerClass.Flower && craft.Flower is { } stalk)
+        {
+            float fs = WorldScale(PlayerClass.Flower);
+            Rlgl.PushMatrix();
+            Rlgl.Translatef(pos.X, craft.Height, pos.Y);
+            Rlgl.Scalef(fs, fs, fs);
+            Rlgl.Translatef(-pos.X, 0f, -pos.Y);
+            _flowerModel.DrawPosed(craft.Build, pos, craft.Heading, 0f, cameraPos,
+                FlowerModel.From(stalk, craft.Heading, elapsed));
+            Rlgl.PopMatrix();
+            return;
+        }
+
+        // The hangar turntable draws every chassis at a scale tuned for a close camera, which
+        // in the world sits it far too small beside the enemies — a player tank a third the
+        // size of the hunters it fights. So the whole craft is scaled about its own base to
+        // match the bigness of the thing it stands next to: a player tank the size of an
+        // enemy tank, a player soldier the size of an enemy soldier, and the spider grown up
+        // from its cramped hangar size to something that reads as a war machine.
+        float s = WorldScale(craft.Class);
+
+        Rlgl.PushMatrix();
+        // Scale uniformly about the craft's ground point, then lift the result by its height,
+        // so a jump raises the whole enlarged body and the feet still meet the grid at rest.
+        Rlgl.Translatef(pos.X, craft.Height, pos.Y);
+        Rlgl.Scalef(s, s, s);
+        Rlgl.Translatef(-pos.X, 0f, -pos.Y);
+        DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
+        Rlgl.PopMatrix();
+    }
+
+    /// <summary>
+    /// Draws a virus that is wearing a body, for every machine but the one flying it — the seized
+    /// hunter/elite/soldier or the worn Crab/Maw, rendered with the same models the enemy or boss
+    /// is drawn from so it reads as exactly the thing it is, then tinted toward the build's own
+    /// infection colour (deepening as the husk rots) and finished with the writhing veins the
+    /// player sees crawling over their own view — the class's "antennas". The body's transform is
+    /// the player's snapshotted position/heading/height; nothing here is simulated, only drawn.
+    /// </summary>
+    private void DrawWornHost(PlayerTank craft, VirusRig worn, Vector2 pos, Vector3 cameraPos,
+        float elapsed)
+    {
+        Loadout build = craft.Build;
+        Color mote = build.PartColor(PlayerClass.Virus, 0);
+        Color veins = build.PartColor(PlayerClass.Virus, 1);
+        Color husk = build.PartColor(PlayerClass.Virus, 2);
+        Color payload = build.PartColor(PlayerClass.Virus, 3);
+        float corruption = worn.Corruption;   // 0 fresh .. 1 nearly spent
+        float heading = craft.Heading;
+
+        // Where the veins cluster on this body — roughly its middle, so the "antennas" sit on the
+        // host rather than at its feet.
+        float coreY;
+
+        switch (worn.HostKind)
+        {
+            case VirusHost.Hunter:
+            case VirusHost.Elite:
+            {
+                bool elite = worn.HostKind == VirusHost.Elite;
+                PolyMesh mesh = elite ? _eliteCone : _standardTank;
+                Color baseFill = elite ? Palette.EliteFill : Palette.EnemyFill;
+                Color body = GridRenderer.LerpColor(baseFill, veins, 0.35f + 0.45f * corruption);
+                mesh.Draw(pos, heading, craft.Height, cameraPos, EnemyTank.Scale, body);
+                coreY = craft.Height + 2f;
+                break;
+            }
+
+            case VirusHost.Soldier:
+                // The person, drawn from the same articulated figure the hangar shows. It carries
+                // its own palette; the infection reads from the veins laid over it below.
+                _soldierModel.Draw(build, pos, heading, cameraPos,
+                    IdlePose(_hangarFigure, pos, heading, elapsed));
+                coreY = craft.Height + 2.2f;
+                break;
+
+            case VirusHost.Crab:
+            {
+                // The worn Crab-Core: the boss's own rig on a slow idle (gem turning, legs
+                // breathing, carapace shut), its core flooded toward the infection as it rots.
+                // Grounded, like the boss and like a grounded host, so no height is passed.
+                var pose = new CrabPose(
+                    CoreSpin: elapsed * 1.3f,
+                    ClawOpen: 0f,
+                    LegPhase: elapsed * 1.8f,
+                    CoreColor: GridRenderer.LerpColor(payload, veins, corruption),
+                    SlideOffset: Vector2.Zero);
+                _crab.Draw(pose, pos, heading, cameraPos);
+                coreY = CrabRig.CoreWorldY;
+                break;
+            }
+
+            case VirusHost.Maw:
+            {
+                // The worn Maw-Core hovers. It has no legs to ground it, so it is drawn a few
+                // units above the player's hover origin rather than at the boss's own high float.
+                MawPose pose = MawCore.ShowcasePose(elapsed);
+                float bodyY = craft.Height + 3f;
+                _maw.Draw(pose, pos, bodyY, cameraPos);
+                coreY = bodyY;
+                break;
+            }
+
+            default:
+                // Defensive: the caller only enters here while Hosted, so HostKind is never None.
+                // If it somehow is, fall back to the mote rather than drawing nothing.
+                _virusModel.Draw(build, pos, heading, cameraPos, elapsed);
+                return;
+        }
+
+        _virusModel.DrawPosed(pos, heading, coreY, cameraPos, elapsed,
+            mote, veins, husk, payload, corruption);
+    }
+
+    /// <summary>
+    /// How much to grow each chassis when drawn out in the world, chosen so a player craft
+    /// reads at the same size as its enemy counterpart: the tank matches
+    /// <see cref="EnemyTank.Scale"/>, the soldier matches <see cref="EnemySoldier.Scale"/>,
+    /// and the two with no enemy twin (fish, virus) are sized to sit convincingly among the
+    /// rest rather than shrinking into specks. The spider is grown well past its hangar size —
+    /// larger, as a war machine should be, though still short of the Crab-Core it is a cut
+    /// down cousin of.
+    /// </summary>
+    private static float WorldScale(PlayerClass chassis) => chassis switch
+    {
+        PlayerClass.Tank => 3.2f,     // = EnemyTank.Scale; the player parts share the base size
+        PlayerClass.Soldier => 2.0f,  // = EnemySoldier.Scale
+        PlayerClass.Spider => 2.1f,   // grown up from the hangar, but the wide leg span reads
+                                      // big fast, so this stays well under the Crab-Core
+        PlayerClass.Fish => 2.4f,
+        PlayerClass.Virus => 2.4f,
+        // Modest. This model is already three metres tall in its own frame — the only chassis
+        // built at anything like world scale to begin with, because a plant that had to be
+        // enlarged four times to read would have been drawn as a weed. Just enough to put its
+        // head comfortably above a hunter's turret, which is where it wants to be.
+        PlayerClass.Flower => 1.35f,
+        _ => 1f,
+    };
+
     public void DrawLoadoutShowcase(Loadout loadout, Vector2 pos, float heading,
         Vector3 cameraPos, float elapsed)
     {
@@ -642,7 +1162,8 @@ public sealed class EntityRenderer
             case PlayerClass.Soldier:
                 // Posed rather than merely turned: it breathes, shifts its weight, scans
                 // the hangar and periodically raises a launcher to check the hook in it.
-                _soldierModel.Draw(loadout, pos, heading, cameraPos, elapsed);
+                _soldierModel.Draw(loadout, pos, heading, cameraPos,
+                    IdlePose(_hangarFigure, pos, heading, elapsed));
                 break;
 
             case PlayerClass.Fish:
@@ -657,6 +1178,13 @@ public sealed class EntityRenderer
                 // its veins cast about for a body, and the husk of the last thing it wore
                 // tumbles around it. The turntable heading turns the whole cloud slowly.
                 _virusModel.Draw(loadout, pos, heading, cameraPos, elapsed);
+                break;
+
+            case PlayerClass.Flower:
+                // Standing on the plate and swaying, which is also everything it will ever do
+                // out in the run. The one specimen in the hangar that is showing the player the
+                // literal truth rather than an idle: this is the pose.
+                _flowerModel.Draw(loadout, pos, heading, cameraPos, elapsed);
                 break;
         }
     }

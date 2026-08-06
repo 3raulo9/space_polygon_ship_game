@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// The Maw-Core's set piece: what happens when the hanging mouth comes down on a
@@ -81,7 +81,7 @@ public sealed class MawDigestion : ICinematicView
 
         Hits++;
         _flinch = 1f;
-        Audio.PlayMawHurt((float)Hits / EscapeHits);
+        _cues.Add(new EntityCue(Cue.MawHurt, _maw.Position, (float)Hits / EscapeHits));
 
         if (Hits < EscapeHits) return false;
         BeginSpit();
@@ -135,6 +135,22 @@ public sealed class MawDigestion : ICinematicView
     /// </summary>
     private const float GulletRoll = 0.26f;
 
+    /// <summary>
+    /// One-shot sounds this raised, each with the place it happened. Drained and cleared by
+    /// the world, which is the only thing here with a wire to put them on — played from
+    /// inside this class they reached the host's speaker and nobody else's, so a team-mate
+    /// being eaten was a silent event to every player watching it happen.
+    ///
+    /// <para>Not cleared in <see cref="Update"/>: the swallow is raised by the constructor
+    /// and the shots landed inside by <see cref="RegisterShot"/>, neither of which is inside
+    /// a step.</para>
+    /// </summary>
+    public IReadOnlyList<EntityCue> Cues => _cues;
+    private readonly List<EntityCue> _cues = new();
+
+    /// <summary>Called by the world once it has emitted them.</summary>
+    public void ClearCues() => _cues.Clear();
+
     private readonly MawCore _maw;
     private readonly PlayerTank _player;
 
@@ -169,7 +185,7 @@ public sealed class MawDigestion : ICinematicView
         // shield starts going.
         _biteClock = BiteInterval;
 
-        Audio.PlayMawSwallow();
+        _cues.Add(new EntityCue(Cue.MawSwallow, _maw.Position));
     }
 
     /// <summary>The beat currently playing.</summary>
@@ -180,6 +196,10 @@ public sealed class MawDigestion : ICinematicView
 
     /// <summary>True while the thing actually has the craft inside it.</summary>
     public bool Held => _stage is Stage.Swallow or Stage.Digest;
+
+    /// <summary>The craft in the throat — see <see cref="CrabSeizure.Victim"/> for why this
+    /// has to be asked for rather than assumed to be the local one.</summary>
+    public PlayerTank Victim => _player;
 
     // --- What the renderer reads (ICinematicView) -----------------------------
 
@@ -275,7 +295,7 @@ public sealed class MawDigestion : ICinematicView
         if (_biteClock > 0f) return Event.None;
 
         _biteClock = BiteInterval;
-        Audio.PlayMawDigest();
+        _cues.Add(new EntityCue(Cue.MawDigest, _maw.Position));
         Shake = 1f;
         return Event.Bitten;
     }
@@ -290,7 +310,7 @@ public sealed class MawDigestion : ICinematicView
     private void BeginSpit()
     {
         _maw.ReleasePrey();
-        Audio.PlayMawRelease();
+        _cues.Add(new EntityCue(Cue.MawRelease, _maw.Position));
         Enter(Stage.Spit);
     }
 
@@ -328,7 +348,7 @@ public sealed class MawDigestion : ICinematicView
         if (_player.Height > 0f) return Event.None;
 
         _player.Height = 0f;
-        Audio.PlayCrashLanding();
+        _cues.Add(new EntityCue(Cue.CrashLanding, _player.Position));
         Enter(Stage.Recover);
         return Event.Landed;
     }

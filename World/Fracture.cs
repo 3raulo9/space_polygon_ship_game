@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.World;
+namespace Unrendered.World;
 
 /// <summary>One block of a fractured tower, in the structure's own local (unscaled) space —
 /// the same space the renderer's tower meshes are built in, so a chunk drawn at the
@@ -226,6 +226,47 @@ public sealed class Fracture
         for (int i = 0; i < _chunks.Length; i++)
             if (_chunks[i].Alive) { AnyStanding = true; return; }
         AnyStanding = false;
+    }
+
+    // --- The wire -------------------------------------------------------------------
+    // A cut tower's whole state is which of its cells are left, and the layout that decides
+    // how many there are is a constant — so one bit per cell describes it exactly. Six bytes
+    // covers the 36 this stack produces with room for a finer grid later, which is cheap
+    // enough to re-send every snapshot and let loss heal itself.
+
+    /// <summary>Bytes one tower's standing-cell mask takes. Fixed, so the packet's per-entry
+    /// size is fixed too and a reader never has to be told how many cells to expect.</summary>
+    public const int MaskBytes = 6;
+
+    /// <summary>One bit per cell, set while it still stands.</summary>
+    public void WriteMask(Span<byte> dst)
+    {
+        dst.Clear();
+        int n = Math.Min(_chunks.Length, MaskBytes * 8);
+        for (int i = 0; i < n; i++)
+            if (_chunks[i].Alive) dst[i >> 3] |= (byte)(1 << (i & 7));
+    }
+
+    /// <summary>
+    /// Kills every cell the host says has gone, handing each back in world space so the caller
+    /// can throw it as real falling rubble. Deliberately one-way — see
+    /// <see cref="Structure.NetApply"/> for why a client never revives a cell.
+    /// </summary>
+    public void ApplyMask(ReadOnlySpan<byte> src, List<DebrisSpawn> detached)
+    {
+        bool changed = false;
+        int n = Math.Min(_chunks.Length, MaskBytes * 8);
+        for (int i = 0; i < n; i++)
+        {
+            ref FractureChunk ch = ref _chunks[i];
+            if (!ch.Alive) continue;
+            if ((src[i >> 3] & (1 << (i & 7))) != 0) continue;
+            Break(ref ch, detached);
+            changed = true;
+        }
+        if (!changed) return;
+        Version++;
+        RecountStanding();
     }
 
     // local (unscaled) -> world: scale, rotate by heading (0 faces +Z), translate. Matches

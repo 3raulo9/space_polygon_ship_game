@@ -1,7 +1,10 @@
-using System.Numerics;
-using VoidTanks.World;
+﻿using System.Numerics;
+using Unrendered.Entities;
+using Unrendered.Net;
+using Unrendered.UI;
+using Unrendered.World;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// Headless behaviour check for the combat sim — no window, no graphics. Drives
@@ -9,7 +12,7 @@ namespace VoidTanks.Core;
 /// the player can destroy an enemy, and an enemy can damage the player. Run with
 /// `dotnet run -- --selftest`. Exits non-zero on failure so it can gate a build.
 /// </summary>
-public static class SelfTest
+public static partial class SelfTest
 {
     public static int Run()
     {
@@ -29,6 +32,12 @@ public static class SelfTest
         failures += Check("salvage stows into the inventory, doesn't auto-charge", BatteryStowsThenCharges);
         failures += Check("bullet salvage stows a random handful of rounds", AmmoStowsThenLoads);
         failures += Check("three fragments craft a throwable CRAB CORE", FragmentsCraftCrabCore);
+        failures += Check("materials craft rounds and cells", MaterialsCraftRoundsAndCells);
+        failures += Check("the bench takes a thing apart into its parts", TeardownYieldsParts);
+        failures += Check("each bench takes only what it should", BenchesTakeOnlyWhatTheyShould);
+        failures += Check("salvage two players reach at once is not duplicated", SalvageIsSpentWhenTaken);
+        failures += Check("a client sees the salvage it is standing in", ClientSeesTheNearestSalvage);
+        failures += Check("salvage never lands inside a wall", SalvageNeverLandsInsideAWall);
         failures += Check("a thrown CRAB CORE blast destroys enemies", CrabCoreBlastKills);
         failures += Check("a CRAB CORE blast can destroy the Crab-Core", CrabCoreBlastKillsBoss);
         failures += Check("a CRAB CORE blast can destroy the Maw-Core", CrabCoreBlastKillsMaw);
@@ -49,6 +58,12 @@ public static class SelfTest
         failures += Check("the loadout budget refuses an eleventh point", BudgetRefusesOverspend);
         failures += Check("a 5/5/5 build is exactly the historical craft", DefaultBuildIsTheOldCraft);
         failures += Check("loadout points reach the player's live stats", LoadoutDrivesPlayerStats);
+        failures += Check("a solo run that ends puts up an ending, and a match never does", RunOverOpensOnlySolo);
+        failures += Check("the ending screen tells the truth about the run", RunOverReadsTheRun);
+        failures += Check("shields break one charge at a time, then the hull bleeds", ShieldChargesThenHull);
+        failures += Check("a battery buys a charge and a kit buys hull", CellsAndKitsMendDifferentLayers);
+        failures += Check("a moon fragment buys all three, or nothing", MoonFragmentRestoresEverything);
+        failures += Check("a whole build survives the wire", ABuildSurvivesTheWire);
         failures += Check("the spider's lance costs rounds and burns a line", SpiderLanceKills);
         failures += Check("charging the spider's lance roots the craft", SpiderChargeRootsTheCraft);
         failures += Check("the spider wears its core on the front", SpiderWearsItsCoreOnTheFront);
@@ -125,6 +140,157 @@ public static class SelfTest
         failures += Check("an escort shoots the enemy, and holds fire without one", EscortPicksItsFights);
         failures += Check("shooting an escort loses it", BetrayedEscortTurns);
         failures += Check("view shake rings down on every chassis", ShakeAlwaysSettles);
+        failures += Check("an input frame survives the wire intact", InputFrameRoundTrips);
+        failures += Check("one click is one shot however the loop steps", EdgesAreSpentOnce);
+        failures += Check("the pretend wire delays, drops and keeps order", LoopbackCarriesTheTraffic);
+        failures += Check("a solo run is still one craft with three lives", SoloIsUnchanged);
+        failures += Check("the host seats up to twenty and then refuses", SeatsFillToTheCap);
+        failures += Check("revives run out into spectating, not a lost match", RevivesRunOutIntoSpectating);
+        failures += Check("friendly fire is the host's toggle, never self-harm", FriendlyFireIsTheHostsCall);
+        failures += Check("every seat drives from its own keys", EverySeatDrivesItself);
+        failures += Check("hunters chase whoever is nearest them", HuntersChaseTheNearest);
+        failures += Check("a spent player is no longer prey", SpectatorsAreNotHunted);
+        failures += Check("a round knows which seat fired it", RoundsCarryTheirOwner);
+        failures += Check("friendly fire off, a team-mate's round passes through", FriendlyFireOffSparesTheTeam);
+        failures += Check("friendly fire on, a team-mate's round bites", FriendlyFireOnHurtsTheTeam);
+        failures += Check("a snapshot survives the wire and lands where it was sent", SnapshotRoundTrips);
+        failures += Check("a client sees the host's craft move, over a bad wire", ClientTracksTheHost);
+        failures += Check("latency does not drag a client's own craft backwards", PredictionIsNotDraggedBackwardsByLatency);
+        failures += Check("a player's own aim is never wrenched back by the wire", ClientAimIsNeverWrenchedBack);
+        failures += Check("one press is one shot, even with the packet lost", ALostInputPacketCostsNoActionAndDuplicatesNone);
+        failures += Check("a remote craft coasts through a lost packet, it doesn't stall", ARemoteCraftCoastsThroughALostPacket);
+        failures += Check("a client's own craft obeys the host's harm and capture", OwnCraftObeysTheHost);
+        failures += Check("a remote craft glides between snapshots, it doesn't strobe", RemoteCraftInterpolates);
+        failures += Check("a boss's seizure crosses so onlookers see the grab", SeizureArmCrossesTheWire);
+        failures += Check("debris thrown on the host is seen on the client", EffectCrossesTheWire);
+        failures += Check("a join code decodes back to the host who read it out", JoinCodesRoundTrip);
+        failures += Check("the handshake completes on the lobby screen alone", LobbyHandshakeSeatsAJoiner);
+        failures += Check("a pick in the room installs that chassis on both the client and the host", PickInstallsChosenChassis);
+        failures += Check("a sound raised on the host is heard on the client, positioned", SoundCrossesTheWire);
+        failures += Check("a client no longer simulates the field it is only shown", ClientDoesNotSimulateTheField);
+        failures += Check("the host's bosses cross the wire as client puppets", BossesCrossTheWire);
+        failures += Check("salvage on the host is drawn on the client", PickupsCrossTheField);
+        failures += Check("a snapshot carries each seat's chassis, and the client rebuilds it", ChassisCrossesTheWire);
+        failures += Check("two players open close enough to see each other", SeatsOpenWithinSight);
+        failures += Check("a client grows its roster to see a later, higher-seated joiner", ClientGrowsForLaterSeats);
+        failures += Check("a lost field packet keeps the enemies it had", FieldPacketIsKeepLast);
+        failures += Check("a dropped player is held, then restored on rejoin", DropAndRejoinRestoresTheSeat);
+        failures += Check("a rejoined player's controls still reach the host", ARejoinedPlayerCanStillDrive);
+        failures += Check("a full match refuses a new joiner but not a rejoiner", FullMatchStillLetsYouBack);
+        failures += Check("the five worlds are five different places", TheFiveWorldsAreDifferentPlaces);
+        failures += Check("a world's gravity and density reach the sim", APlanetsConditionsReachTheSim);
+        failures += Check("night on SOLUNE closes the fog and the hunters in", NightOnSoluneClosesIn);
+        failures += Check("the destination and the mode survive the wire", RulesSurviveTheWire);
+        failures += Check("the world's clock crosses to a client", TheHoursCrossesTheWire);
+        failures += Check("a room's vote settles on the most-wanted world", TheRoomVoteSettles);
+        failures += Check("enemies off empties PLANET but keeps the city", EnemiesOffEmptiesThePlanet);
+        failures += Check("a worn host, and its rot, cross the wire", VirusHostCrossesTheWire);
+        failures += Check("a tower cut down on the host comes down on the client", StructureDamageCrossesTheWire);
+        failures += Check("a razed lot stays razed for a client that arrives late", RazedLotsReachALateClient);
+        failures += Check("salvage is personal: each craft keeps what it drove over", SalvageIsPerSeat);
+        failures += Check("a client's inventory move is the host's to make", InventoryIntentsAreHostAuthoritative);
+        failures += Check("a seat's pack survives the wire intact", InventoryCrossesTheWire);
+        failures += Check("which metal falls out of a cell is the host's roll", BreakingIsTheHostsRoll);
+        failures += Check("a thrown item leaves the pack and lands on the grid", ThrowingOneLandsItOnTheField);
+        failures += Check("a client's throw is the host's to place", ThrowingIsHostAuthoritative);
+        failures += Check("a spent player watches a living team-mate", SpentPlayerSpectatesASurvivor);
+        failures += Check("cables and stolen lances cross to onlookers", RigsCrossTheWire);
+        failures += Check("a laggy client's shot is scored where they saw it", LagCompensationRewindsTheTarget);
+        failures += Check("a remote player's cable leaves their own body", RigTriggersAreSeatAware);
+        failures += Check("a remote tank's smoke screen hides that tank", MachineKitsAreSeatAware);
+        failures += Check("the city is solid to every craft, not just this one", WallsAreSolidForEverySeat);
+        failures += Check("squads hunt whoever is nearest them", SquadsHuntEverySeat);
+        failures += Check("falling rubble crushes any player under it", CrushBillsEverySeat);
+        failures += Check("the field fills around every player, not just the host", SpawnsFollowEverySeat);
+
+        // --- A room with more than two people in it -------------------------------
+        // Everything above this line was written against a host and one client, which is the
+        // one shape of session that was never actually broken.
+        failures += Check("five players all see each other as the craft they picked", EveryoneSeesEveryChassis);
+        failures += Check("a craft owns its build, so nobody is redrawn as somebody else", CraftBuildIsNotShared);
+        failures += Check("a hello sent into a socket that isn't up yet is repeated", HelloSurvivesADeadSocket);
+        failures += Check("one player leaving does not end everybody else's match", AHostOutlivesItsPlayers);
+        failures += Check("a seat given up in the lobby is handed to the next joiner", AbandonedSeatsAreReused);
+        failures += Check("a full match tells the joiner so instead of ignoring them", AFullMatchRefusesOutLoud);
+        failures += Check("somebody who joins a running match still picks their craft", LateJoinerPicksTheirChassis);
+        failures += Check("a player who arrives after LAUNCH is still named on every screen", NamesReachEveryoneAfterLaunch);
+        failures += Check("the points and paint a player spent reach every screen", ABuildReachesEveryone);
+        failures += Check("a rules change reaches the seat count clients grow by", RulesReachTheClientsWorld);
+
+        // --- The room ---------------------------------------------------------------
+        // Twenty players is a room, not twenty simultaneous single-player games. These are
+        // the things that make it one, and every last one of them is about whether something
+        // done on one machine reached another.
+        failures += Check("a kill is credited and announced to the whole room", KillsAreCreditedAndAnnounced);
+        failures += Check("the scoreboard and the ping column cross the wire", TheScoreboardCrossesTheWire);
+        failures += Check("a mark one player drops is seen by the others", MarksReachTheWholeRoom);
+        failures += Check("a spectator can choose who they watch", ASpectatorCanChangeWhoTheyWatch);
+
+        // --- The sound engine ------------------------------------------------------
+        // Pure float arithmetic, so all of it runs with no audio device at all. This is
+        // how the mix is checked without two machines and a pair of ears.
+        failures += Check("a sound gets quieter and duller the further off it is", DistanceDullsAndQuietens);
+        failures += Check("a sound to the right comes out of the right speaker", PanFollowsTheView);
+        failures += Check("a tower between you and a shot muffles it", TheCityMufflesWhatIsBehindIt);
+        failures += Check("a distant blast arrives after the flash", SoundTakesTimeToArrive);
+        failures += Check("twenty rifles do not become forty voices", InstanceCapsHoldTheLine);
+        failures += Check("a loud close sound displaces a quiet far one", LoudNearbyBeatsQuietFarOff);
+        failures += Check("a boss death is never dropped for a footstep", PriorityProtectsTheBigMoments);
+        failures += Check("the mix never leaves the rails", TheLimiterHoldsTheCeiling);
+        failures += Check("a blast in your face muffles the whole world", ConcussionDucksAndDulls);
+        failures += Check("a spectator hears from the craft they are riding", EarsRideTheCamera);
+        failures += Check("a sound over the seam is heard beside you", TheTorusDoesNotBreakTheEars);
+        failures += Check("the world's noise fades out but the menu keeps its voice", WorldFadeSilencesTheWorldNotTheUi);
+
+        // --- The monsters can reach anybody, not just seat 0 ----------------------
+        failures += Check("the crab's beam burns whoever is standing in it", BeamBurnsEverySeat);
+        failures += Check("the crab seizes whoever it corners, not only the host", SeizureTakesEverySeat);
+        failures += Check("the maw swallows whoever stands under it", MawSwallowsEverySeat);
+        failures += Check("the maw's lasers bite every craft they reach", MawLasersBiteEverySeat);
+        failures += Check("one player being seized does not disarm the rest", ASeizedMateDoesNotFreezeTheRoom);
+        failures += Check("a splash round bites whoever is standing in it", SplashBitesEverySeat);
+
+        // --- Controls and the mixer -----------------------------------------------
+        failures += Check("the shipped bindings are the controls the game always had",
+            DefaultBindingsMatchTheOldHardcodedKeys);
+        failures += Check("a rebound control survives being written and read back",
+            BindingsRoundTripThroughTheConfig);
+        failures += Check("two actions on one button are flagged, and only where it matters",
+            ClashesAreReportedWithinASectionOnly);
+        failures += Check("the controls list fits the screen wherever it is scrolled to",
+            TheControlsListAlwaysFitsOnScreen);
+        failures += Check("every cue is on a fader the player can actually reach",
+            EveryCueIsOnACategoryBus);
+        failures += Check("a category fader turns down its own cues and nobody else's",
+            CategoryFadersAreIndependent);
+
+        // The figure. Everything here is true over time rather than in any one frame, which
+        // is exactly why none of it can be checked by looking at the game.
+        failures += Check("a body in the air folds harder the faster it goes", FlightFoldsWithSpeed);
+        failures += Check("an arrival buckles the knees and springs back up",
+            LandingCompressesThenRecovers);
+        failures += Check("a limb arrives after the body it hangs from",
+            LimbsLagTheBodyTheyHangFrom);
+        failures += Check("a planted boot stays put while the body walks over it",
+            PlantedBootsDoNotSkate);
+        failures += Check("the boots stay on their own sides of the body",
+            BootsStayOnTheirOwnSides);
+        failures += Check("the shoulders turn against the hips through a stride",
+            HipsAndShouldersTurnAgainstEachOther);
+        failures += Check("a hand goes to the cable that is carrying it",
+            AHeldCablePutsTheHandOnItsLauncher);
+        failures += Check("a hit throws the head away from whatever caused it",
+            FlinchThrowsTheHeadAwayFromTheHit);
+        failures += Check("no run of nonsense can put a NaN in a joint",
+            NothingProducesANonNumber);
+
+        // DESCENT: the run director, the rolled bosses and the seam that keeps the mode from
+        // quietly becoming SANDBOX with a bar over it. Its own block so the output reads as one.
+        failures += RunDescentChecks();
+
+        // The FLOWER: a chassis made almost entirely of refusals, none of which a screenshot
+        // can tell apart from a broken one. Its own block, same reasoning as above.
+        failures += RunFlowerChecks();
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -287,36 +453,45 @@ public static class SelfTest
     {
         var lo = new Loadout();
 
-        // A track can only climb into points that are actually free, so maxing one out
-        // from the even opening spread means selling the other two down first. That the
-        // climb stalls until you do is itself the rule under test.
-        while (lo.Adjust(Loadout.Stat.Shield, +1)) { }
-        if (lo.Shield != 6) return $"shield climbed to {lo.Shield} on one spare point";
+        // A track can only climb into points that are actually free, and the opening 5/5/5/5
+        // spread spends the budget exactly — so a track cannot climb at all until something
+        // else is sold down. That the climb stalls until you do is itself the rule under test.
+        if (lo.Adjust(Loadout.Stat.Shield, +1))
+            return $"shield climbed to {lo.Shield} with the budget already spent";
 
         while (lo.Adjust(Loadout.Stat.Speed, -1)) { }
         while (lo.Adjust(Loadout.Stat.Ammo, -1)) { }
         while (lo.Adjust(Loadout.Stat.Shield, +1)) { }
         if (lo.Shield != Loadout.StatMax) return $"shield capped at {lo.Shield}, want 10";
 
-        while (lo.Adjust(Loadout.Stat.Speed, +1)) { }
-        if (lo.Speed != 5) return $"second track reached {lo.Speed}, want 5";
+        // Ten in shields, one apiece in speed and ammo and the untouched five in hull is
+        // seventeen of twenty, so the fourth track can take the last three and stop dead.
+        while (lo.Adjust(Loadout.Stat.Health, +1)) { }
+        if (lo.Health != 8) return $"the fourth track reached {lo.Health}, want 8";
 
-        if (lo.Adjust(Loadout.Stat.Ammo, +1))
-            return $"third track climbed to {lo.Ammo} with the budget spent";
-        if (lo.Ammo != Loadout.StatMin) return $"third track sits at {lo.Ammo}, want 1";
+        if (lo.Adjust(Loadout.Stat.Speed, +1))
+            return $"a track climbed to {lo.Speed} with the budget spent";
+        if (lo.Speed != Loadout.StatMin) return $"speed sits at {lo.Speed}, want 1";
         if (lo.Spent != Loadout.Budget) return $"spent {lo.Spent}, want {Loadout.Budget}";
 
-        // ...and an even spread is legal, with a point left over.
+        // ...and the even spread is legal, spending the lot exactly.
         var even = new Loadout();
-        if (even.Spent != 15 || even.Remaining != 1)
-            return $"5/5/5 spends {even.Spent} of {Loadout.Budget}";
+        if (even.Spent != Loadout.Budget || even.Remaining != 0)
+            return $"5/5/5/5 spends {even.Spent} of {Loadout.Budget}";
         return null;
     }
 
     private static string? DefaultBuildIsTheOldCraft()
     {
         var lo = new Loadout();
-        if (MathF.Abs(lo.MaxShield - 100f) > 0.01f) return $"shield {lo.MaxShield}, want 100";
+        // The historical 100 points of punishment, now split down the middle: five charges of
+        // ten in front of fifty of hull. Adding the fourth track was not allowed to make
+        // anybody tougher, and this is the assertion that says so.
+        if (MathF.Abs(lo.MaxShield - 50f) > 0.01f) return $"shield {lo.MaxShield}, want 50";
+        if (MathF.Abs(lo.MaxHealth - 50f) > 0.01f) return $"hull {lo.MaxHealth}, want 50";
+        if (MathF.Abs(lo.MaxShield + lo.MaxHealth - 100f) > 0.01f)
+            return $"a flat build soaks {lo.MaxShield + lo.MaxHealth}, want the historical 100";
+        if (lo.ShieldCharges != 5) return $"{lo.ShieldCharges} charges, want 5";
         if (MathF.Abs(lo.SpeedScale - 1f) > 0.001f) return $"speed scale {lo.SpeedScale}, want 1";
         if (lo.MaxAmmo != 50) return $"magazine {lo.MaxAmmo}, want 50";
         return null;
@@ -336,6 +511,287 @@ public static class SelfTest
             return $"top speed {world.Player.TopSpeed} doesn't match the speed track";
         if (world.Player.Ammo > world.Player.MaxAmmo)
             return "opened with more rounds than the magazine holds";
+        return null;
+    }
+
+    /// <summary>
+    /// When the ending screen is allowed to appear. Both endings of a solo run earn it — the
+    /// craft spent, and a DESCENT cleared — and a networked match never does, whatever happens
+    /// to the craft at this keyboard. Nineteen other people are still playing.
+    /// </summary>
+    private static string? RunOverOpensOnlySolo()
+    {
+        var solo = new World.World(null, MatchSettings.SinglePlayer) { DynamicSpawning = false };
+        solo.Enemies.Clear();
+        if (RunOverScreen.ShouldOpen(solo, networked: false))
+            return "a live run was called over before anything happened to it";
+
+        // Spent: the run is over. Every life, not one — a solo run opens with the match's
+        // revives on it and a craft with a comeback left is not finished.
+        for (int i = 0; i < 12 && solo.Player.Alive; i++) SpendALife(solo.Player);
+        if (!solo.Player.Spectating) return "the test failed to spend the craft";
+        if (!RunOverScreen.ShouldOpen(solo, networked: false))
+            return "a spent solo craft did not end the run";
+
+        // The identical world in a match ends nothing — this is the guard that matters, since
+        // the loop's only other cue that it is in a match is the session being non-null.
+        if (RunOverScreen.ShouldOpen(solo, networked: true))
+            return "a match put an ending screen over one player's death";
+
+        // ...and winning ends a run too, which is the half a plain death check would miss.
+        var won = new World.World(null,
+            new MatchSettings { MaxPlayers = 1, Mode = GameMode.Descent })
+        { DynamicSpawning = false };
+        if (won.Run is null) return "a DESCENT world opened with no run on it";
+        if (RunOverScreen.ShouldOpen(won, networked: false))
+            return "a descent was called over at the landing";
+        won.Run.SkipTo(DescentPhase.Cleared, Descent.WaveCount, won);
+        if (!RunOverScreen.ShouldOpen(won, networked: false))
+            return "clearing a world did not end the run";
+        if (won.Player.Spectating) return "the test cleared the world by dying, which proves nothing";
+        return null;
+    }
+
+    /// <summary>
+    /// What the panel says. A win must not be dressed as a death — different heading, different
+    /// first row — and the run's own numbers have to be the ones it reports.
+    /// </summary>
+    private static string? RunOverReadsTheRun()
+    {
+        var lost = new World.World(new Loadout { Class = PlayerClass.Fish },
+            MatchSettings.SinglePlayer)
+        { DynamicSpawning = false };
+        lost.Enemies.Clear();
+        for (int i = 0; i < 12 && lost.Player.Alive; i++) SpendALife(lost.Player);
+
+        var screen = new RunOverScreen();
+        screen.Open(lost);
+        if (screen.Won) return "a spent craft was reported as a win";
+        if (screen.RetryLabel != "TRY AGAIN") return $"a loss offered '{screen.RetryLabel}'";
+        if (screen.Selected != RunOverScreen.Row.Retry)
+            return "the ending did not open on the row a player most likely wants";
+        // The craft it names is the craft that was flown, off Build (what the renderer reads),
+        // not the stale Class copy that has drifted from it before.
+        if (!Named(screen, "CRAFT", "FISH")) return "the ending named the wrong chassis";
+
+        // A cleared DESCENT: the other face of the same screen.
+        var won = new World.World(null, new MatchSettings { MaxPlayers = 1, Mode = GameMode.Descent })
+        { DynamicSpawning = false };
+        if (won.Run is null) return "a DESCENT world opened with no run on it";
+        won.Run.SkipTo(DescentPhase.Cleared, Descent.WaveCount, won);
+        screen.Open(won);
+        if (!screen.Won) return "a cleared world was reported as a death";
+        if (screen.RetryLabel != "GO AGAIN") return $"a win offered '{screen.RetryLabel}'";
+        if (!screen.Title.Contains("CLEAR")) return $"a win was headed '{screen.Title}'";
+        if (!Named(screen, "REACHED", "ALL FIVE WAVES"))
+            return "a cleared run did not say it had gone all the way down";
+
+        // Every row leads somewhere, and no two lead to the same place.
+        var seen = new HashSet<RunOverScreen.Action>();
+        foreach (var row in System.Enum.GetValues<RunOverScreen.Row>())
+        {
+            if (screen.LabelOf(row).Length == 0) return $"row {row} has no label";
+            if (screen.HintOf(row).Length == 0) return $"row {row} explains nothing";
+            screen.SelectForTest(row);
+            if (!seen.Add(RowAction(row))) return $"two rows do the same thing ({row})";
+        }
+        if (seen.Count != RunOverScreen.RowCount) return "a row leads nowhere";
+
+        // The clock is read as a length of time, not as a float of seconds.
+        if (RunOverScreen.Clock(0f) != "0:00") return "a run of no time read as " + RunOverScreen.Clock(0f);
+        if (RunOverScreen.Clock(125f) != "2:05") return "125 seconds read as " + RunOverScreen.Clock(125f);
+        return null;
+    }
+
+    private static RunOverScreen.Action RowAction(RunOverScreen.Row row) => row switch
+    {
+        RunOverScreen.Row.Retry => RunOverScreen.Action.Retry,
+        RunOverScreen.Row.Hangar => RunOverScreen.Action.Hangar,
+        _ => RunOverScreen.Action.Menu,
+    };
+
+    /// <summary>Whether the ending's readout carries a given label with a given value.</summary>
+    private static bool Named(RunOverScreen screen, string label, string value)
+    {
+        foreach (var (l, v) in screen.Lines)
+            if (l == label) return v == value;
+        return false;
+    }
+
+    /// <summary>
+    /// The two-layer damage model, end to end: charges are counted off one at a time, a hit
+    /// bigger than the charge it breaks spills into the next, nothing reaches the hull while
+    /// any charge stands, and only the hull running out spends a life.
+    /// </summary>
+    private static string? ShieldChargesThenHull()
+    {
+        var lo = new Loadout();                       // 5 charges of 10, 50 of hull
+        var world = new World.World(lo, new MatchSettings { Revives = 3 });
+        PlayerTank p = world.Player;
+
+        if (p.ChargesLeft != 5) return $"opened on {p.ChargesLeft} charges, want 5";
+
+        // A hit inside one charge breaks nothing yet — it is not spent until it is empty.
+        p.TakeDamage(6f);
+        if (p.ChargesLeft != 5) return $"a partial hit popped a charge ({p.ChargesLeft} left)";
+        if (p.TopChargeFraction > 0.45f) return "the top charge did not read as bitten into";
+
+        // ...and the next four points finish it.
+        p.TakeDamage(4f);
+        if (p.ChargesLeft != 4) return $"an emptied charge did not break ({p.ChargesLeft} left)";
+
+        // A big hit spills: 25 is two and a half charges, and the half lands on the third.
+        p.TakeDamage(25f);
+        if (p.ChargesLeft != 2) return $"a 25-point hit left {p.ChargesLeft} charges, want 2";
+        if (MathF.Abs(p.Health - p.MaxHealth) > 0.001f)
+            return "damage reached the hull with charges still standing";
+
+        // Strip the rest of the shield exactly, and the hull is still untouched.
+        p.TakeDamage(p.Shield);
+        if (p.ChargesLeft != 0) return "the last charge survived a hit worth all of it";
+        if (MathF.Abs(p.Health - p.MaxHealth) > 0.001f)
+            return "the hull took the overkill of a hit that exactly emptied the shield";
+        int lives0 = p.Lives;
+        if (lives0 != world.Match.Revives + 1) return "the match's revives did not reach the craft";
+
+        // NOW it bleeds, and only now.
+        p.TakeDamage(10f);
+        if (MathF.Abs(p.Health - (p.MaxHealth - 10f)) > 0.001f)
+            return $"hull at {p.Health} after a 10-point hit through a spent shield";
+        if (p.Lives != lives0) return "a hull scratch cost a life";
+
+        // And running the hull out is what spends one — which brings the whole craft back.
+        p.TakeDamage(p.Health);
+        if (p.Lives != lives0 - 1) return "an emptied hull did not spend a life";
+        if (p.ChargesLeft != 5 || p.Health < p.MaxHealth - 0.001f)
+            return "a revive did not rebuild the craft whole";
+        return null;
+    }
+
+    /// <summary>
+    /// The two consumables mend the two layers and neither substitutes for the other: a cell
+    /// puts back exactly one charge and never touches hull, a kit mends hull and never puts a
+    /// charge back.
+    /// </summary>
+    private static string? CellsAndKitsMendDifferentLayers()
+    {
+        var world = new World.World(new Loadout(), new MatchSettings { Revives = 3 });
+        PlayerTank p = world.Player;
+
+        // A craft that has been through it: the shields stripped and the hull opened, then
+        // two charges put back on the stack. Both layers hurt, which is the only state where
+        // the two items can be told apart by what they do.
+        p.TakeDamage(p.MaxShield + 12f);
+        p.ChargeShield(2);
+        if (p.ChargesLeft != 2) return $"the setup left {p.ChargesLeft} charges, want 2";
+        float hurtHull = p.Health;
+        if (hurtHull >= p.MaxHealth) return "the setup failed to wound the hull";
+
+        // A cell: one charge, and the hull is not its business.
+        var inv = world.Inventory;
+        inv.Slots[0] = new ItemStack(ItemKind.Battery, 1);
+        if (!world.ChargeFromSlot(p, inv, 0)) return "a cell refused to be spent on a hurt craft";
+        if (p.ChargesLeft != 3) return $"one cell left {p.ChargesLeft} charges, want 3";
+        if (MathF.Abs(p.Health - hurtHull) > 0.001f) return "a cell mended the hull";
+
+        // A kit: hull, and the shields are not its business.
+        int charges = p.ChargesLeft;
+        inv.Slots[1] = new ItemStack(ItemKind.RepairKit, 1);
+        if (!world.ChargeFromSlot(p, inv, 1)) return "a kit refused to be spent on a hurt hull";
+        if (p.Health <= hurtHull) return "a kit did not mend the hull";
+        if (p.ChargesLeft != charges) return "a kit put a shield charge back";
+
+        // Neither is wasted on a craft that does not need it.
+        p.Shield = p.MaxShield;
+        p.Health = p.MaxHealth;
+        p.Hyper = p.MaxHyper;
+        inv.Slots[2] = new ItemStack(ItemKind.Battery, 1);
+        inv.Slots[3] = new ItemStack(ItemKind.RepairKit, 1);
+        if (world.ChargeFromSlot(p, inv, 2)) return "a full craft still swallowed a cell";
+        if (world.ChargeFromSlot(p, inv, 3)) return "an unhurt hull still swallowed a kit";
+        return null;
+    }
+
+    /// <summary>
+    /// The moon fragment is the one item that does all three at once — every charge, the whole
+    /// hull, the full reserve — and, exactly like the cell and the kit, refuses to be spent on a
+    /// craft that needs none of it.
+    ///
+    /// <para>The refusal is the half worth checking. This is the rarest object in the game and
+    /// the only one a player might carry across a whole run waiting for the right moment; an
+    /// item that strong being silently swallowed by a full craft on a mis-click is not a
+    /// balance problem, it is the run.</para>
+    /// </summary>
+    private static string? MoonFragmentRestoresEverything()
+    {
+        var world = new World.World(new Loadout(), new MatchSettings { Revives = 3 });
+        PlayerTank p = world.Player;
+
+        // A craft in genuine trouble on all three counts at once, which nothing else in the
+        // game can answer in one action.
+        p.TakeDamage(p.MaxShield + 18f);
+        p.Hyper = 5f;
+        if (p.ChargesLeft != 0) return "the setup left the shield standing";
+        if (p.Health >= p.MaxHealth) return "the setup failed to wound the hull";
+
+        var inv = world.Inventory;
+        inv.Slots[0] = new ItemStack(ItemKind.MoonFragment, 1);
+        if (!world.ChargeFromSlot(p, inv, 0)) return "a fragment refused a craft that needed it";
+
+        if (p.ChargesLeft != p.ShieldCharges)
+            return $"the shield came back to {p.ChargesLeft} of {p.ShieldCharges} charges";
+        if (p.Health < p.MaxHealth) return "the hull was not made whole";
+        if (p.Hyper < p.MaxHyper) return "the reserve was not filled";
+        if (!inv.Slots[0].IsEmpty) return "the fragment was not spent";
+
+        // And it is refused outright by a craft with nothing missing.
+        inv.Slots[1] = new ItemStack(ItemKind.MoonFragment, 1);
+        if (world.ChargeFromSlot(p, inv, 1)) return "a whole craft still swallowed a fragment";
+        if (inv.Slots[1].IsEmpty) return "a refused fragment was spent anyway";
+
+        // It round-trips through the grid like everything else a pack can hold: thrown out and
+        // picked back up, it is still a moon fragment and not a handful of rounds.
+        if (World.World.SalvageOf(ItemKind.MoonFragment) != PickupKind.MoonFragment
+            || World.World.ItemOf(PickupKind.MoonFragment) != ItemKind.MoonFragment)
+            return "a fragment did not survive being thrown on the grid";
+        return null;
+    }
+
+    /// <summary>
+    /// A build is not private to the machine that made it: chassis, all four tracks and every
+    /// part's paint have to survive being written down and read back, and a packet that claims
+    /// more than the budget allows has to come back as a craft the hangar could have made.
+    /// </summary>
+    private static string? ABuildSurvivesTheWire()
+    {
+        var lo = new Loadout { Class = PlayerClass.Fish };
+        while (lo.Adjust(Loadout.Stat.Speed, -1)) { }
+        while (lo.Adjust(Loadout.Stat.Health, +1)) { }
+        lo.CycleSwatch(PlayerClass.Fish, 0, +3);
+        lo.CycleSwatch(PlayerClass.Fish, 2, +1);
+
+        Span<byte> buf = stackalloc byte[Loadout.Bytes];
+        lo.Write(buf);
+        Loadout back = Loadout.Read(buf);
+
+        if (back.Class != PlayerClass.Fish) return $"the chassis arrived as {back.Class}";
+        for (int i = 0; i < Loadout.StatCount; i++)
+            if (back[(Loadout.Stat)i] != lo[(Loadout.Stat)i])
+                return $"track {(Loadout.Stat)i} arrived as {back[(Loadout.Stat)i]}, sent {lo[(Loadout.Stat)i]}";
+        for (int part = 0; part < ClassCatalog.Get(PlayerClass.Fish).PartNames.Length; part++)
+            if (back.SwatchIndex(PlayerClass.Fish, part) != lo.SwatchIndex(PlayerClass.Fish, part))
+                return $"part {part}'s paint did not survive the wire";
+        if (!lo.SameAs(back)) return "a build did not recognise its own round trip";
+
+        // A hand-written packet asking for four maxed tracks is walked back to something legal
+        // rather than trusted — the host replays these, and a craft nobody could build in the
+        // hangar must not be buildable by typing.
+        Span<byte> cheat = stackalloc byte[Loadout.Bytes];
+        lo.Write(cheat);
+        for (int i = 0; i < Loadout.StatCount; i++) cheat[1 + i] = 10;
+        Loadout clamped = Loadout.Read(cheat);
+        if (clamped.Spent > Loadout.Budget)
+            return $"an over-budget packet bought a craft spending {clamped.Spent}";
         return null;
     }
 
@@ -531,7 +987,7 @@ public static class SelfTest
             var maw = new Entities.MawCore(new Vector2(0f, range));
             var round = new Entities.Projectile();
             // Straight down +Z, up the gun's own elevation, from the barrel.
-            round.Fire(Vector2.Zero, new Vector2(0f, 1f), fromPlayer: true,
+            round.Fire(Vector2.Zero, new Vector2(0f, 1f), owner: 0,
                 launchHeight: Entities.Projectile.BoltHeight, pitch: p.GunElevation);
             for (int i = 0; i < 240 && round.Active; i++)
             {
@@ -1115,6 +1571,2055 @@ public static class SelfTest
         return 1;
     }
 
+    // --- The wire ----------------------------------------------------------------
+    // Nothing here touches the world yet. These check the two pieces a second player
+    // needs before there can be one: that a tick of intent survives being turned into
+    // bytes, and that the rig the rest of the netcode will be tested against actually
+    // behaves like a bad connection.
+
+    private static string? InputFrameRoundTrips()
+    {
+        var sent = new InputFrame(
+            Btn.Forward | Btn.Fire | Btn.SpiderPounce | Btn.Jump,
+            Btn.SpiderPounce | Btn.Jump,
+            new Vector2(-13.5f, 240.25f))
+            .WithAim(2.31f, -0.42f);
+
+        Span<byte> wire = stackalloc byte[InputFrame.Size];
+        sent.Write(wire);
+        InputFrame got = InputFrame.Read(wire);
+
+        if (got.Down != sent.Down) return "the held keys changed on the way through";
+        if (got.Pressed != sent.Pressed) return "the edges changed on the way through";
+
+        // What crosses is the ANGLE, not the mouse movement that produced it. A delta cannot
+        // survive a lossy channel — the host integrates it, so a dropped packet is a piece of
+        // the player's turn the host never gets back and can never be told about. An absolute
+        // angle is self-correcting, and it is the thing the host is entitled to take at its
+        // word, so it is the thing the wire has to carry faithfully.
+        if (!got.HasAim) return "the frame arrived with nothing to say about where it points";
+        if (MathF.Abs(got.Aim.X - 2.31f) > 1e-3f || MathF.Abs(got.Aim.Y - -0.42f) > 1e-3f)
+            return $"the aim drifted: sent <2.31, -0.42>, got {got.Aim}";
+
+        // And the delta is deliberately NOT carried. Asserted rather than merely unasserted:
+        // a frame arriving with a live look delta would mean the host was turning the craft a
+        // second time, on top of the angle it was just handed.
+        if (got.LookX != 0 || got.LookY != 0)
+            return "the mouse delta crossed the wire, so the host will turn the craft twice";
+
+        // The named reads have to survive too — the world asks for those, not for bits.
+        if (!got.Forward) return "a frame that was driving forward arrived stopped";
+        if (!got.SpiderPouncePressed) return "the pounce edge didn't survive";
+        if (got.RocketPressed) return "a rocket nobody fired arrived down the wire";
+
+        // A locally-sampled frame must NOT claim to carry an aim: the machine that sampled it
+        // turns its own craft with the delta, and a false claim here would have the host
+        // stamping an angle of zero onto its own seat sixty times a second.
+        if (new InputFrame(Btn.Forward, Btn.None, Vector2.Zero).HasAim)
+            return "a frame nobody stamped claims to know where it points";
+        return null;
+    }
+
+    private static string? EdgesAreSpentOnce()
+    {
+        // The bug this exists to prevent: the loop steps the sim off an accumulator, so a
+        // slow display runs two fixed steps in one render frame. Polling raylib inside the
+        // step would report the same click in both and the tank would fire twice for one
+        // press. The sampler hands the edge to the first step and holds it back from the
+        // rest, while held keys keep flowing so a craft under a held W keeps driving.
+        var frame = new InputFrame(Btn.Forward | Btn.Fire, Btn.Fire, Vector2.One);
+
+        InputFrame second = frame.Repeat();
+        if (second.Hit(Btn.Fire)) return "the second step in one render frame fired again";
+        if (!second[Btn.Forward]) return "a held throttle was dropped by the second step";
+        if (second.LookDelta != Vector2.Zero)
+            return "the frame's mouse movement was applied more than once";
+        return null;
+    }
+
+    private static string? LoopbackCarriesTheTraffic()
+    {
+        // Six steps each way, no jitter, a quarter of everything unreliable lost. Heavy
+        // loss on purpose: it makes the reliable guarantee below mean something.
+        var net = new LoopbackNet(2, new LinkQuality(6, 0, 25f), seed: 7);
+        INetTransport host = net[0], client = net[1];
+
+        // Nothing arrives before its time.
+        host.Send(1, "first"u8, reliable: true);
+        for (int i = 0; i < 6; i++)
+        {
+            net.Advance();
+            client.Pump();
+            if (i < 5 && client.TryReceive(out _, out _))
+                return $"a payload landed {5 - i} steps early";
+        }
+        if (!client.TryReceive(out int from, out byte[] got))
+            return "a reliable payload never arrived";
+        if (from != 0) return "the payload arrived from the wrong peer";
+        if (!got.AsSpan().SequenceEqual("first"u8)) return "the payload arrived corrupted";
+
+        // A hundred reliable sends: every one lands, and in the order they were sent.
+        for (int i = 0; i < 100; i++)
+            host.Send(1, BitConverter.GetBytes(i), reliable: true);
+
+        var seen = new List<int>();
+        for (int step = 0; step < 400; step++)
+        {
+            net.Advance();
+            client.Pump();
+            while (client.TryReceive(out _, out byte[] p)) seen.Add(BitConverter.ToInt32(p));
+        }
+        if (seen.Count != 100) return $"the reliable channel lost {100 - seen.Count} of 100";
+        for (int i = 0; i < 100; i++)
+            if (seen[i] != i) return $"the reliable channel delivered {seen[i]} where {i} belonged";
+
+        // And unreliable traffic really is allowed to go missing, or the loss setting is
+        // decorative and every test built on this rig is testing a perfect wire.
+        int before = net.Dropped;
+        for (int i = 0; i < 200; i++) host.Send(1, "x"u8, reliable: false);
+        if (net.Dropped == before) return "a lossy wire dropped nothing at all";
+        return null;
+    }
+
+    // --- Seats -------------------------------------------------------------------
+
+    private static string? SoloIsUnchanged()
+    {
+        // The whole roster refactor is only safe if the game it started as still exists.
+        // One seat, three lives, and World.Player finding the same craft it always did.
+        var world = new World.World();
+        if (world.Players.Count != 1) return $"a solo world seated {world.Players.Count} craft";
+        if (world.LocalIndex != 0) return "the solo player wasn't in seat zero";
+        if (!ReferenceEquals(world.Player, world.Players[0]))
+            return "World.Player stopped pointing at the local craft";
+        if (world.Player.Lives != 3)
+            return $"the solo craft opened on {world.Player.Lives} lives, not the historical 3";
+        if (world.Player.RevivesLeft != 2)
+            return $"three lives should read as two revives, not {world.Player.RevivesLeft}";
+
+        // A solo match is a one-seat match, so it is full the moment it exists and nobody
+        // can be dropped into a game that was never opened to anyone.
+        if (!world.Full) return "a one-seat solo world had room for a second player";
+        if (world.AddPlayer() != null) return "someone joined a single-player run";
+        return null;
+    }
+
+    private static string? SeatsFillToTheCap()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 20, Revives = 4 });
+
+        // Seat zero exists from construction, so nineteen more fill it.
+        for (int i = 1; i < 20; i++)
+            if (world.AddPlayer() == null) return $"the host was refused seat {i} of twenty";
+
+        if (world.Players.Count != 20) return $"twenty seats held {world.Players.Count} craft";
+        if (!world.Full) return "a full match didn't say so";
+        if (world.AddPlayer() != null) return "a twenty-first player got in";
+
+        // Everyone gets the host's revive count, and nobody opens inside anybody else.
+        foreach (var p in world.Players)
+            if (p.RevivesLeft != 4) return $"a seat opened on {p.RevivesLeft} revives, not 4";
+
+        for (int i = 1; i < world.Players.Count; i++)
+            for (int j = i + 1; j < world.Players.Count; j++)
+                if (Torus.Distance(world.Players[i].Position, world.Players[j].Position) < 1f)
+                    return $"seats {i} and {j} opened on top of each other";
+
+        // And the cap is not a suggestion: a host asking for a hundred gets twenty.
+        var greedy = new World.World(null, new MatchSettings { MaxPlayers = 100 });
+        if (greedy.Match.MaxPlayers != MatchSettings.MaxSeats)
+            return $"a match capped at {greedy.Match.MaxPlayers} seats, above the twenty limit";
+        return null;
+    }
+
+    /// <summary>
+    /// Enough damage to take one whole life off a craft, whatever it is built from: every
+    /// shield charge and then all of the hull behind them. Shields are no longer what kills
+    /// you, so a test that wants a craft dead has to say so — <c>TakeDamage(MaxShield)</c>
+    /// now leaves a player standing at 0/5 with a full hull, which is exactly right and
+    /// exactly not what these tests are asking for.
+    /// </summary>
+    private static void SpendALife(PlayerTank p) => p.TakeDamage(p.MaxShield + p.MaxHealth);
+
+    private static string? RevivesRunOutIntoSpectating()
+    {
+        // One revive: two lives. Dying once brings them back whole; dying twice puts them out
+        // of the match without taking the match down with them.
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4, Revives = 1 });
+        PlayerTank p = world.Player;
+        if (p.RevivesLeft != 1) return $"one revive read as {p.RevivesLeft}";
+
+        // Emptying the shields alone is not a death any more — the craft stands there with
+        // nothing in front of its hull, which is the whole point of the two layers.
+        p.TakeDamage(p.MaxShield);
+        if (p.RevivesLeft != 1) return "a spent shield cost a life";
+        if (p.ChargesLeft != 0) return $"{p.ChargesLeft} charges survived a shield's worth of damage";
+        if (MathF.Abs(p.Health - p.MaxHealth) > 0.001f) return "damage reached the hull through a live shield";
+
+        SpendALife(p);
+        if (p.Spectating) return "a player with a revive left was sent to spectate";
+        if (p.Shield < p.MaxShield - 0.001f) return "a revive didn't restore the shield";
+        if (p.Health < p.MaxHealth - 0.001f) return "a revive didn't mend the hull";
+        if (p.RevivesLeft != 0) return "the revive wasn't spent";
+
+        SpendALife(p);
+        if (!p.Spectating) return "a player out of revives is still playing";
+        if (p.Alive) return "a spent player is somehow still alive";
+
+        // The point of spectating: the rest of the field is untouched.
+        var mate = world.AddPlayer();
+        if (mate is null || mate.Spectating)
+            return "one player running out took another down with them";
+
+        // Zero revives is a legal choice and means exactly one life.
+        var brutal = new World.World(null, new MatchSettings { Revives = 0 });
+        if (brutal.Player.Lives != 1) return "a zero-revive match didn't give exactly one life";
+        SpendALife(brutal.Player);
+        if (!brutal.Player.Spectating) return "a zero-revive player survived their first death";
+        return null;
+    }
+
+    private static string? FriendlyFireIsTheHostsCall()
+    {
+        var off = new World.World(null, new MatchSettings { MaxPlayers = 4, FriendlyFire = false });
+        PlayerTank a = off.Player;
+        PlayerTank b = off.AddPlayer()!;
+        if (off.CanHarm(a, b)) return "friendly fire was off and a player could still be hit";
+
+        var on = new World.World(null, new MatchSettings { MaxPlayers = 4, FriendlyFire = true });
+        PlayerTank c = on.Player;
+        PlayerTank d = on.AddPlayer()!;
+        if (!on.CanHarm(c, d)) return "friendly fire was on and rounds passed straight through";
+
+        // Never yourself, whatever the toggle says — a player's own splash has never hurt
+        // them and turning the option on must not quietly change that.
+        if (on.CanHarm(c, c)) return "a player's own round hurt them once friendly fire was on";
+        if (off.CanHarm(a, a)) return "a player's own round hurt them";
+        return null;
+    }
+
+    private static string? EverySeatDrivesItself()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        PlayerTank a = world.Player;
+        PlayerTank b = world.AddPlayer()!;
+        PlayerTank c = world.AddPlayer()!;
+
+        Vector2 a0 = a.Position, b0 = b.Position, c0 = c.Position;
+
+        // Seat 0 drives forward, seat 1 sits on its hands, seat 2 drives forward. Each
+        // craft has to answer its own slot and nobody else's — the bug this guards is a
+        // step that drives every player from the local player's keys.
+        world.SetInput(1, InputFrame.Empty);
+        world.SetInput(2, new InputFrame(Btn.Forward, Btn.None, Vector2.Zero));
+
+        for (int i = 0; i < 90; i++)
+            world.StepForTest((float)Config.FixedDt,
+                new InputFrame(Btn.Forward, Btn.None, Vector2.Zero));
+
+        float movedA = Torus.Distance(a.Position, a0);
+        float movedB = Torus.Distance(b.Position, b0);
+        float movedC = Torus.Distance(c.Position, c0);
+
+        if (movedA < 1f) return "the local seat held forward and went nowhere";
+        if (movedC < 1f) return "a remote seat held forward and went nowhere";
+        if (movedB > 0.5f) return $"a seat with no input drifted {movedB:0.00} anyway";
+
+        // The two that were driving are separate craft on separate bearings, so they must
+        // not have ended up in the same place.
+        if (Torus.Distance(a.Position, c.Position) < 1f)
+            return "two seats driving their own keys converged on one spot";
+        return null;
+    }
+
+    private static string? HuntersChaseTheNearest()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+
+        PlayerTank near = world.AddPlayer()!;
+        // Park the two craft as far apart as this world allows. The torus is 400 across, so
+        // anything beyond ±Half is the same point coming back the other way — ±100 puts them
+        // a genuine 200 apart, which is the furthest two things on it can ever be.
+        world.Player.Position = Torus.Wrap(new Vector2(-100f, 0f));
+        near.Position = Torus.Wrap(new Vector2(100f, 0f));
+
+        var hunter = new EnemyTank(Torus.Wrap(new Vector2(160f, 0f)), elite: false);
+        world.Enemies.Add(hunter);
+
+        float toFar0 = Torus.Distance(hunter.Position, world.Player.Position);
+        float toNear0 = Torus.Distance(hunter.Position, near.Position);
+        if (toNear0 > toFar0) return "the test set itself up wrong: the hunter began nearer the far craft";
+
+        // It picks its quarry every tick, so ask directly as well as watching where it goes.
+        if (!ReferenceEquals(world.NearestPlayer(hunter.Position), near))
+            return "the hunter chose the far craft over the one beside it";
+
+        for (int i = 0; i < 180; i++) StepWithoutInput(world);
+
+        float toNear = Torus.Distance(hunter.Position, near.Position);
+        float toFar = Torus.Distance(hunter.Position, world.Player.Position);
+        if (toNear > toFar)
+            return $"the hunter walked past the craft beside it ({toNear:0}) to reach the far one ({toFar:0})";
+
+        // Not asserting it closed the gap: a hunter holds a firing standoff and backing off
+        // to it is correct behaviour. What matters is that it stayed committed to the near
+        // craft rather than setting off across the world for the other one.
+        if (toFar < toFar0 - 20f)
+            return "the hunter set off for the far craft instead of engaging the near one";
+        return null;
+    }
+
+    private static string? SpectatorsAreNotHunted()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4, Revives = 0 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+
+        PlayerTank spent = world.AddPlayer()!;
+        world.Player.Position = Torus.Wrap(new Vector2(-120f, 0f));
+        spent.Position = Torus.Wrap(new Vector2(120f, 0f));
+
+        // Spend the near player's single life. Their craft is still somewhere — the camera
+        // has to be — but nothing on the field should be interested in it any more.
+        SpendALife(spent);
+        if (!spent.Spectating) return "the test failed to put the near player out";
+
+        var hunter = new EnemyTank(Torus.Wrap(new Vector2(130f, 0f)), elite: false);
+        world.Enemies.Add(hunter);
+
+        if (!ReferenceEquals(world.NearestPlayer(hunter.Position), world.Player))
+            return "a hunter picked a spectator as its quarry";
+
+        for (int i = 0; i < 180; i++) StepWithoutInput(world);
+
+        // It should have set off for the only player still playing, who is far away.
+        if (Torus.Distance(hunter.Position, spent.Position) < 5f)
+            return "the hunter camped on a player who was already out";
+        return null;
+    }
+
+    private static string? RoundsCarryTheirOwner()
+    {
+        var round = new Entities.Projectile();
+
+        round.Fire(Vector2.Zero, new Vector2(0f, 1f), owner: Entities.Projectile.NoOwner);
+        if (round.FromPlayer) return "a round the field fired claimed to be a player's";
+
+        round.Fire(Vector2.Zero, new Vector2(0f, 1f), owner: 3);
+        if (!round.FromPlayer) return "seat three's round didn't count as a player's";
+        if (round.Owner != 3) return $"seat three's round was stamped {round.Owner}";
+
+        // The turned soldier: one of ours, belonging to no seat. It has to read as a player
+        // round (so it bites hunters) while never being attributable to anybody.
+        round.Fire(Vector2.Zero, new Vector2(0f, 1f), owner: Entities.Projectile.AllyOwner);
+        if (!round.FromPlayer) return "an ally's round read as an enemy's";
+        if (round.Owner >= 0) return "an ally's round was pinned on a seat";
+
+        // Pooled slots are reused, so the stamp must be overwritten rather than sticking.
+        round.Fire(Vector2.Zero, new Vector2(0f, 1f), owner: Entities.Projectile.NoOwner);
+        if (round.FromPlayer) return "a reused slot kept the last shot's owner";
+        return null;
+    }
+
+    /// <summary>Parks two craft nose to nose and has seat 0 empty the gun into seat 1.
+    /// Returns how much shield the second one lost.</summary>
+    private static float ShootTeamMate(bool friendlyFire)
+    {
+        var world = new World.World(null,
+            new MatchSettings { MaxPlayers = 4, FriendlyFire = friendlyFire })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+
+        PlayerTank shooter = world.Player;
+        PlayerTank mate = world.AddPlayer()!;
+
+        shooter.Position = Torus.Wrap(new Vector2(0f, 0f));
+        mate.Position = Torus.Wrap(new Vector2(0f, 12f));
+        shooter.Heading = 0f;              // +Y, straight down the line at the mate
+        mate.Heading = MathF.PI;
+
+        float before = mate.Shield;
+        for (int i = 0; i < 60 * 4; i++)
+        {
+            world.FirePlayerShot();
+            StepWithoutInput(world);
+        }
+        return before - mate.Shield;
+    }
+
+    private static string? FriendlyFireOffSparesTheTeam()
+    {
+        float lost = ShootTeamMate(friendlyFire: false);
+        return lost > 0.001f
+            ? $"four seconds of point-blank fire cost a team-mate {lost:0.0} shield with friendly fire off"
+            : null;
+    }
+
+    private static string? FriendlyFireOnHurtsTheTeam()
+    {
+        float lost = ShootTeamMate(friendlyFire: true);
+        return lost <= 0.001f
+            ? "friendly fire was on and four seconds of point-blank fire did nothing"
+            : null;
+    }
+
+    /// <summary>
+    /// The five destinations must actually be five places. A chart that is only a colour swap
+    /// would pass every other test in this file, so this one asserts on the numbers the sim
+    /// reads: no two worlds may agree on all of hostiles, gravity and view distance.
+    /// </summary>
+    private static string? TheFiveWorldsAreDifferentPlaces()
+    {
+        if (Planet.All.Count != 5) return $"the chart has {Planet.All.Count} worlds, not five";
+
+        for (int i = 0; i < Planet.All.Count; i++)
+        {
+            Planet a = Planet.All[i];
+            if ((int)a.Id != i) return $"{a.Name} is not at its own index — the wire sends the index";
+            if (a.Murk is < 0f or > 1f) return $"{a.Name}'s murk is outside 0..1";
+            if (a.Gravity <= 0f) return $"{a.Name} has no gravity at all";
+
+            for (int j = i + 1; j < Planet.All.Count; j++)
+            {
+                Planet b = Planet.All[j];
+                if (a.Name == b.Name) return $"two worlds are both called {a.Name}";
+                if (Same(a.Hostiles, b.Hostiles) && Same(a.Gravity, b.Gravity) && Same(a.Murk, b.Murk))
+                    return $"{a.Name} and {b.Name} are the same place with different paint";
+            }
+        }
+
+        // The draw distance is the same everywhere and at every hour — a world says it is hard
+        // to see across by going dark out there, never by pulling its horizon in. Checked at
+        // both ends of SOLUNE's day, which is the only place a per-hour distance could hide.
+        var solune = Planet.Get(PlanetId.Solune);
+        foreach (float hour in new[] { 0f, 0.25f, 0.5f, 0.75f })
+        {
+            SkyLook look = solune.Look(hour);
+            if (look.Murk is < 0f or > 1f) return $"SOLUNE's murk left 0..1 at hour {hour}";
+        }
+        if (Rendering.Atmosphere.FogStart != Config.FogStart
+            || Rendering.Atmosphere.FogEnd != Config.FogEnd)
+            return "the draw distance is not the fixed one";
+
+        // Exactly one world turns. Two would need two clocks on the wire; none would make the
+        // whole day/night system dead code.
+        int cycling = Planet.All.Count(p => p.HasCycle);
+        if (cycling != 1) return $"{cycling} worlds have a day/night cycle — there should be one";
+        if (!Planet.Get(PlanetId.Solune).HasCycle) return "SOLUNE is not the one that turns";
+        return null;
+
+        static bool Same(float x, float y) => MathF.Abs(x - y) < 0.001f;
+    }
+
+    /// <summary>
+    /// A world's conditions have to reach the things that read them: the craft's fall, and how
+    /// hard the director pushes. Checked against ABYSSE and KIRENE, the two extremes.
+    /// </summary>
+    private static string? APlanetsConditionsReachTheSim()
+    {
+        var heavy = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Abysse });
+        var light = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Kirene });
+
+        if (heavy.Player.GravityScale <= light.Player.GravityScale)
+            return "ABYSSE does not pull harder than KIRENE";
+        if (Math.Abs(heavy.Player.GravityScale - Planet.Get(PlanetId.Abysse).Gravity) > 0.001f)
+            return "the craft did not take the world's gravity";
+
+        // Two worlds standing at once must not share their physics — the whole reason gravity
+        // is an instance field and not a global.
+        if (Math.Abs(light.Player.GravityScale - Planet.Get(PlanetId.Kirene).Gravity) > 0.001f)
+            return "one world's gravity leaked into the other's";
+
+        // A host's world is built at the HOST pillar, before anyone has been to the chart — so
+        // the rules that arrive at LAUNCH are the first time it hears which world it is on, and
+        // the craft already standing in it have to be re-weighted. Without this a host who
+        // chose ABYSSE would launch everyone onto it and still jump like they were on SOLUNE.
+        var early = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+        early.EnsureSeat(2);
+        early.Match = new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Abysse };
+        foreach (var craft in early.Players)
+            if (Math.Abs(craft.GravityScale - Planet.Get(PlanetId.Abysse).Gravity) > 0.001f)
+                return "a craft kept the old world's gravity after the rules named a new one";
+
+        // The default solo run lands on SOLUNE and is otherwise the game as it always was: it
+        // opens with a hunter and salvage, and the director is running.
+        var solo = new World.World();
+        if (solo.Match.Destination != PlanetId.Solune) return "a solo world did not default to SOLUNE";
+        if (solo.Match.Mode != GameMode.Sandbox) return "a solo world did not default to SANDBOX";
+        if (solo.Enemies.Count == 0) return "a solo world opened with no hunter";
+        if (solo.Pickups.Count == 0) return "a solo world opened with no salvage";
+        if (!solo.DynamicSpawning) return "a solo world has the spawn director off";
+        return null;
+    }
+
+    /// <summary>
+    /// SOLUNE's night has to be a thing the sim can feel, not just a thing the sky does: at
+    /// midnight the hunters close in and the fog shuts down. Driven off the test hatch rather
+    /// than by waiting six real minutes for the clock to come round.
+    /// </summary>
+    private static string? NightOnSoluneClosesIn()
+    {
+        var w = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Solune });
+        w.Enemies.Add(new Entities.EnemyTank(new Vector2(0f, 60f), elite: false));
+        var hunter = w.Enemies[^1];
+
+        w.SetDayPhaseForTest(0.25f);   // noon
+        float dayRange = hunter.PreferredRange;
+        float dayMurk = w.Sky.Murk;
+        Raylib_cs.Color dayHaze = w.Sky.Fog;
+        if (w.Sky.Night > 0.01f) return "noon on SOLUNE registered as night";
+
+        w.SetDayPhaseForTest(0.75f);   // midnight
+        if (w.Sky.Night < 0.99f) return "midnight on SOLUNE did not register as night";
+        if (hunter.PreferredRange >= dayRange) return "the hunters held the same range after dark";
+
+        // The far field goes darker, and it does it WITHOUT the horizon moving: the whole point
+        // is that the same geometry is still drawn, you just cannot make it out any more.
+        if (w.Sky.Murk <= dayMurk) return "the far field did not go murkier after dark";
+        if (Brightness(w.Sky.Fog) >= Brightness(dayHaze))
+            return "the haze did not darken after dark";
+        if (Rendering.Atmosphere.FogEnd != Config.FogEnd)
+            return "nightfall moved the draw distance";
+
+        // A world with no cycle never moves, however long it is stepped, and never registers
+        // as night.
+        var still = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Verene });
+        float opened = still.DayPhase;
+        for (int i = 0; i < 60 * 30; i++) still.StepForTest((float)Config.FixedDt);
+        if (still.DayPhase != opened) return "a world with no cycle turned anyway";
+        if (still.Sky.Night != 0f) return "a world with no cycle went dark";
+
+        // And a fresh SOLUNE opens in daylight rather than at dawn — landing must not drop
+        // people straight into the half-dark with the fog already shut.
+        var fresh = new World.World(null, new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Solune });
+        if (fresh.Sky.Night > 0.01f) return "a fresh SOLUNE opened in twilight";
+        return null;
+
+        static float Brightness(Raylib_cs.Color c) => c.R + c.G + c.B;
+    }
+
+    /// <summary>The lobby's new ENEMIES switch is a fifth rules byte; it has to cross the wire
+    /// beside the rest and default to on, or a host who turned the fight off would launch a
+    /// match every client still thinks is full of hunters.</summary>
+    private static string? RulesSurviveTheWire()
+    {
+        var m = new MatchSettings
+        {
+            MaxPlayers = 12, FriendlyFire = true, Revives = 7,
+            Destination = PlanetId.Thalos, Mode = GameMode.Descent, SpawnEnemies = false,
+        };
+        Span<byte> buf = stackalloc byte[MatchSettings.Size];
+        m.Write(buf);
+        MatchSettings r = MatchSettings.Read(buf);
+
+        if (r.SpawnEnemies) return "the enemies-off toggle did not survive the wire";
+        if (r.Destination != PlanetId.Thalos) return "the destination did not survive the wire";
+        if (r.Mode != GameMode.Descent) return "the mode did not survive the wire";
+        if (r.MaxPlayers != 12 || !r.FriendlyFire || r.Revives != 7)
+            return "the rest of the rules did not survive alongside the destination";
+
+        // A byte naming a world this build does not have must land on SOLUNE rather than on
+        // an index into nothing — a malformed welcome must not be able to crash a joiner.
+        Span<byte> junk = stackalloc byte[MatchSettings.Size];
+        m.Write(junk);
+        junk[3] = 200;
+        junk[5] = 200;
+        MatchSettings safe = MatchSettings.Read(junk);
+        if (safe.Destination != PlanetId.Solune) return "a nonsense destination was not clamped";
+        if (safe.Mode != GameMode.Sandbox) return "a nonsense mode was not clamped";
+
+        // The default is a match with enemies — an omitted/older setting must never read as off.
+        Span<byte> def = stackalloc byte[MatchSettings.Size];
+        new MatchSettings().Write(def);
+        if (!MatchSettings.Read(def).SpawnEnemies) return "the default match lost its enemies";
+        return null;
+    }
+
+    /// <summary>
+    /// A client never runs the spawn director, but it does draw the sky — so the hour has to
+    /// reach it or two people standing on SOLUNE together would be in different halves of the
+    /// day. It rides the field packet; this drives the same two-world rig the rest of the
+    /// netcode is built against and asks whether the client's clock followed the host's.
+    /// </summary>
+    private static string? TheHoursCrossesTheWire()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Typical, seed: 4242);
+        var rules = new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Solune };
+
+        var hostWorld = new World.World(null, rules) { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, rules) { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        // Put the host's clock at dusk and the client's at dawn, then let them talk. Started
+        // deliberately apart: two clocks that agreed to begin with would keep agreeing on
+        // their own, and the test would pass without a byte crossing.
+        hostWorld.SetDayPhaseForTest(0.5f);
+        clientWorld.SetDayPhaseForTest(0f);
+
+        for (int i = 0; i < 600; i++)   // ten seconds
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.StepForTest((float)Config.FixedDt);
+            clientWorld.StepForTest((float)Config.FixedDt);
+        }
+
+        if (client.LastAppliedTick == 0) return "the client never applied a single snapshot";
+
+        float gap = MathF.Abs(hostWorld.DayPhase - clientWorld.DayPhase);
+        if (gap > 0.5f) gap = 1f - gap;   // shortest way round the dial
+        if (gap > 0.01f)
+            return $"the client's clock is {gap:0.000} of a day off the host's after ten seconds";
+
+        // And the clock actually ran — a pair of stopped clocks also agree.
+        if (hostWorld.DayPhase == 0.5f) return "the host's day never advanced";
+        return null;
+    }
+
+    /// <summary>
+    /// The whole point of putting the destination to the room: three people vote, the world
+    /// most of them wanted is the one the match is bound for, and every machine is told. Uses
+    /// the real sessions and the real countdown — no shortcuts through the resolution, because
+    /// the bug this guards against is a client resolving a tie for itself.
+    /// </summary>
+    private static string? TheRoomVoteSettles()
+    {
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 8, Revives = 2 });
+
+        var host = s.Host.Room!;
+        if (host.Match.Destination != PlanetId.Solune) return "the room did not open on SOLUNE";
+
+        host.OpenVoteForTest();
+        s.Step(20);
+
+        // Everyone must have been told a vote is running — including the two clients, whose
+        // charts only know because the opening packet reached them.
+        foreach (Machine m in s.All)
+            if (m.Room is { } r && !r.Chart.VoteOpen)
+                return "a machine in the room was never told the vote had opened";
+
+        // Two for THALOS, one for ABYSSE. THALOS must win outright — no tie, so nothing here
+        // depends on the coin flip.
+        s.All[1].Room!.Chart.PointAt(PlanetId.Thalos);
+        s.All[1].Room!.Chart.CastLocal(s.All[1].Net.LocalSeat);
+        s.All[2].Room!.Chart.PointAt(PlanetId.Thalos);
+        s.All[2].Room!.Chart.CastLocal(s.All[2].Net.LocalSeat);
+        host.Chart.PointAt(PlanetId.Abysse);
+        host.Chart.CastLocal(host.LocalSeat);
+        s.Step(30);
+
+        if (host.Chart.Tally(PlanetId.Thalos) != 2)
+            return $"the host counted {host.Chart.Tally(PlanetId.Thalos)} votes for THALOS, not 2";
+        foreach (Machine m in s.All)
+            if (m.Room is { } r && r.Chart.Tally(PlanetId.Thalos) != 2)
+                return "a client's tally disagreed with the host's";
+
+        // Run the clock out. Twenty seconds at sixty a second, plus a little to let the
+        // result travel.
+        s.Step((int)(UI.StarMap.VoteDuration * 60f) + 60);
+
+        if (host.Chart.VoteOpen) return "the vote never closed";
+        if (host.Match.Destination != PlanetId.Thalos)
+            return $"the room voted THALOS and the host settled on {host.Match.World.Name}";
+        foreach (Machine m in s.All)
+        {
+            if (m.Room is not { } r) continue;
+            if (r.Match.Destination != PlanetId.Thalos)
+                return $"a client was never told the room chose THALOS (it has {r.Match.World.Name})";
+            if (r.Chart.VoteOpen) return "a client's countdown never stopped";
+        }
+        return null;
+    }
+
+    /// <summary>Enemies off is independent of the destination: the world keeps its city and its
+    /// salvage, but seeds and spawns nothing hostile — no hunters, no bosses, no squads, ever.
+    /// This is what the retired FLAT map used to be, without giving up the sky you chose.</summary>
+    private static string? EnemiesOffEmptiesThePlanet()
+    {
+        var world = new World.World(null,
+            new MatchSettings { MaxPlayers = 4, Destination = PlanetId.Solune, SpawnEnemies = false });
+
+        if (world.Structures.Count == 0) return "enemies-off threw the city away";
+        if (world.Pickups.Count == 0) return "enemies-off seeded no salvage — it is not a hostile";
+        if (world.Enemies.Count != 0) return $"enemies-off opened with {world.Enemies.Count} hunters";
+        if (world.Boss != null || world.Maw != null) return "enemies-off raised a boss";
+
+        // Half a minute of stepping must conjure nothing hostile out of the director.
+        for (int i = 0; i < 60 * 30; i++) world.StepForTest((float)Config.FixedDt);
+        if (world.Enemies.Count != 0) return $"enemies-off spawned {world.Enemies.Count} hunters over 30s";
+        if (world.Boss != null || world.Maw != null) return "enemies-off spawned a boss over 30s";
+        if (world.Soldiers.Count != 0) return $"enemies-off spawned {world.Soldiers.Count} soldiers over 30s";
+        return null;
+    }
+
+    /// <summary>The body a mote has seized, and how far it has rotted, ride the PLAYERS packet
+    /// so every other machine draws the worn host rather than the naked mote — the whole of the
+    /// virus being visible in play. A seat that is not the client's own is driven from the
+    /// snapshot; here seat 2 (an elite-wearing virus) must arrive wearing the elite, at the same
+    /// integrity the host had.</summary>
+    private static string? VirusHostCrossesTheWire()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.AddPlayer(new Loadout { Class = PlayerClass.Tank });    // seat 1
+        host.AddPlayer(new Loadout { Class = PlayerClass.Virus });   // seat 2
+
+        PlayerTank v = host.Players[2];
+        if (v.Virus is not { } worn) return "the virus seat has no rig to wear a host with";
+        worn.Possess(v, Entities.VirusHost.Elite);
+        // Let the husk rot a little so a non-trivial integrity has to cross, not just a flat 1.
+        for (int i = 0; i < 40; i++) host.StepForTest((float)Config.FixedDt);
+        if (!worn.Hosted) return "the elite fell off the host before the snapshot was taken";
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();        // seat 1
+        client.LocalIndex = 1;     // the virus at seat 2 is not ours, so it is driven from the wire
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WritePlayers(host, tick: 11u, buf);
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
+
+        if (client.Players.Count < 3 || client.Players[2].Virus is not { } cv)
+            return "the worn virus seat did not arrive with a rig on the client";
+        if (cv.HostKind != Entities.VirusHost.Elite)
+            return $"the worn body crossed as {cv.HostKind}, not the elite it was";
+        if (MathF.Abs(cv.Integrity - worn.Integrity) > 0.01f)
+            return $"the host's rot crossed at {cv.Integrity:0.000}, not the {worn.Integrity:0.000} it was";
+        return null;
+    }
+
+    /// <summary>
+    /// The fix for the invulnerable-client bug. A client used to skip its own seat wholesale when
+    /// a players packet landed (<c>seat == LocalIndex</c> → continue), so its own craft could
+    /// never take shield damage, lose a life, or be seized on its own screen — every consequence
+    /// the host computed was thrown away for the one craft the player was driving. Now the host's
+    /// STATUS for the local seat is applied (shield, lives, ammo, capture); its TRANSFORM is left
+    /// to the client's own prediction to reconcile toward, not snapped.
+    /// </summary>
+    private static string? OwnCraftObeysTheHost()
+    {
+        var host = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.LocalIndex = 0;
+        PlayerTank hp = host.Players[0];
+        hp.Shield = 30f;      // the host has taken a beating
+        hp.Lives = 1;
+        hp.Ammo = 7;
+        hp.Captured = true;   // ...and been grabbed by the crab
+        hp.Position = Torus.Wrap(new Vector2(10f, 0f));
+
+        var client = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        PlayerTank cp = client.Players[0];
+        cp.Shield = cp.MaxShield;   // the client thinks it is whole and free
+        cp.Lives = 3;
+        cp.Ammo = cp.MaxAmmo;
+        cp.Captured = false;
+        cp.Position = Torus.Wrap(new Vector2(0f, 0f));   // a predicted spot away from the host's
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WritePlayers(host, tick: 1u, buf);
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
+
+        // Status is the host's now — the whole point of the fix.
+        if (MathF.Abs(cp.Shield - 30f) > 0.01f)
+            return $"the client's own shield stayed {cp.Shield:0.0}, not the host's 30";
+        if (cp.Lives != 1) return $"the client's own lives stayed {cp.Lives}, not the host's 1";
+        if (cp.Ammo != 7) return $"the client's own ammo stayed {cp.Ammo}, not the host's 7";
+        if (!cp.Captured) return "the host grabbed the client but its own craft never knew";
+
+        // Transform is reconciled, not snapped: applying the packet must not teleport the craft to
+        // the host's position — that is the prediction's to ease toward, not the packet's to impose,
+        // or steering would judder in the player's hands.
+        if (Torus.Distance(cp.Position, Torus.Wrap(new Vector2(0f, 0f))) > 0.01f)
+            return "applying a snapshot snapped the client's own craft instead of reconciling it";
+        return null;
+    }
+
+    /// <summary>
+    /// Interpolation, the fix for 20 Hz stutter. A remote craft used to be snapped to each
+    /// snapshot — twenty visible steps a second. Now the host's latest position is a target the
+    /// client eases toward every frame, so between two snapshots the craft is found part-way,
+    /// gliding, and applying a snapshot never teleports it.
+    /// </summary>
+    private static string? RemoteCraftInterpolates()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        PlayerTank watched = host.AddPlayer()!;   // seat 1 — the craft the client will watch
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        client.Structures.Clear();   // nothing to shove the puppet around while we watch it glide
+
+        var buf = new byte[Snapshot.MaxSize];
+
+        // First snapshot: the craft is at A. First sight snaps, so the client opens it there.
+        Vector2 a = Torus.Wrap(new Vector2(20f, 0f));
+        watched.Position = a;
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, Snapshot.WritePlayers(host, 1u, buf)));
+        if (client.Players.Count < 2) return "the client never learned about the watched craft";
+        if (Torus.Distance(client.Players[1].Position, a) > 0.1f)
+            return "a craft first seen did not open where the host had it";
+
+        // Second snapshot: it has jumped to B. The packet must NOT teleport the client's copy —
+        // that is only the target now, and the craft sits at A until a step eases it.
+        Vector2 b = Torus.Wrap(new Vector2(40f, 0f));
+        watched.Position = b;
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, Snapshot.WritePlayers(host, 2u, buf)));
+        if (Torus.Distance(client.Players[1].Position, a) > 0.1f)
+            return "applying a snapshot snapped the remote craft instead of easing it";
+
+        // One step eases it part-way — strictly between where it was and where it is going.
+        client.StepForTest((float)Config.FixedDt);
+        if (Torus.Distance(client.Players[1].Position, a) < 0.5f)
+            return "a step did not move the remote craft toward the host's new position";
+        if (Torus.Distance(client.Players[1].Position, b) < 0.5f)
+            return "a single step snapped the remote craft all the way, instead of easing it";
+
+        // Many steps settle it onto B.
+        for (int i = 0; i < 120; i++) client.StepForTest((float)Config.FixedDt);
+        if (Torus.Distance(client.Players[1].Position, b) > 0.5f)
+            return "the remote craft never settled onto the host's position";
+        return null;
+    }
+
+    /// <summary>
+    /// Effect replication. A client runs no combat, so a kill throws debris on the host's screen
+    /// and, before this, nothing on anyone else's — the field's deaths were silent puffs of
+    /// nothing to onlookers. Now the host records each burst and sends it, and the client replays
+    /// it. Headless there is no window, so this asserts the burst crossed and spawned pieces.
+    /// </summary>
+    private static string? EffectCrossesTheWire()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 77);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+        if (client.LocalSeat != 1) return $"the joiner never seated (at {client.LocalSeat})";
+
+        // The host blows a hunter apart where both seats opened. A client throws no debris of its
+        // own — it runs no combat — so the only way it ever sees this burst is over the wire.
+        Vector2 at = hostWorld.Players[1].Position;
+        hostWorld.Debris.Burst(new Vector3(at.X, 1f, at.Y), Palette.EliteFill, elite: true);
+
+        for (int i = 0; i < 12; i++) { net.Advance(); host.Pump(InputFrame.Empty); client.Pump(InputFrame.Empty); }
+
+        if (clientWorld.RemoteEffectsPlayed < 1)
+            return "the host threw debris and the client never saw it";
+        bool anyShard = false;
+        foreach (var s in clientWorld.Debris.Shards) if (s.Active) { anyShard = true; break; }
+        if (!anyShard) return "the effect crossed the wire but spawned no debris on the client";
+        return null;
+    }
+
+    /// <summary>
+    /// The onlooker's half of the crab seizure. The held player's own transform already crosses
+    /// the wire (players packet), so watchers see them dragged up and thrown — but the boss's
+    /// arms were the host's alone, so to everyone else the boss stood idle beside a craft floating
+    /// in the air. Now the grab and strike arms and the seizure blaze ride the bosses packet and
+    /// pose the puppet, and fall back to the plain showcase pose the instant it lets go.
+    /// </summary>
+    private static string? SeizureArmCrossesTheWire()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.SpawnCrabAhead();
+        // The host has a player in its claw mid-cinematic: the front-right limb grips, the
+        // front-left is wound part-way into the club, and the core is blazing.
+        host.Boss!.DriveSeizure(held: true, grabArm: 0.8f, strikeArm: 0.3f, glow: 0.5f);
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+
+        var buf = new byte[64];
+        Snapshot.ApplyBosses(client, buf.AsSpan(0, Snapshot.WriteBosses(host, forSeat: 0, tick: 7u, buf)));
+
+        if (client.Boss is not { IsPuppet: true } p) return "the seizing boss never reached the client";
+        CrabPose pose = p.Pose;
+        if (MathF.Abs(pose.GrabArm - 0.8f) > 0.02f)
+            return $"the grab arm crossed as {pose.GrabArm:0.00}, not the host's 0.80";
+        if (MathF.Abs(pose.StrikeArm - 0.3f) > 0.02f)
+            return $"the strike arm crossed as {pose.StrikeArm:0.00}, not the host's 0.30";
+
+        // Let go, and the puppet falls straight back to the plain showcase pose — arms down.
+        host.Boss.DriveSeizure(held: false, grabArm: 0f, strikeArm: 0f, glow: 0f);
+        Snapshot.ApplyBosses(client, buf.AsSpan(0, Snapshot.WriteBosses(host, forSeat: 0, tick: 8u, buf)));
+        if (client.Boss!.Pose.GrabArm > 0.001f || client.Boss.Pose.StrikeArm > 0.001f)
+            return "the boss let go but the puppet kept the grab arm out";
+        return null;
+    }
+
+    /// <summary>Seats a client into a started host match over a loopback and hands both
+    /// sessions back. Pumps the lobby until the handshake settles.</summary>
+    private static (LoopbackNet net, Session host, Session client, World.World hw, World.World cw)
+        SeatOne(int maxPlayers, string name)
+    {
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 3);
+        var hw = new World.World(null, new MatchSettings { MaxPlayers = maxPlayers })
+        { DynamicSpawning = false };
+        hw.Enemies.Clear();
+        var cw = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false };
+
+        var host = new Session(net[0], host: true) { LocalName = "HOST" };
+        var client = new Session(net[1], host: false) { LocalName = name };
+        host.HostMatch(hw);
+        client.JoinMatch(cw);
+        client.SendHello(PlayerClass.Tank);
+
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+        host.StartMatch();
+        for (int i = 0; i < 20; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+        return (net, host, client, hw, cw);
+    }
+
+    private static string? DropAndRejoinRestoresTheSeat()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+
+        // Play a little: the held craft has a distinct state to restore. The host owns it.
+        PlayerTank seat1 = hw.Players[1];
+        seat1.Position = Torus.Wrap(new Vector2(50f, -25f));
+        seat1.Lives = 2;
+        seat1.Ammo = 13;
+
+        // The player drops. The host must hold the seat, not free it, and tell the room.
+        net.DropPeer(0, 1);
+        for (int i = 0; i < 5; i++) { net.Advance(); host.PumpLobby(); }
+        if (!hw.Players[1].Away) return "a dropped player's seat was not marked away";
+        if (hw.Players.Count != 2) return "the dropped player's seat was removed, not held";
+        if (!FeedHas(host.Notices, "LEFT")) return "no LEFT notice was posted";
+        if (!FeedHas(host.Notices, "ACE")) return "the LEFT notice did not name the player";
+
+        // While away, the craft is frozen: stepping the host must not move or age it.
+        Vector2 held = hw.Players[1].Position;
+        for (int i = 0; i < 120; i++) hw.StepForTest((float)Config.FixedDt);
+        if (Torus.Distance(hw.Players[1].Position, held) > 0.01f)
+            return "an away craft drifted while its player was gone";
+
+        // They come back — same Steam account, so the same seat, with everything restored.
+        net.Readmit(0, 1);
+        client.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+
+        if (hw.Players[1].Away) return "the seat was still away after a rejoin";
+        if (client.LocalSeat != 1) return $"the rejoiner landed in seat {client.LocalSeat}, not their old 1";
+        if (cw.Players[client.LocalSeat].Lives != 2)
+            return $"lives came back as {cw.Players[client.LocalSeat].Lives}, not the held 2";
+        if (cw.Players[client.LocalSeat].Ammo != 13)
+            return $"ammo came back as {cw.Players[client.LocalSeat].Ammo}, not the held 13";
+        if (Torus.Distance(cw.Players[client.LocalSeat].Position, held) > 0.5f)
+            return "the rejoiner did not open where their craft was held";
+        if (!FeedHas(host.Notices, "REJOINED")) return "no REJOINED notice was posted";
+        return null;
+    }
+
+    private static string? FullMatchStillLetsYouBack()
+    {
+        // A two-seat match with both seats taken.
+        var (net, host, client, hw, cw) = SeatOne(2, "BEE");
+        if (!hw.Full) return "a two-of-two match did not call itself full";
+        if (hw.AddPlayer() != null) return "a full match seated a third craft";
+
+        // The one joiner drops. The match is still full (the seat is held), but the person who
+        // holds it must be let back even so — a rejoin reuses the seat rather than needing a
+        // free one.
+        net.DropPeer(0, 1);
+        for (int i = 0; i < 5; i++) { net.Advance(); host.PumpLobby(); }
+        net.Readmit(0, 1);
+        client.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+
+        if (hw.Players[1].Away) return "a full match refused to let its own dropped player back";
+        if (client.LocalSeat != 1) return "the rejoiner was not restored to their seat";
+        return null;
+    }
+
+    /// <summary>
+    /// A player who reconnects has to be able to DRIVE, not merely reappear.
+    ///
+    /// The host buffers each seat's input by tick number and throws away anything at or below
+    /// the highest tick it has already taken from that seat — which is what makes the redundant
+    /// copies on every packet free to ignore, and what stops a packet that overtook a newer one
+    /// from winding a craft backwards. It also sets a trap. A machine that reconnects is a NEW
+    /// session and its tick counter starts again at one, so a seat still holding the old
+    /// high-water mark would reject every frame that player sent for the next several minutes.
+    /// Their craft would sit in the world, correctly restored, with the controls apparently
+    /// dead, and nothing anywhere would say why.
+    ///
+    /// The existing rejoin tests cannot catch it: they reuse the same session object, whose
+    /// clock keeps counting. This one rebuilds the client the way a real reconnection does, and
+    /// then leans on the throttle.
+    /// </summary>
+    private static string? ARejoinedPlayerCanStillDrive()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+
+        // Long enough that the seat's input clock is well past anything a fresh session would
+        // produce for a good while — which is exactly the state that used to be fatal.
+        var drive = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+        for (int i = 0; i < 400; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(drive);
+            hw.Update((float)Config.FixedDt, InputFrame.Empty);
+            cw.Update((float)Config.FixedDt, drive);
+        }
+
+        // Hands off the keys before the drop. This matters to the test rather than to the game:
+        // the host's last-frame fallback carries HELD keys forward, so a seat that disconnects
+        // mid-throttle would coast on that stale frame and a craft that moved afterwards would
+        // prove nothing about whether the rejoiner's own input was getting through.
+        for (int i = 0; i < 20; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hw.Update((float)Config.FixedDt, InputFrame.Empty);
+            cw.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+
+        // They drop, and come back as a new machine: a new session on the same wire, with its
+        // own clock starting from nothing.
+        net.DropPeer(0, 1);
+        for (int i = 0; i < 5; i++) { net.Advance(); host.Pump(InputFrame.Empty); }
+        net.Readmit(0, 1);
+
+        var cw2 = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false, Authoritative = false };
+        cw2.Enemies.Clear();
+        var rejoined = new Session(net[1], host: false) { LocalName = "ACE" };
+        rejoined.JoinMatch(cw2);
+        rejoined.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            rejoined.Pump(InputFrame.Empty);
+            hw.Update((float)Config.FixedDt, InputFrame.Empty);
+            cw2.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (rejoined.LocalSeat != 1) return "the rejoiner was not restored to their seat";
+        if (hw.Players[1].Away) return "the host still has the rejoined player marked away";
+
+        // And now the whole point: the throttle has to reach the host.
+        Vector2 before = hw.Players[1].Position;
+        for (int i = 0; i < 180; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            rejoined.Pump(drive);
+            hw.Update((float)Config.FixedDt, InputFrame.Empty);
+            cw2.Update((float)Config.FixedDt, drive);
+        }
+
+        float went = Torus.Distance(hw.Players[1].Position, before);
+        if (went < 20f)
+            return $"a rejoined player leaning on the throttle for three seconds moved {went:0.0} "
+                 + "on the host — their input is being thrown away as stale";
+        return null;
+    }
+
+    private static bool FeedHas(NoticeFeed feed, string needle)
+    {
+        foreach (var e in feed.Entries)
+            if (e.Text.Contains(needle, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private static string? FieldPacketIsKeepLast()
+    {
+        // The heart of the vanish-bug fix: players and field are separate packets, and a
+        // client that misses a field packet must keep the field it already had rather than
+        // clearing it. This proves the two are independent — applying only a players packet
+        // leaves the enemies untouched, and the busy field never rides in the players packet
+        // that always has to fit.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        for (int i = 0; i < 20; i++)
+            host.Enemies.Add(new EnemyTank(Torus.Wrap(new Vector2(i * 3f, 10f)), elite: false));
+        host.AddPlayer();
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();
+        client.LocalIndex = 0;
+
+        var buf = new byte[Snapshot.MaxSize];
+
+        // First, a field packet lands, so the client learns the enemies.
+        int nf = Snapshot.WriteField(host, forSeat: 0, tick: 1u, buf);
+        Snapshot.ApplyField(client, buf.AsSpan(0, nf));
+        int had = client.Enemies.Count;
+        if (had == 0) return "the client never received the field at all";
+
+        // Now several players packets arrive with no field packet between them — a run of
+        // field loss. The enemies must still be standing.
+        for (int t = 2; t < 8; t++)
+        {
+            int np = Snapshot.WritePlayers(host, (uint)t, buf);
+            Snapshot.ApplyPlayers(client, buf.AsSpan(0, np));
+        }
+        if (client.Enemies.Count != had)
+            return $"a run of lost field packets left {client.Enemies.Count} enemies, not {had}";
+
+        // The players packet alone is small enough to always fit one datagram — the property
+        // the whole split rests on. A full house must not exceed the players-packet ceiling.
+        var full = new World.World(null, new MatchSettings { MaxPlayers = MatchSettings.MaxSeats })
+        { DynamicSpawning = false };
+        for (int i = 1; i < MatchSettings.MaxSeats; i++) full.AddPlayer();
+        int fp = Snapshot.WritePlayers(full, 1u, buf);
+        if (fp > 1100) return $"a full players packet is {fp} bytes, over a safe datagram";
+        return null;
+    }
+
+    private static string? ChassisCrossesTheWire()
+    {
+        // A joiner who picked a fish has to arrive as a fish on every other screen — the whole
+        // point of the class byte in the snapshot. The client's roster starts as placeholder
+        // tanks, so this also exercises the rebuild that swaps one for the real chassis.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.AddPlayer(new Loadout { Class = PlayerClass.Fish });
+        host.AddPlayer(new Loadout { Class = PlayerClass.Soldier });
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();   // seat 1, a placeholder tank
+        client.AddPlayer();   // seat 2, a placeholder tank
+        client.LocalIndex = 0;
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WritePlayers(host, tick: 5u, buf);
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
+
+        if (client.Players[1].Class != PlayerClass.Fish)
+            return $"seat 1 picked a fish and arrived as {client.Players[1].Class}";
+        if (client.Players[2].Class != PlayerClass.Soldier)
+            return $"seat 2 picked a soldier and arrived as {client.Players[2].Class}";
+        // The rebuilt craft actually has the rig, not just the label.
+        if (client.Players[1].Fish is null) return "the fish arrived without a fish rig";
+        if (client.Players[2].Soldier is null) return "the soldier arrived without a soldier rig";
+
+        // Seat 0 is this client's own craft and must never be rebuilt out from under it.
+        if (!ReferenceEquals(client.Player, client.Players[0]))
+            return "the local craft was replaced by a snapshot";
+        return null;
+    }
+
+    private static string? ClientGrowsForLaterSeats()
+    {
+        // A client seated at 1 only builds up to its own seat when it joins. When a third
+        // player takes seat 2, every snapshot names them — and before the roster grew to fit,
+        // the client created them never and they stayed invisible. Applying a snapshot that
+        // names a higher seat than the client holds must grow the roster to cover it, then
+        // rebuild it as the right chassis, alive enough to draw.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.AddPlayer(new Loadout { Class = PlayerClass.Spider });  // seat 1
+        host.AddPlayer(new Loadout { Class = PlayerClass.Virus });   // seat 2
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();        // seat 1, this client's own — all it knew at Welcome
+        client.LocalIndex = 1;
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WritePlayers(host, tick: 7u, buf);
+        Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
+
+        if (client.Players.Count < 3)
+            return $"client saw {client.Players.Count} seats, not the host's 3 — a later joiner is invisible";
+        if (client.Players[2].Class != PlayerClass.Virus)
+            return $"the later joiner arrived as {client.Players[2].Class}, not the virus they picked";
+        if (!client.Players[2].Alive)
+            return "the later joiner arrived not alive, so it would draw as nothing";
+        return null;
+    }
+
+    private static string? SeatsOpenWithinSight()
+    {
+        // Two players in a fresh match have to open close enough, and facing the right way,
+        // that each is in the other's view on the first frame — the thing that makes "did the
+        // other player actually connect" answerable by looking rather than by driving around.
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 8 });
+        PlayerTank a = world.Player;
+        PlayerTank b = world.AddPlayer()!;
+
+        float gap = Torus.Distance(a.Position, b.Position);
+        if (gap > 30f) return $"two players opened {gap:0} apart, too far to see each other";
+        if (gap < 4f) return $"two players opened {gap:0} apart, all but on top of each other";
+
+        // The joiner faces back toward the host, so the host looking forward sees them. Their
+        // forward should point roughly from b toward a.
+        Vector2 bToA = Torus.Delta(b.Position, a.Position);
+        float align = Vector2.Dot(Vector2.Normalize(bToA), b.Forward);
+        if (align < 0.5f) return "the joiner opened facing away from the host";
+        return null;
+    }
+
+    private static string? SnapshotRoundTrips()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        PlayerTank second = host.AddPlayer()!;
+        second.Position = Torus.Wrap(new Vector2(37.5f, -84.25f));
+        second.Heading = 1.25f;
+        second.Shield = 42f;
+        second.Lives = 2;
+        second.Ammo = 17;
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        client.AddPlayer();
+        client.LocalIndex = 0;
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WritePlayers(host, tick: 99u, buf);
+        if (n > Snapshot.MaxSize) return $"a players packet wrote {n} bytes into a {Snapshot.MaxSize} buffer";
+
+        uint tick = Snapshot.ApplyPlayers(client, buf.AsSpan(0, n));
+        if (tick != 99u) return $"the tick came back as {tick}, not 99";
+
+        PlayerTank copy = client.Players[1];
+        if (Torus.Distance(copy.Position, second.Position) > 0.05f)
+            return $"the craft landed {Torus.Distance(copy.Position, second.Position):0.000} from where it was sent";
+        if (MathF.Abs(copy.Shield - 42f) > 0.5f) return $"shield arrived as {copy.Shield}";
+        if (copy.Lives != 2) return $"lives arrived as {copy.Lives}";
+        if (copy.Ammo != 17) return $"ammo arrived as {copy.Ammo}";
+
+        // A truncated packet must leave the world alone rather than throwing.
+        Vector2 before = copy.Position;
+        if (Snapshot.ApplyPlayers(client, buf.AsSpan(0, 6)) != 0u)
+            return "a truncated packet was accepted";
+        if (client.Players[1].Position != before)
+            return "a truncated packet moved something before it gave up";
+        return null;
+    }
+
+    private static string? ClientTracksTheHost()
+    {
+        // Two worlds, two sessions, one deliberately poor connection between them. This is
+        // the rig the rest of the netcode gets built against: if a desync shows up it shows
+        // up here, in one process, with both worlds sitting in the debugger.
+        var net = new LoopbackNet(2, LinkQuality.Typical, seed: 4242);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };   // a real client: it eases remotes, not simulates them
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        var drive = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+        Vector2 hostStart = hostWorld.Player.Position;
+
+        for (int i = 0; i < 600; i++)     // ten seconds
+        {
+            net.Advance();
+            host.Pump(drive);                      // the host drives forward
+            client.Pump(InputFrame.Empty);         // the client sits still
+            hostWorld.StepForTest((float)Config.FixedDt, drive);
+            clientWorld.StepForTest((float)Config.FixedDt, InputFrame.Empty);
+        }
+
+        if (client.LocalSeat != 1) return $"the client was seated at {client.LocalSeat}, not 1";
+        if (host.World!.Players.Count != 2) return "the host never seated the joining player";
+        if (clientWorld.Players.Count < 2) return "the client never learned about the host's craft";
+        if (client.LastAppliedTick == 0) return "the client never applied a single snapshot";
+
+        // The host actually went somewhere, and the client's copy of it followed.
+        float hostMoved = Torus.Distance(hostWorld.Player.Position, hostStart);
+        if (hostMoved < 5f) return $"the host only moved {hostMoved:0.0} in ten seconds";
+
+        // Seat 0 on the client is the host's craft — the one thing the client is told about
+        // and never drives. A hundred milliseconds of lag is about two units at this speed,
+        // so a couple of units of lag is expected and ten is a desync.
+        float gap = Torus.Distance(clientWorld.Players[0].Position, hostWorld.Player.Position);
+        if (gap > 10f)
+            return $"the client's copy of the host drifted {gap:0.0} away over a lossy wire";
+        return null;
+    }
+
+    /// <summary>
+    /// The rubber band, caught in a test.
+    ///
+    /// A client predicts its own craft so the controls feel attached to something, and the
+    /// host's snapshot then says where it really ended up. The trap is what the difference
+    /// between the two is measured against: the snapshot describes the craft as it was when
+    /// the host stepped this client's input, which is a full round trip ago, so a MOVING craft
+    /// is always about (speed x round trip) ahead of it and always will be. Correcting toward
+    /// it therefore drags the craft backward the whole time the player drives — at every ping,
+    /// for ever, with nothing wrong. That is the single thing a laggy-feeling client feels.
+    ///
+    /// The fix is to measure the error against this machine's own prediction FOR THE SAME TICK
+    /// the host is describing, which the host names on every players packet. A prediction that
+    /// was right then costs nothing now, however bad the wire is.
+    ///
+    /// So: the same craft, the same keys, from the same spot, twice — once with no network at
+    /// all, and once as a client half a second of round trip away from the host. They have to
+    /// end up in the same place.
+    /// </summary>
+    private static string? PredictionIsNotDraggedBackwardsByLatency()
+    {
+        // A quarter of a second each way and nothing else — no loss, no jitter — so what this
+        // measures is the reconciliation rather than the wire.
+        var link = new LinkQuality(15, 0, 0f);
+        Vector2 start = Torus.Wrap(new Vector2(-60f, -60f));
+        const float Aim = 0.9f;
+        const int Ticks = 300;                                  // five seconds of driving
+        var drive = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+
+        // The answer key: no wire in the picture at all. Wherever this craft ends up is where
+        // the player's hands asked to go.
+        var solo = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        solo.Enemies.Clear();
+        solo.Pickups.Clear();
+        solo.Player.Position = start;
+        solo.Player.Heading = Aim;
+        for (int i = 0; i < Ticks; i++) solo.StepForTest((float)Config.FixedDt, drive);
+        float soloWent = Torus.Distance(solo.Player.Position, start);
+        if (soloWent < 40f) return $"the reference craft only drove {soloWent:0.0} in five seconds";
+
+        var net = new LoopbackNet(2, link, seed: 90210);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        hostWorld.Pickups.Clear();
+
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+        clientWorld.Pickups.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        // Let the handshake land across a slow wire before anything is measured.
+        for (int i = 0; i < 90; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.StepForTest((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.StepForTest((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (client.LocalSeat != 1) return "the client never got a seat";
+
+        // Both ends of the client's craft put on the reference craft's mark, and the host's own
+        // craft parked well out of the way so it cannot be driven into.
+        hostWorld.Players[0].Position = Torus.Wrap(new Vector2(140f, 140f));
+        foreach (var w in new[] { hostWorld, clientWorld })
+        {
+            w.Players[1].Position = start;
+            w.Players[1].Heading = Aim;
+        }
+
+        for (int i = 0; i < Ticks; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(drive);
+            hostWorld.StepForTest((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.StepForTest((float)Config.FixedDt, drive);
+        }
+
+        // The one that matters: what the player is looking at on their own screen. Half a
+        // second of round trip at this speed is about thirteen units of travel, so a craft
+        // being dragged onto the stale position lands that far short — several times this bar.
+        float shortfall = Torus.Distance(clientWorld.Players[1].Position, solo.Player.Position);
+        if (shortfall > 3f)
+            return $"the client's own craft ended up {shortfall:0.0} from where the same keys "
+                 + "drove it with no wire — it is being dragged backwards by the latency";
+
+        // And the host agrees, which is what stops the above being achieved by simply ignoring
+        // the host. The host is a one-way trip behind by construction, hence the looser bar.
+        float apart = Torus.Distance(hostWorld.Players[1].Position, solo.Player.Position);
+        if (apart > 12f)
+            return $"the host has the client's craft {apart:0.0} from where it drove itself";
+        return null;
+    }
+
+    /// <summary>
+    /// Where a player is looking is theirs.
+    ///
+    /// Aim used to cross the wire as a mouse DELTA the host integrated, and that cannot survive
+    /// a channel that drops things: every lost packet took a permanent bite out of the host's
+    /// idea of where this player was pointing, with nothing to ever put it back. The only thing
+    /// that reconciled the two was the client hauling its own camera round onto the host's
+    /// stale heading — a hard snap past forty degrees, which a fast flick at any real ping
+    /// clears easily. Being unable to turn without the view being wrenched back is as close to
+    /// unplayable as this game got.
+    ///
+    /// Now the angle itself crosses and the host takes it at its word, so the client's aim is
+    /// never touched at all. This drives a long, hard turn across a bad wire and insists the
+    /// player's own view is exactly what their hand asked for, to the last radian.
+    /// </summary>
+    private static string? ClientAimIsNeverWrenchedBack()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Awful, seed: 777);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        for (int i = 0; i < 90; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (client.LocalSeat != 1) return "the client never got a seat";
+
+        // The same hand, turning the same craft, with nothing on the other end of it. This is
+        // what the player asked for; anything else the networked craft does is somebody else
+        // moving their view.
+        var solo = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        solo.Enemies.Clear();
+
+        // A steady hard swing — the mouse moved a long way every tick for two seconds, which
+        // is the motion the old snap threshold could not survive.
+        var flick = new InputFrame(Btn.None, Btn.None, new Vector2(9f, 0f));
+        PlayerTank mine = clientWorld.Players[1];
+        mine.Heading = 0f;
+        solo.Player.Heading = 0f;
+
+        for (int i = 0; i < 120; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(flick);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, flick);
+            solo.Update((float)Config.FixedDt, flick);
+        }
+
+        float expected = solo.Player.Heading;
+        float drift = MathF.Abs(MathF.IEEERemainder(mine.Heading - expected, MathF.Tau));
+        if (drift > 1e-3f)
+            return $"the player's own view was moved {drift:0.000} rad by something that was "
+                 + "not their hand";
+
+        // The turn was a real one and not a rounding error, or the above proves nothing.
+        if (MathF.Abs(MathF.IEEERemainder(expected, MathF.Tau)) < 0.5f)
+            return "the test never actually turned the craft far enough to matter";
+
+        // Mid-turn the host is legitimately behind — a third of a second of wire is a third of
+        // a second of turn it has not been told about yet, and no scheme can fix that. What
+        // matters is what is left when the hand stops: let the wire drain and the host has to
+        // land EXACTLY where the player is looking.
+        //
+        // This is the half a mouse delta could not do. A delta is a contribution, so a dropped
+        // packet is a slice of the turn subtracted from the host's total with nothing to ever
+        // add it back — the two ends settle a permanent distance apart, and further losses
+        // widen it without limit. An angle is a statement of fact, so one surviving packet puts
+        // the host exactly right no matter how many were lost before it.
+        for (int i = 0; i < 150; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (net.Dropped == 0) return "the wire never actually dropped anything to recover from";
+
+        float gap = MathF.Abs(MathF.IEEERemainder(hostWorld.Players[1].Heading - mine.Heading,
+                                                  MathF.Tau));
+        if (gap > 0.01f)
+            return $"after the turn ended and the wire drained, the host still has this craft "
+                 + $"pointing {gap:0.000} rad away from its player — the disagreement is permanent";
+
+        // And the client's own view still has not been touched by any of it.
+        float settled = MathF.Abs(MathF.IEEERemainder(mine.Heading - expected, MathF.Tau));
+        if (settled > 1e-3f)
+            return $"the player's view was pulled {settled:0.000} rad off its own line while the "
+                 + "wire caught up";
+        return null;
+    }
+
+    /// <summary>
+    /// One press is one shot, even when the packet carrying it never arrives.
+    ///
+    /// A frame carries EDGES — the single tick a key went down — and it went out unreliable,
+    /// alone, once. So a dropped packet was an action the player took that simply never
+    /// happened. The other half was worse: the host held the last frame it received and re-ran
+    /// it on every tick nothing arrived, edges and all, so the same lost packet could just as
+    /// easily fire the thing twice.
+    ///
+    /// Both halves are exercised here against a wire that is switched off outright — not made
+    /// lossy, switched off — around a single press of the slug. It has to fire exactly once.
+    /// </summary>
+    private static string? ALostInputPacketCostsNoActionAndDuplicatesNone()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 31337);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        for (int i = 0; i < 30; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (client.LocalSeat != 1) return "the client never got a seat";
+
+        var slug = new InputFrame(Btn.TankSlug, Btn.TankSlug, Vector2.Zero);
+        int ammoBefore = hostWorld.Players[1].Ammo;
+
+        // Every round the host ever spawns for this seat, counted once each at the moment it
+        // first appears — the honest count of how many times the press was acted on, which
+        // neither ammo nor a live projectile list can give (a slug flies off and expires).
+        var seen = new HashSet<object>();
+        int slugs = 0;
+
+        // The press itself, and then a hundred and twenty ticks of silence from this client:
+        // long past the slug's own cooldown, so a host repeating the edge frame has every
+        // opportunity to fire a second one. The mute covers the press tick as well, so the
+        // packet that carried the edge is genuinely gone and only the redundant copies in the
+        // packets behind it can save the shot.
+        for (int i = 0; i < 200; i++)
+        {
+            net.Advance();
+            bool pressing = i == 0;
+            net.Mute(1, i < 3);            // the press's own packet, and the two behind it
+            host.Pump(InputFrame.Empty);
+            client.Pump(pressing ? slug : InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+            clientWorld.Update((float)Config.FixedDt, pressing ? slug : InputFrame.Empty);
+
+            foreach (var r in hostWorld.Projectiles)
+                if (r.Owner == 1 && seen.Add(r)) slugs++;
+        }
+
+        if (slugs == 0)
+            return "the press was lost with the packet that carried it — the redundant copies "
+                 + "in the packets behind it did not save it";
+        if (slugs > 1)
+            return $"one press fired {slugs} rounds: the host is repeating the edges of a frame "
+                 + "it is only holding because nothing newer arrived";
+
+        int spent = ammoBefore - hostWorld.Players[1].Ammo;
+        if (spent != PlayerTank.SlugAmmoCost)
+            return $"one slug should cost {PlayerTank.SlugAmmoCost} rounds, and this cost {spent}";
+        return null;
+    }
+
+    /// <summary>
+    /// A remote craft carries on through a missed packet instead of standing still.
+    ///
+    /// Easing a body onto the host's last reported position turns twenty reports a second into
+    /// a glide, which is most of the job. What it got wrong was the packet that never came: the
+    /// target stopped moving, so the body eased onto it and PARKED until the next one landed,
+    /// then lurched. On a wire dropping one packet in twenty that is a hitch about once a
+    /// second on every craft and every hunter on screen simultaneously, and it reads exactly
+    /// like lag — which it is not. The host knows where that craft is and the client has
+    /// everything it needs to work out where it is heading.
+    ///
+    /// So the target coasts along the speed the last two reports implied. This drives a craft
+    /// in a straight line, cuts the wire dead for a tenth of a second, and insists it keeps
+    /// going.
+    /// </summary>
+    private static string? ARemoteCraftCoastsThroughALostPacket()
+    {
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 5150);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        clientWorld.Enemies.Clear();
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+
+        // The host drives its own craft in a straight line; the client only ever watches it.
+        var drive = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+        for (int i = 0; i < 240; i++)
+        {
+            net.Advance();
+            host.Pump(drive);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, drive);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (clientWorld.Players.Count < 2) return "the client never learned about the host's craft";
+
+        PlayerTank seenHere = clientWorld.Players[0];
+        if (!seenHere.HasNet) return "the client is not being told about the host's craft at all";
+
+        // Now the wire dies for six ticks — a tenth of a second, two whole snapshots gone. This
+        // is a mute rather than a lossy link so the gap is exact and the test cannot pass by
+        // luck.
+        Vector2 wasAt = seenHere.Position;
+        net.Mute(0, true);
+        for (int i = 0; i < 6; i++)
+        {
+            net.Advance();
+            host.Pump(drive);
+            client.Pump(InputFrame.Empty);
+            hostWorld.Update((float)Config.FixedDt, drive);
+            clientWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        net.Mute(0, false);
+
+        // Six ticks at the tank's pace is about two and a half units. A craft that stalled has
+        // eased onto a stationary target and travelled a small fraction of that; one that
+        // coasted has kept very nearly the host's real speed.
+        float went = Torus.Distance(seenHere.Position, wasAt);
+        if (went < 1.5f)
+            return $"with the wire cut for a tenth of a second the remote craft moved {went:0.00} "
+                 + "— it is standing still between packets rather than carrying on";
+
+        // And it did not run away with itself: the coast is a guess, and a guess that outruns
+        // the thing it is guessing about is worse than the stall it replaced.
+        float ahead = Torus.Distance(seenHere.Position, hostWorld.Players[0].Position);
+        if (ahead > 6f)
+            return $"the coasting craft ended up {ahead:0.0} from where it really is";
+        return null;
+    }
+
+    private static string? JoinCodesRoundTrip()
+    {
+        // The one thing a host reads down a phone. If this is asymmetric nobody can ever
+        // connect, and the failure looks like a networking problem rather than a typo.
+        uint[] ids = [0u, 1u, 28u, 29u, 357738826u, 1234567890u, uint.MaxValue];
+        foreach (uint id in ids)
+        {
+            string code = Net.SteamNet.Encode(id);
+            if (code.Length != 7) return $"account {id} encoded to {code.Length} characters";
+
+            var back = Net.SteamNet.Decode(code);
+            if (back is null) return $"the code {code} would not decode at all";
+            if (back.Value.GetAccountID().m_AccountID != id)
+                return $"{id} encoded to {code} and came back as {back.Value.GetAccountID().m_AccountID}";
+        }
+
+        // Read out loud and typed back in: lower case, and with the spaces the screen shows
+        // between the characters. Both have to survive or half of them will not connect.
+        string spaced = string.Join(' ', Net.SteamNet.Encode(357738826u).ToCharArray()).ToLowerInvariant();
+        if (Net.SteamNet.Decode(spaced)?.GetAccountID().m_AccountID != 357738826u)
+            return "a code typed back with spaces and in lower case was rejected";
+
+        // And nonsense stays rejected rather than dialling somebody at random.
+        if (Net.SteamNet.Decode("AAAA") != null) return "a four-character code was accepted";
+        if (Net.SteamNet.Decode("AEIOU01") != null) return "a code full of excluded letters was accepted";
+        return null;
+    }
+
+    private static string? SoundCrossesTheWire()
+    {
+        // The heart of audio parity: a cue the host raises has to reach a client and be played
+        // there, positioned to the client's own craft. Headless there is no audio device, so
+        // this asserts the cue crossed the wire and was taken up (RemoteCuesPlayed), and that a
+        // client's OWN cue is not echoed back at it.
+        var net = new LoopbackNet(2, LinkQuality.Perfect, seed: 55);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        hostWorld.Enemies.Clear();
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);
+        for (int i = 0; i < 40; i++) { net.Advance(); host.PumpLobby(); client.PumpLobby(); }
+        if (client.LocalSeat != 1) return $"the joiner never seated (at {client.LocalSeat})";
+
+        // The host raises a world sound near the origin, where both seats opened.
+        hostWorld.Emit(Cue.Explosion, hostWorld.Players[1].Position);
+        // ...and the client fires its own shot, whose echo must not come back to it.
+        hostWorld.Emit(Cue.Detonation, hostWorld.Players[1].Position, owner: 1);
+
+        for (int i = 0; i < 12; i++)
+        {
+            net.Advance();
+            host.Pump(InputFrame.Empty);
+            client.Pump(InputFrame.Empty);
+        }
+
+        if (clientWorld.RemoteCuesPlayed < 1)
+            return "the host raised a sound and the client never heard it";
+        // Exactly the explosion should have crossed — the client's own detonation is skipped.
+        if (clientWorld.RemoteCuesPlayed != 1)
+            return $"the client played {clientWorld.RemoteCuesPlayed} cues; its own shot should not echo back";
+        return null;
+    }
+
+    private static string? PickupsCrossTheField()
+    {
+        // Salvage rides the field packet so a client sees the cells and shards on the grid.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.Pickups.Clear();
+        host.Pickups.Add(new Pickup(Torus.Wrap(new Vector2(5f, 5f)), PickupKind.Battery));
+        host.Pickups.Add(new Pickup(Torus.Wrap(new Vector2(-3f, 8f)), PickupKind.Ammo));
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        client.Pickups.Clear();
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WriteField(host, forSeat: 0, tick: 1u, buf);
+        Snapshot.ApplyField(client, buf.AsSpan(0, n));
+
+        if (client.Pickups.Count != 2) return $"the client drew {client.Pickups.Count} of 2 pickups";
+        if (client.Pickups[0].Kind != PickupKind.Battery) return "a pickup arrived as the wrong kind";
+        return null;
+    }
+
+    /// <summary>
+    /// A field packet holds a bounded amount of salvage, and it used to be whichever of it
+    /// happened to be at the front of the host's list — which is arrival order. Once kills
+    /// started scattering parts, a firefight would fill that budget with everything the player
+    /// had already walked past, and the pile they were actually standing in was never sent at
+    /// all: salvage that existed, that the host would have handed over, and that there was
+    /// nothing on screen to drive over. The packet now carries the nearest, so what a player
+    /// can see is what is there.
+    /// </summary>
+    private static string? ClientSeesTheNearestSalvage()
+    {
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.Pickups.Clear();
+        Vector2 eye = host.Players[0].Position;
+
+        // A great deal of old salvage, far out. More than any packet will carry.
+        for (int i = 0; i < 60; i++)
+        {
+            float a = MathF.Tau * i / 60f;
+            host.Pickups.Add(new Pickup(
+                Torus.Wrap(eye + new Vector2(MathF.Cos(a), MathF.Sin(a)) * 140f),
+                PickupKind.Ammo));
+        }
+        // And, dropped last, the parts off a body at the player's feet.
+        host.Pickups.Add(new Pickup(Torus.Wrap(eye + new Vector2(1.5f, 0f)), PickupKind.ScrapMetal));
+        host.Pickups.Add(new Pickup(Torus.Wrap(eye + new Vector2(0f, 1.5f)), PickupKind.CopperWire));
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        client.Pickups.Clear();
+
+        var buf = new byte[Snapshot.MaxSize];
+        int n = Snapshot.WriteField(host, forSeat: 0, tick: 1u, buf);
+        Snapshot.ApplyField(client, buf.AsSpan(0, n));
+
+        bool scrap = false, wire = false;
+        foreach (var pk in client.Pickups)
+        {
+            scrap |= pk.Kind == PickupKind.ScrapMetal;
+            wire |= pk.Kind == PickupKind.CopperWire;
+        }
+        if (!scrap || !wire)
+            return $"the parts at the player's feet never crossed ({client.Pickups.Count} pickups did)";
+
+        // And the kind travels with the position: the host's nearest salvage is re-sorted
+        // every packet, so a cell reused for a different piece must take its new identity.
+        // Two packets in a row, with the salvage swapped underneath, and the client's list
+        // must describe the second one rather than the first.
+        foreach (var pk in host.Pickups) pk.NetSet(pk.Position, PickupKind.SpaceGunpowder);
+        n = Snapshot.WriteField(host, forSeat: 0, tick: 2u, buf);
+        Snapshot.ApplyField(client, buf.AsSpan(0, n));
+        foreach (var pk in client.Pickups)
+            if (pk.Kind != PickupKind.SpaceGunpowder)
+                return $"a reused pickup kept its old kind ({pk.Kind})";
+        return null;
+    }
+
+    /// <summary>
+    /// Salvage that lands inside a building can be seen from across the field and never
+    /// reached: a tower is solid, and the craft is stopped at its footprint. Every drop is
+    /// nudged clear of the wall, and clear by enough that the craft's own radius still fits.
+    /// </summary>
+    private static string? SalvageNeverLandsInsideAWall()
+    {
+        var world = new World.World { DynamicSpawning = false };
+        if (world.Structures.Count == 0) return "the world seeded no buildings to test against";
+
+        Span<(Vector2 At, float Radius)> blockers = stackalloc (Vector2, float)[Structure.MaxBlockers];
+        int tested = 0;
+        foreach (var s in world.Structures)
+        {
+            int n = s.Blockers(blockers);
+            for (int i = 0; i < n; i++)
+            {
+                // Dead centre, and a little off it: both have to come back out.
+                foreach (var probe in new[] { blockers[i].At, Torus.Wrap(blockers[i].At + new Vector2(1f, 0.5f)) })
+                {
+                    Vector2 placed = world.ReachablePoint(probe);
+                    float d = MathF.Sqrt(Torus.DistanceSquared(placed, blockers[i].At));
+                    if (d < blockers[i].Radius + Entities.PlayerTank.Radius)
+                        return $"salvage was placed {d:0.0} into a wall of radius {blockers[i].Radius:0.0}";
+                    tested++;
+                }
+            }
+            if (tested > 40) break;   // a representative sweep, not the whole skyline
+        }
+        return tested == 0 ? "no building offered a footprint to test" : null;
+    }
+
+    /// <summary>
+    /// Two players clearing two pieces of salvage on the same tick. Only one of them used to
+    /// actually leave the field — the other stayed, and went on paying out its contents every
+    /// tick for as long as anybody stood on it.
+    /// </summary>
+    private static string? SalvageIsSpentWhenTaken()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Pickups.Clear();
+        world.AddPlayer(new Loadout { Class = PlayerClass.Tank });   // seat 1
+
+        world.Players[0].Position = Torus.Wrap(new Vector2(-60f, 0f));
+        world.Players[1].Position = Torus.Wrap(new Vector2(60f, 0f));
+        world.Pickups.Add(new Pickup(world.Players[0].Position, PickupKind.ScrapMetal));
+        world.Pickups.Add(new Pickup(world.Players[1].Position, PickupKind.ScrapMetal));
+
+        // Several ticks: a piece that was taken but never removed keeps paying out.
+        for (int i = 0; i < 5; i++) StepWithoutInput(world);
+
+        if (world.Pickups.Count != 0)
+            return $"{world.Pickups.Count} taken pickups were left lying on the field";
+        int a = CountItems(world.InventoryOf(0), ItemKind.ScrapMetal);
+        int b = CountItems(world.InventoryOf(1), ItemKind.ScrapMetal);
+        if (a != 1 || b != 1) return $"two pieces of salvage paid out {a} and {b}, expected 1 each";
+        return null;
+    }
+
+    private static string? BossesCrossTheWire()
+    {
+        // A client must SEE another player's boss fight, not only hear it. The host's Crab-Core
+        // and Maw-Core go out as their own tiny packet and arrive as render-only puppets at the
+        // right place and phase; when the host stops reporting one, the puppet is dropped.
+        var host = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        host.SpawnCrabAhead();
+        host.AttachMawForTest(new MawCore(Torus.Wrap(new Vector2(12f, 9f))));
+        host.Soldiers.Add(new EnemySoldier(Torus.Wrap(new Vector2(6f, 4f)), 3f, leader: true, slot: 0));
+        host.Soldiers.Add(new EnemySoldier(Torus.Wrap(new Vector2(8f, 5f)), 2f, leader: false, slot: 1));
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+
+        var buf = new byte[64];
+        int n = Snapshot.WriteBosses(host, forSeat: 0, tick: 3u, buf);
+        Snapshot.ApplyBosses(client, buf.AsSpan(0, n));
+
+        if (client.Boss is not { IsPuppet: true }) return "the client never received the Crab-Core";
+        if (client.Maw is not { IsPuppet: true }) return "the client never received the Maw-Core";
+        if (Torus.Distance(client.Boss.Position, host.Boss!.Position) > 0.6f)
+            return "the crab puppet landed at the wrong place";
+        if (client.Boss.Phase != host.Boss.Phase)
+            return $"the crab puppet is in {client.Boss.Phase}, not the host's {host.Boss.Phase}";
+        if (client.Soldiers.Count != 2)
+            return $"the client drew {client.Soldiers.Count} of the host's 2 squad members";
+        if (!client.Soldiers[0].IsLeader)
+            return "the squad leader arrived unmarked on the client";
+
+        // A world with no bosses drops the puppets.
+        var empty = new World.World(null, new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        empty.Enemies.Clear();
+        int n2 = Snapshot.WriteBosses(empty, forSeat: 0, tick: 4u, buf);
+        Snapshot.ApplyBosses(client, buf.AsSpan(0, n2));
+        if (client.Boss != null || client.Maw != null || client.Soldiers.Count != 0)
+            return "the host dropped its bosses/squad and the client kept the puppets";
+        return null;
+    }
+
+    private static string? ClientDoesNotSimulateTheField()
+    {
+        // A client is shown the field, it does not run it. Stepped on its own with a hunter and
+        // a boss placed, an authoritative world would advance them; a client world must leave
+        // everything it does not drive exactly where the last snapshot put it, and raise no cues
+        // of its own for it.
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.Enemies.Clear();
+        var enemy = new EnemyTank(Torus.Wrap(new Vector2(20f, 0f)), elite: false);
+        client.Enemies.Add(enemy);
+        Vector2 before = enemy.Position;
+
+        for (int i = 0; i < 30; i++) client.StepForTest((float)Config.FixedDt);
+
+        if (Torus.Distance(enemy.Position, before) > 0.01f)
+            return "a client stepped a hunter it should only have been shown";
+        return null;
+    }
+
+    private static string? PickInstallsChosenChassis()
+    {
+        // The bug: chassis is chosen in the 3D room, after connecting, so a client is seated as
+        // a placeholder tank and its own craft has to be rebuilt when it picks. If it is not,
+        // the client drives a tank while the host simulates the chassis it actually chose, and
+        // the two move so differently the craft is never where anyone believes it is. This
+        // proves a pick lands on BOTH ends: the client's own seat and the host's copy of it.
+        var net = new LoopbackNet(2, LinkQuality.Typical, seed: 314);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Tank);   // placeholder — the real pick comes from the pod
+
+        var hostRoom = new World.LobbyRoom { IsHost = true };
+        hostRoom.Seat(0, "HOST");
+        var clientRoom = new World.LobbyRoom();
+
+        // Seat the joiner, exactly as the loop drives it on the lobby screen.
+        for (int i = 0; i < 80; i++)
+        {
+            net.Advance();
+            host.LobbyTick(hostRoom);
+            if (client.LocalSeat >= 0 && clientRoom.Stage != World.LobbyRoom.Phase.InRoom)
+                clientRoom.Seat(client.LocalSeat, "JOINER");
+            client.LobbyTick(clientRoom);
+        }
+        if (client.LocalSeat != 1) return $"the joiner seated at {client.LocalSeat}, not 1";
+
+        // The joiner walks to the pod and picks a SOLDIER.
+        clientRoom.PickForTest(PlayerClass.Soldier);
+        for (int i = 0; i < 80; i++)
+        {
+            net.Advance();
+            host.LobbyTick(hostRoom);
+            client.LobbyTick(clientRoom);
+        }
+
+        if (clientWorld.Players[1].Soldier is null)
+            return $"the client picked a soldier and is still driving a {clientWorld.Players[1].Class}";
+        if (hostWorld.Players[1].Soldier is null)
+            return $"the host has the joiner as a {hostWorld.Players[1].Class}, not the soldier they picked";
+        return null;
+    }
+
+    private static string? LobbyHandshakeSeatsAJoiner()
+    {
+        // The bug this exists to prevent: the wire was only turned once a match was running,
+        // so two machines both sitting on the lobby screen never exchanged a word. The
+        // connection came up, the joiner said hello into it, and the host — which was not
+        // draining its socket until it was already playing — never answered. It looked
+        // exactly like a network failure and was nothing of the kind.
+        //
+        // So: nothing here steps a world or pumps a tick. Only what the lobby itself runs.
+        var net = new LoopbackNet(2, LinkQuality.Typical, seed: 99);
+        var hostWorld = new World.World(null, new MatchSettings { MaxPlayers = 4, Revives = 5 });
+        var clientWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+
+        var host = new Session(net[0], host: true);
+        var client = new Session(net[1], host: false);
+        host.HostMatch(hostWorld);
+        client.JoinMatch(clientWorld);
+        client.SendHello(PlayerClass.Fish);
+
+        for (int i = 0; i < 120; i++)
+        {
+            net.Advance();
+            host.PumpLobby();
+            client.PumpLobby();
+        }
+
+        if (client.LocalSeat != 1)
+            return $"two seconds on the lobby screen and the joiner was still seated at {client.LocalSeat}";
+        if (hostWorld.Players.Count != 2) return "the host never seated the joiner";
+        if (hostWorld.Players[1].Fish is null)
+            return "the joiner asked for a fish and the host seated something else";
+
+        // The host's rules reach the client with the seat, so both ends agree before anyone
+        // is in the world.
+        if (client.World!.Match.Revives != 5)
+            return $"the client thinks the match has {client.World.Match.Revives} revives, not 5";
+
+        // And being seated is not being in: the client waits on LAUNCH.
+        if (client.MatchStarted) return "the client walked in before the host started the match";
+
+        host.StartMatch();
+        for (int i = 0; i < 60; i++)
+        {
+            net.Advance();
+            host.PumpLobby();
+            client.PumpLobby();
+        }
+        if (!client.MatchStarted) return "the host pressed LAUNCH and the client never heard";
+        return null;
+    }
+
     private static string? WorldIsAFiniteTorus()
     {
         // Drive off one edge and you come back on the opposite one — the map is not
@@ -1235,26 +3740,71 @@ public static class SelfTest
     /// clearing a firefight feeds the craft that cleared it. Killing the seeded hunter has to
     /// add exactly one pickup, and it has to be one of the two usable kinds.
     /// </summary>
+    /// <summary>
+    /// A kill leaves exactly one reward — a battery or a handful of rounds — and, on top of
+    /// it, whatever parts the body gave up: a machine that has just been destroyed comes
+    /// apart, and the scrap, powder and wire the workshop runs on is where that comes from.
+    /// Run over several kills, because the parts are rolled per material and a single body is
+    /// entitled to leave none of them.
+    /// </summary>
     private static string? KillsLeaveSalvage()
     {
-        var world = new World.World { DynamicSpawning = false };
-        AimPlayerAtFirstEnemy(world);
+        const int Kills = 8;
+        int killed = 0, scrapSeen = 0;
 
-        int before = world.Pickups.Count;
-        for (int i = 0; i < 60 * 8 && world.Enemies.Count > 0; i++)
+        for (int round = 0; round < Kills; round++)
         {
-            AimPlayerAtFirstEnemy(world);
-            world.FirePlayerShot();
-            StepWithoutInput(world);
+            var world = new World.World { DynamicSpawning = false };
+            world.Pickups.Clear();
+
+            // Where the hunter was standing on the last tick it was alive — the parts are
+            // scattered about the body, and this is the only handle on where that was.
+            Vector2 grave = world.Enemies.Count > 0 ? world.Enemies[0].Position : Vector2.Zero;
+            for (int i = 0; i < 60 * 8 && world.Enemies.Count > 0; i++)
+            {
+                AimPlayerAtFirstEnemy(world);
+                grave = world.Enemies[0].Position;
+                world.FirePlayerShot();
+                StepWithoutInput(world);
+            }
+            if (world.Enemies.Count > 0) continue;   // never died; not this round's business
+            killed++;
+
+            int reward = 0, parts = 0;
+            foreach (var pk in world.Pickups)
+            {
+                switch (pk.Kind)
+                {
+                    // The three things a kill can reward: rounds for the gun, a cell for the
+                    // shields, or — rarely — the kit that is the only thing that mends hull.
+                    case Entities.PickupKind.Battery:
+                    case Entities.PickupKind.Ammo:
+                    case Entities.PickupKind.RepairKit:
+                        reward++;
+                        break;
+                    case Entities.PickupKind.ScrapMetal:
+                    case Entities.PickupKind.SpaceGunpowder:
+                    case Entities.PickupKind.CopperWire:
+                        parts++;
+                        if (pk.Kind == Entities.PickupKind.ScrapMetal) scrapSeen++;
+                        // Close enough to the corpse to be swept up in one pass. Generous
+                        // against the scatter radius, because the body kept moving right up
+                        // to the tick it died.
+                        float d = MathF.Sqrt(Torus.DistanceSquared(pk.Position, grave));
+                        if (d > World.World.ScatterRadius + 4f)
+                            return $"a part landed {d:0.0} from the body it came off";
+                        break;
+                    default:
+                        return $"a kill dropped a {pk.Kind}";
+                }
+            }
+            if (reward != 1) return $"a kill left {reward} battery/ammo drops, expected 1";
+            if (parts > 3) return $"a kill left {parts} parts, expected at most 3";
         }
-        if (world.Enemies.Count > 0) return "enemy still alive after 8s of fire";
 
-        int dropped = world.Pickups.Count - before;
-        if (dropped != 1) return $"a kill dropped {dropped} pickups, expected 1";
-
-        var kind = world.Pickups[^1].Kind;
-        if (kind is not (Entities.PickupKind.Battery or Entities.PickupKind.Ammo))
-            return $"a kill dropped a {kind}, expected a battery or rounds";
+        if (killed == 0) return "no enemy died in 8s of fire";
+        // Scrap comes off nine bodies in ten, so eight kills with none at all is not luck.
+        if (scrapSeen == 0) return $"{killed} kills left no scrap metal at all";
         return null;
     }
 
@@ -1346,10 +3896,14 @@ public static class SelfTest
         if (CountItems(world.Inventory, ItemKind.Battery) < 1)
             return "battery was not stowed in the inventory";
 
-        // Spending it (as the panel's right-click does) recharges shield + hyper.
-        world.Player.RefillShield(World.World.BatteryChargeFraction);
+        // Spending it (as the panel's right-click does) puts back one whole shield charge
+        // and its share of hyper.
+        int charges0 = world.Player.ChargesLeft;
+        world.Player.ChargeShield(1);
         world.Player.RefillHyper(World.World.BatteryChargeFraction);
         if (world.Player.Shield <= shield0) return "spending a battery did not recharge shield";
+        if (world.Player.ChargesLeft != charges0 + 1)
+            return "spending one battery did not put back exactly one shield charge";
         if (world.Player.Hyper <= hyper0) return "spending a battery did not recharge hyper";
         return null;
     }
@@ -1388,6 +3942,124 @@ public static class SelfTest
         for (int i = 0; i < Inventory.CraftCount; i++)
             if (!inv.Craft[i].IsEmpty) return "crafting did not consume the fragments";
         return null;
+    }
+
+    /// <summary>
+    /// The two new recipes: rounds out of powder, alloy and scrap, and a cell out of wire,
+    /// scrap and any one of the three anode metals. The bench does not care which corner a
+    /// part was dropped into, so both are checked in an order nobody would type by hand.
+    /// </summary>
+    private static string? MaterialsCraftRoundsAndCells()
+    {
+        var inv = new Inventory();
+        inv.Craft[0] = new ItemStack(ItemKind.ScrapMetal, 1);
+        inv.Craft[1] = new ItemStack(ItemKind.SpaceGunpowder, 1);
+        inv.Craft[2] = new ItemStack(ItemKind.DenseAlloy, 1);
+
+        ItemStack rounds = inv.CraftOutput();
+        if (rounds.IsEmpty || rounds.Kind != ItemKind.Bullet)
+            return "powder, alloy and scrap did not make rounds";
+        if (rounds.Count < 2) return $"the round recipe yielded {rounds.Count}, expected a handful";
+        if (inv.TakeCraftOutput().IsEmpty) return "claiming the rounds made nothing";
+        foreach (var c in inv.Craft)
+            if (!c.IsEmpty) return "crafting rounds did not consume the parts";
+
+        // Each of the three metals satisfies the cell's third corner on its own.
+        foreach (var metal in new[] { ItemKind.Lead, ItemKind.Zinc, ItemKind.Lithium })
+        {
+            var cell = new Inventory();
+            cell.Craft[0] = new ItemStack(metal, 1);
+            cell.Craft[1] = new ItemStack(ItemKind.ScrapMetal, 1);
+            cell.Craft[2] = new ItemStack(ItemKind.CopperWire, 1);
+            ItemStack made = cell.CraftOutput();
+            if (made.IsEmpty || made.Kind != ItemKind.Battery)
+                return $"wire, scrap and {metal} did not make a cell";
+        }
+
+        // And three parts that are not a recipe make nothing at all.
+        var junk = new Inventory();
+        junk.Craft[0] = new ItemStack(ItemKind.ScrapMetal, 1);
+        junk.Craft[1] = new ItemStack(ItemKind.ScrapMetal, 1);
+        junk.Craft[2] = new ItemStack(ItemKind.ScrapMetal, 1);
+        return junk.CanCraft() ? "three scraps crafted something" : null;
+    }
+
+    /// <summary>
+    /// The take-apart bench. A round always gives back the three things it is made of; a cell
+    /// always gives back wire and scrap and, about half the time, one of the three metals.
+    /// Rolled many times, because the point of the third arrow is that it is a gamble.
+    /// </summary>
+    private static string? TeardownYieldsParts()
+    {
+        // A round: three parts, every time, and always the same three.
+        for (int i = 0; i < 20; i++)
+        {
+            var inv = new Inventory();
+            inv.Break[0] = new ItemStack(ItemKind.Bullet, 1);
+            if (!inv.BreakOne()) return "the bench refused to open a round";
+            if (!inv.Break[0].IsEmpty) return "opening a round did not spend it";
+            if (CountEverywhere(inv, ItemKind.SpaceGunpowder) != 1
+                || CountEverywhere(inv, ItemKind.DenseAlloy) != 1
+                || CountEverywhere(inv, ItemKind.ScrapMetal) != 1)
+                return "a round did not come apart into powder, alloy and scrap";
+        }
+
+        // A cell: wire and scrap every time, a metal some of the time.
+        int metals = 0;
+        const int Cells = 200;
+        for (int i = 0; i < Cells; i++)
+        {
+            var inv = new Inventory();
+            inv.Break[0] = new ItemStack(ItemKind.Battery, 1);
+            if (!inv.BreakOne()) return "the bench refused to open a cell";
+            if (CountEverywhere(inv, ItemKind.CopperWire) != 1
+                || CountEverywhere(inv, ItemKind.ScrapMetal) != 1)
+                return "a cell did not always give back wire and scrap";
+            int metal = CountEverywhere(inv, ItemKind.Lead)
+                      + CountEverywhere(inv, ItemKind.Zinc)
+                      + CountEverywhere(inv, ItemKind.Lithium);
+            if (metal > 1) return "a cell gave back more than one metal";
+            metals += metal;
+        }
+        // A coin toss over two hundred cells: anything outside this is a broken table, not
+        // an unlucky run.
+        if (metals < Cells / 4 || metals > Cells * 3 / 4)
+            return $"{metals} of {Cells} cells gave up a metal — expected about half";
+
+        // And raw material is the bottom of the pile: it does not come apart any further.
+        var scrap = new Inventory();
+        scrap.Break[0] = new ItemStack(ItemKind.ScrapMetal, 4);
+        if (scrap.BreakOne()) return "the bench opened a scrap of metal";
+        return null;
+    }
+
+    /// <summary>
+    /// The two benches' placement rules. The corners take parts and nothing else, the bench
+    /// takes only what can actually be opened, and the row the parts come down into is
+    /// out-only — the player empties it, nothing may be dropped back in.
+    /// </summary>
+    private static string? BenchesTakeOnlyWhatTheyShould()
+    {
+        if (Inventory.Accepts(InvRegion.Craft, ItemKind.Battery))
+            return "a battery was allowed into a crafting corner";
+        if (!Inventory.Accepts(InvRegion.Craft, ItemKind.ScrapMetal))
+            return "scrap was refused by a crafting corner";
+        if (!Inventory.Accepts(InvRegion.Break, ItemKind.Battery))
+            return "the take-apart bench refused a battery";
+        if (Inventory.Accepts(InvRegion.Break, ItemKind.ScrapMetal))
+            return "the take-apart bench accepted something it cannot open";
+        if (Inventory.Accepts(InvRegion.Parts, ItemKind.ScrapMetal))
+            return "the parts row accepted a drop";
+
+        // Out of the parts row and into the grid works; the reverse does not.
+        var inv = new Inventory();
+        inv.Parts[0] = new ItemStack(ItemKind.ScrapMetal, 3);
+        if (!inv.Move(InvRegion.Parts, 0, InvRegion.Slots, 0, 3))
+            return "parts could not be dragged out into the grid";
+        if (inv.Move(InvRegion.Slots, 0, InvRegion.Parts, 0, 3))
+            return "the grid was allowed to push items back into the parts row";
+        return CountItems(inv, ItemKind.ScrapMetal) == 3
+            ? null : "dragging parts into the grid lost them";
     }
 
     private static string? CrabCoreBlastKills()
@@ -1451,6 +4123,23 @@ public static class SelfTest
         return n;
     }
 
+    /// <summary>As <see cref="CountItems"/>, but across the whole pack — grid, crafting
+    /// corners and equip row. What a conservation check wants: a move that shuffles an item
+    /// out of the grid has not lost it.</summary>
+    private static int CountEverywhere(Inventory inv, ItemKind kind)
+    {
+        int n = CountItems(inv, kind);
+        foreach (var s in inv.Craft)
+            if (!s.IsEmpty && s.Kind == kind) n += s.Count;
+        foreach (var s in inv.Weapons)
+            if (!s.IsEmpty && s.Kind == kind) n += s.Count;
+        foreach (var s in inv.Break)
+            if (!s.IsEmpty && s.Kind == kind) n += s.Count;
+        foreach (var s in inv.Parts)
+            if (!s.IsEmpty && s.Kind == kind) n += s.Count;
+        return n;
+    }
+
     private static string? GroundedShotMissesCore()
     {
         // A bolt at barrel height, dead-centre on the core's planar spot, must sail
@@ -1486,7 +4175,7 @@ public static class SelfTest
         // A shot launched well above barrel height is an air shot: it must glide out
         // and expire on its own (the flag the world reads to stage the horizon blast).
         var p = new Entities.Projectile();
-        p.Fire(Vector2.Zero, new Vector2(0f, 1f), fromPlayer: true, launchHeight: 6.5f);
+        p.Fire(Vector2.Zero, new Vector2(0f, 1f), owner: 0, launchHeight: 6.5f);
         if (!p.IsAirShot) return "a high launch wasn't treated as an air shot";
 
         bool sawExpire = false;
@@ -4043,6 +6732,830 @@ public static class SelfTest
         StepWithoutInput(world);
     }
 
+    // --- The skyline over the wire ------------------------------------------------
+
+    /// <summary>
+    /// The last parity gap where two players genuinely saw different worlds. The city's
+    /// layout was always identical everywhere — it comes off a fixed seed — but nothing
+    /// carried the <em>damage</em>, so a tower one player cut down with a beam still stood on
+    /// everybody else's screen, complete with its collision.
+    /// </summary>
+    private static string? StructureDamageCrossesTheWire()
+    {
+        var host = new World.World(new Loadout { Class = PlayerClass.Spider })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        var tower = FirstTower(host);
+        if (tower == null) return "no tower to cut";
+        if (host.Player.Spider == null) return "the spider chassis has no emitter";
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+
+        Structure? mirror = ByIndex(client, tower.Index);
+        if (mirror == null) return "the client's city does not have the same tower in it";
+        if (mirror.Fracture != null) return "the client's tower started out already cut";
+
+        // Stand off the tower and put a full lance through its base.
+        Vector2 away = Vector2.Normalize(Torus.Delta(tower.Position, host.Player.Position)) * 20f;
+        host.Player.Position = Torus.Wrap(tower.Position + away);
+        host.Player.Heading = MathF.Atan2(-away.X, -away.Y);
+        client.Players[0].Position = host.Player.Position;   // in range to be told about it
+        for (int i = 0; i < 200; i++) host.Player.Spider!.Hold((float)Config.FixedDt);
+        host.FireSpiderLanceForTest();
+        if (!tower.Falling) return "the lance left the tower standing on the host";
+
+        var buf = new byte[Snapshot.MaxStructureSize];
+        int n = Snapshot.WriteStructures(host, forSeat: 0, tick: 5u, buf);
+        Snapshot.ApplyStructures(client, buf.AsSpan(0, n));
+
+        if (!mirror.Falling)
+            return "the tower came down on the host and stood untouched on the client";
+        if (mirror.Fracture == null)
+            return "the client never built the chunk model the host had carved";
+
+        // And the standing shape has to match, not merely the fact of the hit — otherwise
+        // the client draws a tower with a hole in a different place from the one that is
+        // actually there.
+        if (StandingCells(mirror) != StandingCells(tower))
+            return $"the client has {StandingCells(mirror)} cells standing, the host {StandingCells(tower)}";
+        return null;
+    }
+
+    /// <summary>
+    /// The keep-last packet has to keep saying so. A player who was on the far side of the
+    /// world when a tower fell has never heard about it, and there is no second chance —
+    /// the razed lot has to stay in the outgoing set or they drive into an invisible ruin.
+    /// </summary>
+    private static string? RazedLotsReachALateClient()
+    {
+        var host = new World.World(new Loadout { Class = PlayerClass.Spider })
+        { DynamicSpawning = false };
+        host.Enemies.Clear();
+        var tower = FirstTower(host);
+        if (tower == null) return "no tower to cut";
+
+        Vector2 away = Vector2.Normalize(Torus.Delta(tower.Position, host.Player.Position)) * 20f;
+        host.Player.Position = Torus.Wrap(tower.Position + away);
+        host.Player.Heading = MathF.Atan2(-away.X, -away.Y);
+        for (int i = 0; i < 200; i++) host.Player.Spider!.Hold((float)Config.FixedDt);
+        host.FireSpiderLanceForTest();
+
+        // Run the collapse right out, so the lot is cleared and the structure has left the
+        // live field entirely.
+        for (int i = 0; i < 60 * 6; i++) StepWithoutInput(host);
+        if (host.Structures.Contains(tower)) return "the wreck never left the host's field";
+
+        // Only now does the client come into range and get told.
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.LocalIndex = 0;
+        client.Players[0].Position = host.Player.Position;
+
+        var buf = new byte[Snapshot.MaxStructureSize];
+        int n = Snapshot.WriteStructures(host, forSeat: 0, tick: 9u, buf);
+        Snapshot.ApplyStructures(client, buf.AsSpan(0, n));
+        for (int i = 0; i < 60 * 6; i++) StepWithoutInput(client);
+
+        if (ByIndex(client, tower.Index) is { Gone: false })
+            return "a lot razed on the host was still standing on the client";
+        if (client.Structures.Contains(ByIndex(client, tower.Index)!))
+            return "the client never swept the cleared lot off its field";
+        return null;
+    }
+
+    private static Structure? ByIndex(World.World world, int index)
+    {
+        foreach (var s in world.Structures) if (s.Index == index) return s;
+        return null;
+    }
+
+    private static int StandingCells(Structure s)
+    {
+        if (s.Fracture is not { } f) return -1;
+        int n = 0;
+        foreach (var c in f.Chunks) if (c.Alive) n++;
+        return n;
+    }
+
+    // --- Personal salvage ---------------------------------------------------------
+
+    /// <summary>
+    /// Collection used to test the local seat and only the local seat, and to pour whatever
+    /// it found into one pack the whole world shared. In a match that meant salvage was
+    /// unreachable for nineteen of the twenty players and, when it was reached, belonged to
+    /// nobody in particular.
+    /// </summary>
+    private static string? SalvageIsPerSeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Pickups.Clear();
+        world.AddPlayer(new Loadout { Class = PlayerClass.Tank });   // seat 1
+
+        // A cell parked on top of seat 1, well clear of seat 0.
+        world.Players[0].Position = Torus.Wrap(new Vector2(-60f, 0f));
+        world.Players[1].Position = Torus.Wrap(new Vector2(60f, 0f));
+        world.Pickups.Add(new Pickup(world.Players[1].Position, PickupKind.Battery));
+
+        StepWithoutInput(world);
+
+        if (CountItems(world.InventoryOf(1), ItemKind.Battery) < 1)
+            return "the craft standing on the cell did not pick it up";
+        if (CountItems(world.InventoryOf(0), ItemKind.Battery) != 0)
+            return "another seat's salvage landed in the host's own pack";
+        return null;
+    }
+
+    /// <summary>
+    /// A client's pack is a mirror, not the truth. It scribbles on it for an instant response
+    /// and sends the host an intent; the host replays it against the real pack with the same
+    /// rules and mirrors the result back.
+    /// </summary>
+    private static string? InventoryIntentsAreHostAuthoritative()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+
+        // The host stocks the client's seat with something to move.
+        Inventory pack = hw.InventoryOf(1);
+        pack.Add(ItemKind.CrabFragment, 3);
+        for (int i = 0; i < 10; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+
+        if (CountItems(cw.InventoryOf(1), ItemKind.CrabFragment) != 3)
+            return "the host's pack never reached the client";
+
+        // The client moves one fragment from the grid into a crafting corner. It files the
+        // intent exactly as the panel does.
+        cw.Authoritative = false;
+        cw.InventoryOf(1).Move(InvRegion.Slots, 0, InvRegion.Craft, 0, 1);
+        cw.FileInvIntent(new InvIntent(InvOp.Move, InvRegion.Slots, 0, InvRegion.Craft, 0, 1));
+        for (int i = 0; i < 10; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+
+        if (pack.Craft[0].IsEmpty || pack.Craft[0].Kind != ItemKind.CrabFragment)
+            return "the client's move never reached the host's pack";
+        // Counted across the whole pack, not just the grid: the point of the move is that a
+        // fragment left one and arrived in the other, and neither end may mint or drop one.
+        if (CountEverywhere(pack, ItemKind.CrabFragment) != 3)
+            return "the host's replay of the move invented or lost a fragment";
+
+        // And a move the host refuses is undone by the echo rather than standing on the
+        // client: a fragment cannot live in an equip slot, whatever the client claims.
+        cw.InventoryOf(1).Slots[0] = new ItemStack(ItemKind.CrabFragment, 9);
+        cw.InventoryOf(1).Weapons[0] = new ItemStack(ItemKind.CrabFragment, 9);
+        cw.FileInvIntent(new InvIntent(InvOp.Move, InvRegion.Slots, 0, InvRegion.Weapons, 0, 9));
+        for (int i = 0; i < 10; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+
+        if (!pack.Weapons[0].IsEmpty)
+            return "the host accepted a fragment into an equip slot";
+        if (!cw.InventoryOf(1).Weapons[0].IsEmpty)
+            return "the client's invented equip was never corrected by the host's echo";
+        return null;
+    }
+
+    /// <summary>
+    /// A teardown is the one inventory action with a die roll in it, so it is the one a client
+    /// genuinely cannot get right on its own: it rolls its own metal for an instant answer and
+    /// has to end up holding whatever the host rolled instead.
+    /// </summary>
+    private static string? BreakingIsTheHostsRoll()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+
+        Inventory pack = hw.InventoryOf(1);
+        pack.Break[0] = new ItemStack(ItemKind.Battery, 2);
+        for (int i = 0; i < 10; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+        if (cw.InventoryOf(1).Break[0].Count != 2)
+            return "the host's bench never reached the client";
+
+        // The client opens one, exactly as the panel does: it scribbles its own roll onto the
+        // mirror and files the intent.
+        cw.Authoritative = false;
+        cw.InventoryOf(1).BreakOne();
+        cw.FileInvIntent(new InvIntent(InvOp.Break, InvRegion.Break, 0, InvRegion.Parts, 0, 1));
+        for (int i = 0; i < 20; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+
+        if (pack.Break[0].Count != 1) return "the client's teardown never reached the host's bench";
+        if (CountEverywhere(pack, ItemKind.CopperWire) != 1
+            || CountEverywhere(pack, ItemKind.ScrapMetal) != 1)
+            return "the host's replay of the teardown did not yield the certain parts";
+        // And the mirror is the host's pack, roll and all — not the client's guess at it.
+        if (cw.InventoryOf(1).Fingerprint() != pack.Fingerprint())
+            return "the client kept its own roll instead of the host's";
+        return null;
+    }
+
+    /// <summary>
+    /// Shift + right-click on a stack: one unit leaves the pack and is lying on the grid in
+    /// front of the craft — near enough to walk back to, far enough that the very next tick
+    /// does not hand it straight back. And it is worth exactly what was thrown: one round out
+    /// is one round back, not the handful a stray pickup off the field carries.
+    /// </summary>
+    private static string? ThrowingOneLandsItOnTheField()
+    {
+        var world = new World.World(new Loadout { Class = PlayerClass.Tank })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Pickups.Clear();
+
+        Inventory pack = world.Inventory;
+        pack.Slots[0] = new ItemStack(ItemKind.Bullet, 7);
+
+        if (!world.ThrowOne(world.LocalIndex, InvRegion.Slots, 0))
+            return "the throw was refused on a slot holding seven rounds";
+        if (pack.Slots[0].Count != 6)
+            return $"the throw took {7 - pack.Slots[0].Count} rounds off the stack, not one";
+        if (world.Pickups.Count != 1)
+            return $"{world.Pickups.Count} pieces of salvage landed for one thrown round";
+        if (world.Pickups[0].Kind != PickupKind.Ammo)
+            return "the thrown round landed as something else";
+        if (world.Pickups[0].Amount != 1)
+            return $"the thrown round is worth {world.Pickups[0].Amount} coming back";
+
+        // Out past the collect reach, so it does not bounce straight back into the pack.
+        float reach = PlayerTank.Radius + Pickup.Radius;
+        if (Torus.Distance(world.Pickups[0].Position, world.Player.Position) <= reach)
+            return "the thrown round landed inside the craft's own pickup radius";
+
+        // A tick with nobody moving leaves it where it fell.
+        StepWithoutInput(world);
+        if (world.Pickups.Count != 1 || pack.Slots[0].Count != 6)
+            return "the thrown round was scooped straight back up";
+
+        // Driven over, it comes back as one round and is spent — a thrown item is not ambient
+        // drift, so it must not reappear out in the fog and start printing rounds.
+        world.Player.Position = world.Pickups[0].Position;
+        StepWithoutInput(world);
+        if (CountItems(pack, ItemKind.Bullet) != 7)
+            return $"picking the thrown round back up gave {CountItems(pack, ItemKind.Bullet) - 6}";
+        if (world.Pickups.Count != 0)
+            return "the thrown round respawned out in the fog instead of being spent";
+
+        // Every kind a pack can hold can be thrown, and each survives the round trip as itself.
+        foreach (ItemKind kind in Enum.GetValues<ItemKind>())
+            if (World.World.ItemOf(World.World.SalvageOf(kind)) != kind)
+                return $"{ItemNames.Of(kind)} came back off the grid as something else";
+        return null;
+    }
+
+    /// <summary>
+    /// A client throwing an item away empties its own slot at once, but does not get to say
+    /// where the item lands — salvage lies on the host's field or nowhere. The host replays the
+    /// throw against the real pack and puts the item on the grid; the echo settles the client.
+    /// </summary>
+    private static string? ThrowingIsHostAuthoritative()
+    {
+        var (net, host, client, hw, cw) = SeatOne(4, "ACE");
+        if (client.LocalSeat != 1) return $"the client seated at {client.LocalSeat}, not 1";
+        hw.Pickups.Clear();
+
+        Inventory pack = hw.InventoryOf(1);
+        pack.Add(ItemKind.CrabFragment, 3);
+        for (int i = 0; i < 10; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+        if (CountItems(cw.InventoryOf(1), ItemKind.CrabFragment) != 3)
+            return "the host's pack never reached the client";
+
+        // The client throws one, exactly as the panel does.
+        cw.Authoritative = false;
+        int before = cw.Pickups.Count;
+        if (!cw.ThrowOne(cw.LocalIndex, InvRegion.Slots, 0))
+            return "the client's mirror refused the throw";
+        if (CountEverywhere(cw.InventoryOf(1), ItemKind.CrabFragment) != 2)
+            return "the client's mirror did not answer the throw at once";
+        if (cw.Pickups.Count != before)
+            return "the client invented a piece of salvage the host never placed";
+
+        cw.FileInvIntent(new InvIntent(InvOp.Throw, InvRegion.Slots, 0, InvRegion.None, 0, 1));
+        for (int i = 0; i < 20; i++) { net.Advance(); host.Pump(default); client.Pump(default); }
+
+        if (CountEverywhere(pack, ItemKind.CrabFragment) != 2)
+            return "the client's throw never reached the host's pack";
+        if (hw.Pickups.Count != 1 || hw.Pickups[0].Kind != PickupKind.CrabFragment)
+            return "the host never laid the thrown fragment on the field";
+        // Thrown by seat 1, so it lies by seat 1's craft — not at the host's feet.
+        if (Torus.Distance(hw.Pickups[0].Position, hw.Players[1].Position) > 6f)
+            return "the thrown fragment landed somewhere other than by the craft that threw it";
+        if (cw.InventoryOf(1).Fingerprint() != pack.Fingerprint())
+            return "the host's echo and the client's mirror disagree after a throw";
+        // And the salvage the host placed is drawn on the client that threw it.
+        if (cw.Pickups.Count != 1 || cw.Pickups[0].Kind != PickupKind.CrabFragment)
+            return "the thrown fragment never came back down the wire to be seen";
+        return null;
+    }
+
+    private static string? InventoryCrossesTheWire()
+    {
+        var pack = new Inventory();
+        pack.Add(ItemKind.Battery, 3);
+        pack.Add(ItemKind.Bullet, 17);
+        pack.Craft[1] = new ItemStack(ItemKind.CrabFragment, 1);
+        pack.Weapons[2] = new ItemStack(ItemKind.CrabCore, 1);
+        pack.Break[0] = new ItemStack(ItemKind.Battery, 2);
+        pack.Parts[2] = new ItemStack(ItemKind.Lithium, 1);
+
+        var buf = new byte[Inventory.WireSize];
+        pack.Write(buf);
+        var landed = new Inventory();
+        landed.Read(buf);
+
+        if (landed.Fingerprint() != pack.Fingerprint())
+            return "a pack came off the wire different from the one that went on";
+        if (landed.Weapons[2].Kind != ItemKind.CrabCore) return "the equip row did not survive";
+        if (landed.Craft[1].Kind != ItemKind.CrabFragment) return "the craft corners did not survive";
+        if (landed.Break[0].Count != 2) return "the take-apart bench did not survive";
+        if (landed.Parts[2].Kind != ItemKind.Lithium) return "the parts row did not survive";
+
+        // And the digest has to actually notice a change, or the host would never re-send.
+        landed.Slots[0].Count++;
+        if (landed.Fingerprint() == pack.Fingerprint())
+            return "the digest did not notice a slot changing";
+        return null;
+    }
+
+    // --- Spectating ---------------------------------------------------------------
+
+    /// <summary>
+    /// The revive model sends a spent player to watch the survivors, and until now nothing
+    /// pointed the camera at one — a dead client sat staring out of its own wreck while the
+    /// match carried on without it.
+    /// </summary>
+    private static string? SpentPlayerSpectatesASurvivor()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4, Revives = 0 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.AddPlayer(new Loadout { Class = PlayerClass.Tank });   // seat 1
+        world.AddPlayer(new Loadout { Class = PlayerClass.Tank });   // seat 2
+        world.LocalIndex = 0;
+
+        StepWithoutInput(world);
+        if (world.Spectating) return "a living player was put into spectator mode";
+        if (world.ViewSeat != 0) return "a living player's camera left their own craft";
+
+        // Seat 0 is spent. Seat 2 is nearer than seat 1, so it is the one to watch.
+        world.Players[2].Position = Torus.Wrap(world.Players[0].Position + new Vector2(4f, 0f));
+        world.Players[0].Shield = 0f;
+        world.Players[0].Health = 0f;
+        world.Players[0].Lives = 0;
+        if (!world.Players[0].Spectating) return "the test failed to put the local player out";
+
+        StepWithoutInput(world);
+        if (!world.Spectating) return "a spent player was left staring out of their own wreck";
+        if (world.ViewSeat != 2)
+            return $"the camera went to seat {world.ViewSeat}, not the nearest survivor";
+        if (!ReferenceEquals(world.Eye, world.Players[2])) return "Eye is not the watched craft";
+
+        // Sticky: the camera must not cut between team-mates as they drive past each other.
+        world.Players[1].Position = world.Players[0].Position;
+        StepWithoutInput(world);
+        if (world.ViewSeat != 2) return "the camera cut away from a perfectly alive team-mate";
+
+        // But it does move on when the one it was watching is spent too.
+        world.Players[2].Shield = 0f;
+        world.Players[2].Health = 0f;
+        world.Players[2].Lives = 0;
+        StepWithoutInput(world);
+        if (world.ViewSeat != 1) return "the camera stayed on a craft that had gone out";
+
+        // And a revive puts the player straight back behind their own eyes.
+        world.Players[0].Lives = 1;
+        world.Players[0].Shield = 50f;
+        StepWithoutInput(world);
+        if (world.Spectating) return "a revived player was left spectating";
+        return null;
+    }
+
+    // --- The transient combat light ------------------------------------------------
+
+    /// <summary>
+    /// Cables, stolen lance shafts and the spider's charged beam were all drawn from the
+    /// local player's own rig and nowhere else, so a team-mate's fight threw no light at all
+    /// on anyone else's screen.
+    /// </summary>
+    private static string? RigsCrossTheWire()
+    {
+        var host = new World.World(new Loadout { Class = PlayerClass.Spider },
+            new MatchSettings { MaxPlayers = 4 }) { DynamicSpawning = false };
+        host.Enemies.Clear();
+        if (host.AddPlayer(new Loadout { Class = PlayerClass.Virus }) == null)   // seat 1
+            return "the match refused a second seat";
+
+        // Seat 0 winds its lance; seat 1's mote throws a shaft of the stolen one.
+        for (int i = 0; i < 100; i++) host.Player.Spider!.Hold((float)Config.FixedDt);
+        PlayerTank mote = host.Players[1];
+        mote.Position = Torus.Wrap(new Vector2(6f, 0f));
+        mote.Virus!.AddShaft(new Vector3(6f, 2f, 0f), new Vector3(0f, 0f, 1f));
+
+        var client = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        client.AddPlayer();
+        client.LocalIndex = 1;   // we are the mote; seat 0's beam is somebody else's
+
+        var buf = new byte[Snapshot.MaxRigSize];
+        int n = Snapshot.WriteRigs(host, forSeat: 1, tick: 2u, buf);
+        Snapshot.ApplyRigs(client, buf.AsSpan(0, n));
+
+        if (!client.RemoteRigs.TryGetValue(0, out var beam))
+            return "the spider's gathering lance never reached the client";
+        if (!beam.HasBeam) return "the seat arrived with no beam on it";
+        if (beam.BeamCharge < 0.2f)
+            return $"the charge crossed at {beam.BeamCharge:0.00}, nothing like the meter it was";
+
+        // Our own seat is drawn from its live rig, so the wire's copy of it must be thrown
+        // away on arrival — keeping it would draw every shaft twice, at double brightness and
+        // a round trip out of date.
+        if (client.RemoteRigs.ContainsKey(1))
+            return "the client kept the host's copy of its own rig and would draw it twice";
+
+        // A shaft from a seat that is not ours does cross.
+        var other = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false, Authoritative = false };
+        other.AddPlayer();
+        other.LocalIndex = 0;
+        int n2 = Snapshot.WriteRigs(host, forSeat: 0, tick: 3u, buf);
+        Snapshot.ApplyRigs(other, buf.AsSpan(0, n2));
+        if (!other.RemoteRigs.TryGetValue(1, out var stolen) || stolen.ShaftCount < 1)
+            return "the virus's stolen lance threw no light on an onlooker's screen";
+        if (stolen.Shafts[0].Life <= 0f) return "the shaft arrived already burnt out";
+        return null;
+    }
+
+    // --- Lag compensation ----------------------------------------------------------
+
+    /// <summary>
+    /// The host decides hits against where everything is now; a client saw the field a round
+    /// trip ago. At any real ping that gap is the whole of "I clearly hit them" missing. The
+    /// host rewinds the world to what the shooter could actually see.
+    /// </summary>
+    private static string? LagCompensationRewindsTheTarget()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Pickups.Clear();
+        world.AddPlayer(new Loadout { Class = PlayerClass.Tank });   // seat 1, our laggy client
+
+        var mark = new EnemyTank(Torus.Wrap(new Vector2(0f, 40f)), elite: false);
+        world.Enemies.Add(mark);
+
+        // Fill the history with the hunter parked at a known spot, then move it well clear.
+        const int Lag = 12;   // 200 ms at 60 Hz
+        Vector2 wasAt = mark.Position;
+        for (int i = 0; i < Lag + 4; i++) world.StepForTest((float)Config.FixedDt);
+        // The step drives the hunter, so pin it back where the history says it stood, take one
+        // more frame of history there, and only then teleport it away.
+        mark.Position = wasAt;
+        world.StepForTest((float)Config.FixedDt);
+        wasAt = mark.Position;
+        for (int i = 0; i < Lag; i++)
+        {
+            mark.Position = Torus.Wrap(mark.Position + new Vector2(0f, 3f));
+            world.StepForTest((float)Config.FixedDt);
+        }
+
+        // Uncompensated, the host's answer is wherever the hunter is now.
+        if (Torus.Distance(world.Rewound(mark.HitId, 1, mark.Position), mark.Position) > 0.01f)
+            return "a seat with no measured lag was rewound anyway";
+
+        // Told this seat is running Lag ticks behind, the same question answers with where the
+        // hunter stood on that client's screen.
+        world.SetSeatLag(1, Lag);
+        Vector2 seen = world.Rewound(mark.HitId, 1, mark.Position);
+        if (Torus.Distance(seen, mark.Position) < 1f)
+            return "the rewind handed back the live position, not the one the shooter saw";
+        if (Torus.Distance(seen, wasAt) > 4f)
+            return $"the rewind landed {Torus.Distance(seen, wasAt):0.0} from where the shooter saw it";
+
+        // The host's own shots are never rewound — it is not behind itself.
+        if (Torus.Distance(world.Rewound(mark.HitId, 0, mark.Position), mark.Position) > 0.01f)
+            return "the host's own shot was rewound against its own world";
+
+        // And a rewind further back than the history reaches falls through to the truth
+        // rather than reaching for a frame that has rolled off.
+        world.SetSeatLag(1, 39);
+        if (Torus.Distance(world.Rewound(mark.HitId, 1, mark.Position), mark.Position) > 0.01f)
+            return "a rewind past the end of the history invented a position";
+        return null;
+    }
+
+    /// <summary>
+    /// The same class of bug the virus chain had, in the soldier and fish kits. The host runs
+    /// every seat's triggers, but the cable kit fired from <c>Player</c> — this machine's own
+    /// craft — so a remote player's hook left the <em>host's</em> hip, their gas jump kicked
+    /// dust up under the host, and their crosshair overwrote the host's own anchor bracket.
+    /// </summary>
+    private static string? RigTriggersAreSeatAware()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Soldier }) == null)   // seat 1
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        PlayerTank mate = world.Players[1];
+        if (mate.Soldier is not { } rig) return "the soldier seat has no rig";
+
+        // Stand them a long way from the host, facing a known way.
+        mate.Position = Torus.Wrap(new Vector2(120f, -40f));
+        mate.Heading = 0f;
+        mate.Height = 0f;
+
+        // A cable has to leave THEIR hip, not ours.
+        Vector3 muzzle = world.SoldierMuzzle(mate, right: true);
+        if (Torus.Distance(new Vector2(muzzle.X, muzzle.Z), mate.Position) > 2f)
+            return "a seat's cable muzzle is nowhere near that seat's body";
+        if (Torus.Distance(new Vector2(muzzle.X, muzzle.Z), world.Players[0].Position) < 20f)
+            return "a remote seat's cable muzzle sits on the host's own craft";
+
+        // Drive their hook from their own input frame, as the host does for a wire packet.
+        var fire = new InputFrame(Btn.RightHook, Btn.RightHook, Vector2.Zero);
+        world.SetInput(1, fire);
+        world.Update((float)Config.FixedDt, InputFrame.Empty);
+
+        if (!rig.Right.Out) return "the remote player's hook never left the launcher";
+        if (world.Players[0].Soldier is { Right.Out: true })
+            return "the remote player's press fired the host's own hook";
+
+        // And their aim must not have stolen this machine's crosshair readout, which is a
+        // fact about the one pair of eyes at this keyboard.
+        if (world.AnchorInSight != null)
+            return "a remote player's aim wrote the local crosshair's anchor bracket";
+        return null;
+    }
+
+    /// <summary>
+    /// The same leak again, in the last two kits: the TANK's dischargers and the SPIDER's
+    /// claw and legs. Both trigger functions took the acting seat, then called helpers that
+    /// read <c>Player</c> — so on the host a remote tank's smoke screen appeared around the
+    /// HOST's craft, a remote spider's throw flew off along the host's heading, and its
+    /// pounce launched the host up a wall.
+    /// </summary>
+    private static string? MachineKitsAreSeatAware()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.Smoke.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)   // seat 1
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        PlayerTank host = world.Players[0];
+        PlayerTank mate = world.Players[1];
+        host.Position = Torus.Wrap(new Vector2(-90f, 0f));
+        mate.Position = Torus.Wrap(new Vector2(90f, 0f));
+        mate.Heading = 0f;
+
+        // Seat 1 vents its dischargers, from its own input frame as a wire packet would.
+        world.SetInput(1, new InputFrame(Btn.TankSmoke, Btn.TankSmoke, Vector2.Zero));
+        world.Update((float)Config.FixedDt, InputFrame.Empty);
+
+        if (world.Smoke.Count == 0) return "the remote tank's dischargers never fired";
+        foreach (var cloud in world.Smoke)
+        {
+            if (Torus.Distance(cloud.Position, mate.Position) > 12f)
+                return "the remote tank's screen was laid somewhere other than on that tank";
+            if (Torus.Distance(cloud.Position, host.Position) < 30f)
+                return "a remote tank's smoke screen was laid around the host's own craft";
+        }
+
+        // And the SPIDER's claw: the grab has to reach from ITS craft, not from the host's.
+        var spiderWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        spiderWorld.Enemies.Clear();
+        if (spiderWorld.AddPlayer(new Loadout { Class = PlayerClass.Spider }) == null)
+            return "the match refused a spider seat";
+        spiderWorld.LocalIndex = 0;
+
+        PlayerTank arachnid = spiderWorld.Players[1];
+        arachnid.Position = Torus.Wrap(new Vector2(90f, 0f));
+        spiderWorld.Players[0].Position = Torus.Wrap(new Vector2(-90f, 0f));
+
+        // A hunter in arm's reach of the SPIDER and nowhere near the host.
+        var prey = new EnemyTank(Torus.Wrap(arachnid.Position + new Vector2(2f, 0f)), elite: false);
+        spiderWorld.Enemies.Add(prey);
+
+        spiderWorld.SetInput(1, new InputFrame(Btn.Fire, Btn.Fire, Vector2.Zero));
+        spiderWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+
+        if (arachnid.Claw is not { Holding: true } claw)
+            return "the remote spider's claw never closed on a hunter in its own reach";
+        if (!ReferenceEquals(claw.Victim, prey))
+            return "the remote spider grabbed something other than the hunter beside it";
+
+        // And the TANK's ram, which read Player throughout — so on the host only the host's
+        // own hull could crush anything and a remote player drove through hunters untouched.
+        var ramWorld = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        ramWorld.Enemies.Clear();
+        if (ramWorld.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a ramming seat";
+        ramWorld.LocalIndex = 0;
+        ramWorld.Players[0].Position = Torus.Wrap(new Vector2(-90f, 0f));
+
+        PlayerTank rammer = ramWorld.Players[1];
+        rammer.Position = Torus.Wrap(new Vector2(90f, 0f));
+        rammer.Heading = 0f;
+
+        // Wind the hull up to ramming speed under its own drive, then park a hunter on its nose.
+        var forward = new InputFrame(Btn.Forward, Btn.None, Vector2.Zero);
+        for (int i = 0; i < 120; i++)
+        {
+            ramWorld.SetInput(1, forward);
+            ramWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+        }
+        if (rammer.DriveVelocity.Length() < rammer.RamThreshold)
+            return "the remote tank never reached ramming speed";
+
+        var run = new EnemyTank(Torus.Wrap(rammer.Position + rammer.Forward * 1.5f), elite: false);
+        float wasShield = run.Shield;
+        ramWorld.Enemies.Add(run);
+        ramWorld.SetInput(1, forward);
+        ramWorld.Update((float)Config.FixedDt, InputFrame.Empty);
+
+        if (run.Alive && run.Shield >= wasShield)
+            return "a remote tank drove straight through a hunter without touching it";
+        return null;
+    }
+
+    // --- The rest of the sim, converted to seats ----------------------------------
+
+    /// <summary>
+    /// The wall pass ran on the local craft alone, so on the host every REMOTE player drove
+    /// clean through the city — and the host's own snapshots then placed them inside towers
+    /// on everybody's screen.
+    /// </summary>
+    private static string? WallsAreSolidForEverySeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        var tower = FirstTower(world);
+        if (tower == null) return "no tower to drive into";
+
+        // Park the host far away and shove seat 1 into the middle of a tower's footprint.
+        world.Players[0].Position = Torus.Wrap(tower.Position + new Vector2(150f, 0f));
+        PlayerTank mate = world.Players[1];
+        mate.Position = tower.Position;
+        mate.Height = 0f;
+
+        StepWithoutInput(world);
+
+        // It has to have been pushed clear of the footprint, whatever the footprint is.
+        if (Torus.Distance(mate.Position, tower.Position) < PlayerTank.Radius)
+            return "a remote craft was left standing inside a tower";
+        return null;
+    }
+
+    /// <summary>
+    /// Squads flew at <c>Player.Position</c> flat out, so on the host a squad only ever
+    /// hunted the host — nineteen other players could stand in the open and never be hunted,
+    /// shot at or bladed.
+    /// </summary>
+    private static string? SquadsHuntEverySeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        // Opposite corners of the torus, and a squad next to seat 1. Corners rather than
+        // opposite edges: the world wraps at 400, so (-150,0) and (150,0) are a hundred units
+        // apart the short way round, not three hundred.
+        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
+        PlayerTank mate = world.Players[1];
+        mate.Position = Torus.Wrap(new Vector2(195f, 195f));
+
+        // Raised well inside their own alert range of the mate and far outside it of the
+        // host, so "did they wake up?" is the whole question. A squad that only ever measures
+        // itself against the local seat sits on its tower and watches, forever.
+        world.SpawnSoldierSquad(Torus.Wrap(mate.Position + new Vector2(0f, 40f)));
+        if (world.Squads.Count == 0 || world.Soldiers.Count == 0) return "no squad was raised";
+
+        Vector2 startedAt = world.Soldiers[0].Position;
+        float toMate = Torus.Distance(startedAt, mate.Position);
+        float toHost = Torus.Distance(startedAt, world.Players[0].Position);
+        if (toMate > 120f) return $"the test raised the squad {toMate:0} from the mate, out of alert range";
+        if (toHost < 200f) return $"the test raised the squad only {toHost:0} from the host";
+
+        for (int i = 0; i < 60 * 10; i++) StepWithoutInput(world);
+        if (world.Squads.Count == 0) return "the squad was gone before it could be measured";
+
+        // Waking up at all is the thing: alertness is measured against whoever they decided
+        // their target is, and the only craft in range is the one that is not this machine's.
+        if (!world.Squads[0].Alerted)
+            return "a squad sat on its tower while a player stood in the open beside it";
+
+        // And they have to have actually come for them.
+        float now = float.MaxValue;
+        foreach (var s in world.Soldiers)
+            now = MathF.Min(now, Torus.Distance(s.Position, mate.Position));
+        if (now >= toMate)
+            return $"the squad never closed on the nearest player ({toMate:0} -> {now:0})";
+        return null;
+    }
+
+    /// <summary>Falling rubble billed the local craft alone — so the one thing the whole
+    /// destruction system exists for could only ever happen to one of the twenty people
+    /// standing under a collapse.</summary>
+    private static string? CrushBillsEverySeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        // A clear patch well away from the origin and from any tower's footprint, with the
+        // host nowhere near it — so nothing but the remote player can be billed.
+        var mark = new Vector2(30f, 12f);
+        world.Players[0].Position = Torus.Wrap(new Vector2(-150f, -150f));
+        PlayerTank mate = world.Players[1];
+        mate.Position = mark;
+        mate.Height = 0f;
+        float wasShield = mate.Shield;
+
+        // Steer one mass-bearing chunk straight down onto them at a section's speed — the
+        // exact moment a piece of a felled tower arrives on somebody underneath it. Driven
+        // directly rather than by felling a real building, so the test measures the billing
+        // and not the scatter of a particular tower's collapse.
+        world.Debris.Rubble(new Vector3(mark.X, 6f, mark.Y), Palette.StructureShell,
+            chunks: 8, scale: 2f);
+
+        var shards = world.Debris.Shards;
+        bool placed = false;
+        for (int i = 0; i < shards.Length; i++)
+        {
+            if (!shards[i].Active || shards[i].Mass <= 0f) continue;
+            shards[i].Position = new Vector3(mark.X, 1.5f, mark.Y);
+            shards[i].Velocity = new Vector3(0f, -14f, 0f);
+            placed = true;
+            break;
+        }
+        if (!placed) return "no mass-bearing rubble was spawned to test the crush";
+
+        StepWithoutInput(world);
+
+        if (mate.Shield >= wasShield && mate.Alive)
+            return "a section came down on a remote player and they walked away";
+        if (world.Players[0].Shield < world.Players[0].MaxShield)
+            return "the chunk billed the host, who was on the other side of the world";
+        return null;
+    }
+
+    /// <summary>The whole spawn director hung off <c>Player</c>, so the field was built
+    /// around the host and a client who drove away found an empty world.</summary>
+    private static string? SpawnsFollowEverySeat()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 });
+        world.Enemies.Clear();
+        world.Pickups.Clear();
+        if (world.AddPlayer(new Loadout { Class = PlayerClass.Tank }) == null)
+            return "the match refused a second seat";
+        world.LocalIndex = 0;
+
+        // Two players as near to opposite corners of the torus as it has. The separation is
+        // chosen against the spawn ring deliberately: nothing dropped around the host can
+        // land within Near of the mate, so anything that does is unambiguously theirs. A
+        // plain "nearer to one than the other" test would be decided by the wrap.
+        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
+        PlayerTank mate = world.Players[1];
+        mate.Position = Torus.Wrap(new Vector2(195f, 195f));
+        const float Near = 130f;   // just past the ring's outer edge (SpawnMaxRange is 120)
+
+        // Counted rather than merely spotted: with the anchor rolled per spawn, roughly half
+        // of everything the director produces belongs to each player, so a healthy share near
+        // the mate is the signal. One stray sighting would not be — a hunter chases whoever
+        // is nearest it and could wander.
+        int mateSpawns = 0;
+        var seen = new HashSet<object>();
+        for (int i = 0; i < 60 * 90; i++)
+        {
+            StepWithoutInput(world);
+            // Score each thing once, at the moment it first appears, so a chaser that drifts
+            // across the map later cannot be mistaken for something that spawned there.
+            foreach (var e in world.Enemies)
+                if (seen.Add(e) && Torus.Distance(e.Position, mate.Position) < Near) mateSpawns++;
+            foreach (var pk in world.Pickups)
+                if (seen.Add(pk) && Torus.Distance(pk.Position, mate.Position) < Near) mateSpawns++;
+        }
+
+        if (mateSpawns < 3)
+            return $"ninety seconds of spawning put {mateSpawns} things near the second player";
+        return null;
+    }
+
     // --- helpers: advance the sim without going through global input ---
 
     private static void StepWithoutInput(World.World world)
@@ -4057,5 +7570,722 @@ public static class SelfTest
         if (world.Enemies.Count == 0) return;
         Vector2 to = world.Enemies[0].Position - world.Player.Position;
         world.Player.Heading = MathF.Atan2(to.X, to.Y);
+    }
+
+    // --- The monsters can reach anybody, not just seat 0 --------------------------
+    //
+    // Every one of these was broken the same way and for the same reason: the boss attacks
+    // were written when `World.Player` meant "the player, there is only one", and they were
+    // never converted. On a host that is seat 0 — itself — so in a five-player match the
+    // Crab-Core's beam, its claw, the Maw-Core's lasers and its throat could only ever touch
+    // the person hosting. Everyone else walked through a firing boss untouched.
+
+    /// <summary>Two seats, and the world stepped without any input. Seat 0 is the local one,
+    /// as it is on a host.</summary>
+    private static World.World TwoSeatWorld()
+    {
+        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        { DynamicSpawning = false };
+        world.Enemies.Clear();
+        world.AddPlayer(new Loadout { Class = PlayerClass.Tank });
+        world.LocalIndex = 0;
+        // Opposite corners, not opposite edges — the torus wraps at 400, so (-150,0) and
+        // (150,0) are a hundred units apart the short way round rather than three hundred.
+        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
+        world.Players[1].Position = Torus.Wrap(new Vector2(195f, 195f));
+        return world;
+    }
+
+    private static string? BeamBurnsEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+
+        // Raise the boss beside the mate, far from the host, and let it run its protocol
+        // until it fires. The beam locks its direction at the craft it aimed at.
+        world.SpawnCrabAt(Torus.Wrap(mate.Position + new Vector2(18f, 0f)));
+        if (world.Boss is null) return "no boss was raised";
+
+        float before = mate.Shield;
+        float hostBefore = world.Players[0].Shield;
+        for (int i = 0; i < 60 * 30 && mate.Shield >= before; i++) StepWithoutInput(world);
+
+        if (mate.Shield >= before)
+            return "a Crab-Core stood next to a player for thirty seconds and never hurt them";
+        if (world.Players[0].Shield < hostBefore)
+            return "the boss hurt the host, who was on the far side of the world";
+        return null;
+    }
+
+    private static string? SeizureTakesEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+        world.SpawnCrabAt(Torus.Wrap(mate.Position + new Vector2(6f, 0f)));
+        if (world.Boss is null) return "no boss was raised";
+
+        for (int i = 0; i < 60 * 40 && world.Seizure is null; i++) StepWithoutInput(world);
+
+        if (world.Seizure is not { } grab)
+            return "a Crab-Core cornered a player for forty seconds and never picked them up";
+        if (!ReferenceEquals(grab.Victim, mate))
+            return "the boss grabbed the host, who was on the far side of the world";
+        if (!mate.Captured) return "the seized craft was never marked captured";
+        // And the camera effect belongs to the person in the claw, not to everyone.
+        if (world.Cinematic != null)
+            return "a team-mate's seizure took over the local player's camera";
+        return null;
+    }
+
+    private static string? MawSwallowsEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+        world.SpawnMawAt(Torus.Wrap(mate.Position));
+        if (world.Maw is null) return "no maw was raised";
+
+        for (int i = 0; i < 60 * 40 && world.Digestion is null; i++) StepWithoutInput(world);
+
+        if (world.Digestion is not { } meal)
+            return "a Maw-Core hung over a still player for forty seconds and never ate them";
+        if (!ReferenceEquals(meal.Victim, mate))
+            return "the mouth swallowed the host, who was on the far side of the world";
+        if (world.Cinematic != null)
+            return "a team-mate's digestion took over the local player's camera";
+        return null;
+    }
+
+    private static string? MawLasersBiteEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+        // Off to one side, so the mouth shoots at them rather than swallowing them: a
+        // digestion would mask whether the lasers themselves ever reach a remote seat.
+        mate.Position = Torus.Wrap(new Vector2(195f, 175f));
+        world.SpawnMawAt(Torus.Wrap(new Vector2(195f, 195f)));
+        if (world.Maw is null) return "no maw was raised";
+
+        float before = mate.Shield;
+        PlayerTank host = world.Players[0];
+        float hostBefore = host.Shield;
+
+        // The mouth decides for itself whether to shoot or lunge, and both are the same
+        // question here — does it engage a seat that is not this machine's? So the run ends
+        // as soon as it does either, and the assertion is that the thing it reached was the
+        // mate. Written this way rather than waiting only on laser damage, which the AI can
+        // pre-empt with a swallow and leave the check passing without having tested anything.
+        bool reached = false;
+        for (int i = 0; i < 60 * 40 && !reached; i++)
+        {
+            StepWithoutInput(world);
+            reached = mate.Shield < before || world.Digestion != null;
+        }
+
+        if (!reached)
+            return "a Maw-Core hung over a player for forty seconds and never engaged them";
+        if (world.Digestion is { } d && !ReferenceEquals(d.Victim, mate))
+            return "the mouth reached past the nearby player to swallow the distant host";
+        if (host.Shield < hostBefore)
+            return "the mouth hurt the host, who was on the far side of the world";
+        return null;
+    }
+
+    /// <summary>
+    /// The other half of making a seizure reach any seat: everything that used to freeze "the
+    /// player" while a cinematic ran asked whether <em>anybody</em> was held. Left that way,
+    /// one player getting grabbed would have locked all twenty players' triggers.
+    /// </summary>
+    private static string? ASeizedMateDoesNotFreezeTheRoom()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank host = world.Players[0];
+        PlayerTank mate = world.Players[1];
+        world.SpawnCrabAt(Torus.Wrap(mate.Position + new Vector2(6f, 0f)));
+        if (world.Boss is null) return "no boss was raised";
+
+        for (int i = 0; i < 60 * 40 && world.Seizure is null; i++) StepWithoutInput(world);
+        if (world.Seizure is not { } grab) return "the boss never grabbed anybody";
+        if (!ReferenceEquals(grab.Victim, mate)) return "the boss grabbed the wrong seat";
+
+        // The host is nowhere near it and must be able to fight normally.
+        int ammo = host.Ammo;
+        world.FirePlayerShot(laser: false, by: host);
+        if (host.Ammo == ammo)
+            return "a team-mate being seized froze the trigger of a player across the world";
+
+        bool anyRound = false;
+        foreach (var p in world.Projectiles) if (p.Active && p.Owner == 0) anyRound = true;
+        if (!anyRound) return "the shot cost ammo but no round left the barrel";
+        return null;
+    }
+
+    private static string? SplashBitesEverySeat()
+    {
+        World.World world = TwoSeatWorld();
+        PlayerTank mate = world.Players[1];
+        // Stand the two craft together, then lob a mortar onto them. Both should feel it;
+        // measured against seat 0 alone, the mate stood in the fireball unharmed.
+        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
+        mate.Position = Torus.Wrap(new Vector2(1.5f, 0f));
+
+        float mateBefore = mate.Shield;
+        world.DetonateMortarForTest(mate.Position);
+
+        if (mate.Shield >= mateBefore)
+            return "a mortar burst on a player's head and they did not feel it";
+        return null;
+    }
+
+    // --- A room with more than two people in it -----------------------------------
+    //
+    // Every netcode test above this point drives a host and exactly one client, which is the
+    // one arrangement that mostly worked. Almost everything that was actually wrong with this
+    // game's multiplayer only shows up with a third person in the room, or with somebody
+    // walking out of it, or with somebody arriving after everyone else had settled.
+    //
+    // Rather than hand-rolling the handshake in each test, this stands up a whole session the
+    // way the loop really does — Game.StartHosting, Game.StartJoining and Game.UpdateLobby,
+    // step for step — so a test exercises the code that ships rather than a sketch of it.
+
+    /// <summary>One machine in a test session: its transport, its session, its lobby room and
+    /// its world, driven exactly as <see cref="Game"/> drives them.</summary>
+    private sealed class Machine
+    {
+        public Session Net = null!;
+        public World.LobbyRoom? Room;
+        public World.World World = null!;
+        public Loadout Build = null!;
+        public string Name = "";
+        public bool InMatch;
+        public bool GoneAway;
+    }
+
+    /// <summary>A whole test session: one host and up to nineteen clients on a shared wire.</summary>
+    private sealed class Session3Plus
+    {
+        public LoopbackNet Wire = null!;
+        public Machine[] All = null!;
+        public MatchSettings Rules = null!;
+
+        public Machine Host => All[0];
+
+        /// <summary>One frame everywhere: the wire ticks, then each machine runs whichever of
+        /// the loop's two paths it is on (the lobby screen, or the live match).</summary>
+        public void Step()
+        {
+            Wire.Advance();
+            foreach (Machine m in All)
+            {
+                if (m.GoneAway || m.Net is null) continue;
+
+                if (m.InMatch)
+                {
+                    m.Net.Pump(InputFrame.Empty);
+                    m.World.Update((float)Config.FixedDt, InputFrame.Empty);
+                    continue;
+                }
+                if (m.Room is null) continue;
+
+                // --- Game.UpdateLobby ---
+                if (m.Net.Rejected is { } no) { m.Room.Fail(no); continue; }
+                if (!m.Net.IsHost && m.Net.LocalSeat >= 0
+                    && m.Room.Stage != World.LobbyRoom.Phase.InRoom)
+                    m.Room.Seat(m.Net.LocalSeat, m.Net.LocalName);
+                if (m.Net.IsHost && m.Net.World is { } hw) hw.Match = m.Room.Match.Clamped();
+                m.Room.Update(InputFrame.Empty, (float)Config.FixedDt);
+                m.Net.LobbyTick(m.Room);
+
+                // A client comes in on LAUNCH, but only once it has chosen a craft.
+                if (!m.Net.IsHost && m.Net is { MatchStarted: true, LocalSeat: >= 0 }
+                    && m.Room is { MyChassis: not null } r)
+                {
+                    World.World jw = m.Net.World!;
+                    jw.ReplacePlayer(m.Net.LocalSeat, r.MyBuild);
+                    foreach (var a in r.Avatars.Values)
+                        if (!jw.SeatNames.ContainsKey(a.Seat)) jw.SeatNames[a.Seat] = a.Name;
+                    m.Net.Room = null;
+                    m.Room = null;
+                    m.World = jw;
+                    m.InMatch = true;
+                }
+            }
+        }
+
+        public void Step(int frames) { for (int i = 0; i < frames; i++) Step(); }
+
+        /// <summary>Game.StartJoining: dials the host and waits to be seated.</summary>
+        public void Join(int peer)
+        {
+            Machine m = All[peer];
+            m.GoneAway = false;
+            // A reconnection is a fresh socket the host can reach again, which is what a real
+            // transport does for it; without this a rejoiner would get the host's directed
+            // sends and none of its broadcasts.
+            Wire.Readmit(0, peer);
+            m.Build = new Loadout { Class = PlayerClass.Tank };
+            m.World = new World.World(m.Build) { DynamicSpawning = false, Authoritative = false };
+            m.Net = new Session(Wire[peer], host: false) { LocalName = m.Name };
+            m.Net.JoinMatch(m.World);
+            m.Net.SendHello(m.Build.Class);
+            // The room's pod edits this machine's own long-lived build, exactly as the loop
+            // hands Game._loadout to it — so a test can spend points on m.Build and expect
+            // them to be what leaves on the wire.
+            m.Room = new World.LobbyRoom(m.Build) { IsHost = false };
+            m.Net.Room = m.Room;
+            m.Room.Connecting();
+        }
+
+        /// <summary>Game.UpdateLobby's LAUNCH branch.</summary>
+        public void Launch()
+        {
+            World.World hw = Host.Net.World!;
+            foreach (var p in hw.Players) p.Lives = hw.Match.Revives + 1;
+            Host.Net.StartMatch();
+            Host.Net.Room = null;
+            Host.Room = null;
+            Host.InMatch = true;
+        }
+
+        /// <summary>Somebody's connection dies, from the host's point of view.</summary>
+        public void Leave(int peer)
+        {
+            Wire.DropPeer(0, peer);
+            All[peer].GoneAway = true;
+        }
+    }
+
+    /// <summary>
+    /// Stands up a host and room for <paramref name="clients"/> joiners, dials
+    /// <paramref name="joinNow"/> of them in (all of them by default), and pumps until the
+    /// handshake has settled. The rest are machines the wire knows about that have not picked
+    /// up the phone yet — which is what a test of a late arrival needs.
+    /// </summary>
+    private static Session3Plus OpenRoom(int clients, MatchSettings rules,
+        LinkQuality quality = default, int seed = 4242, int joinNow = -1)
+    {
+        if (joinNow < 0) joinNow = clients;
+        var s = new Session3Plus
+        {
+            Wire = new LoopbackNet(clients + 1, quality, seed),
+            All = new Machine[clients + 1],
+            Rules = rules,
+        };
+        for (int i = 0; i <= clients; i++)
+            s.All[i] = new Machine { Name = i == 0 ? "HOST" : $"PLAYER{i}" };
+
+        // Game.StartHosting.
+        Machine h = s.Host;
+        h.Build = new Loadout { Class = PlayerClass.Tank };
+        h.Room = new World.LobbyRoom(h.Build) { IsHost = true };
+        h.Room.AdoptRules(rules);
+        h.World = new World.World(h.Build, h.Room.Match.Clamped()) { DynamicSpawning = false };
+        h.World.Enemies.Clear();
+        h.Net = new Session(s.Wire[0], host: true) { LocalName = h.Name };
+        h.Net.HostMatch(h.World);
+        h.Net.Room = h.Room;
+        h.Room.Seat(0, h.Name);
+
+        for (int i = 1; i <= joinNow; i++) s.Join(i);
+        s.Step(120);
+        return s;
+    }
+
+    /// <summary>The whole point of the mode: five people pick five different craft and every
+    /// machine — the host's included — shows every one of them as what its player chose. This
+    /// is asserted twice, because they are two entirely separate paths: the lobby room carries
+    /// a chassis in its own RoomState packet, and the match carries it in the players packet.</summary>
+    private static string? EveryoneSeesEveryChassis()
+    {
+        var picks = new[] { PlayerClass.Spider, PlayerClass.Virus, PlayerClass.Fish,
+                            PlayerClass.Soldier, PlayerClass.Tank };
+        Session3Plus s = OpenRoom(4, new MatchSettings { MaxPlayers = 8, Revives = 2 },
+            LinkQuality.Awful);
+
+        // Four people dialling at once are seated in the order their hellos actually land,
+        // which a jittery wire shuffles — so what each of them picked is keyed by the seat
+        // they were really given, not by which machine in the test they happen to be.
+        var wants = new PlayerClass[5];
+        for (int i = 0; i < 5; i++)
+        {
+            int seat = s.All[i].Net.LocalSeat;
+            if (seat < 0 || seat > 4) return $"player {i} was never seated (at {seat})";
+            if (wants[seat] != default && seat != 0)
+                return $"two players were handed seat {seat}";
+            wants[seat] = picks[i];
+            s.All[i].Room!.PickForTest(picks[i]);
+            s.Step(20);
+        }
+        if (s.Host.Net.LocalSeat != 0) return "the host was not seat 0";
+        s.Step(90);
+
+        // The lobby floor: everyone's figure, on everyone's screen, as the craft they chose.
+        for (int who = 0; who < 5; who++)
+            for (int seat = 0; seat < 5; seat++)
+            {
+                if (!s.All[who].Room!.Avatars.TryGetValue(seat, out var a))
+                    return $"player {who} could not see seat {seat} in the room at all";
+                if (a.Chassis != wants[seat])
+                    return $"player {who} saw seat {seat} in the room as " +
+                           $"{a.Chassis?.ToString() ?? "nothing"}, not {wants[seat]}";
+                if (!a.Ready) return $"player {who} saw seat {seat} as not ready after it picked";
+            }
+        if (!s.Host.Room!.AllReady) return "everybody had picked and the launch gate stayed shut";
+
+        // ...and the match.
+        s.Launch();
+        s.Step(300);
+        for (int who = 0; who < 5; who++)
+        {
+            World.World w = s.All[who].World;
+            if (!s.All[who].InMatch) return $"player {who} never came in when the host launched";
+            if (w.Players.Count != 5)
+                return $"player {who} sees {w.Players.Count} craft in the match, not five";
+            for (int seat = 0; seat < 5; seat++)
+                if (w.Players[seat].Class != wants[seat])
+                    return $"in the match, player {who} sees seat {seat} as " +
+                           $"{w.Players[seat].Class}, not the {wants[seat]} they picked";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The renderer draws a craft from `PlayerTank.Build`, and every other check in this file
+    /// asserts `PlayerTank.Class`. While `Build` was the loop's own long-lived `Loadout` held
+    /// by reference — which is what `World`'s constructor handed seat 0 — those were two
+    /// different facts, and only the one nobody was looking at reached the screen.
+    ///
+    /// The shape of the bug: a client's seat 0 is the HOST. It is built from the client's own
+    /// loadout, and `ApplyPlayers` only rebuilds a seat when the class it is told differs from
+    /// the class it has. So whenever the host picked the chassis the client's craft happened to
+    /// already be (TANK, for anyone who had not been to the hangar), seat 0 was never rebuilt —
+    /// and then the launch path assigned the client's own pick straight into the object seat 0
+    /// was still pointing at. **Every client drew the host as its own chassis.**
+    /// </summary>
+    private static string? CraftBuildIsNotShared()
+    {
+        // The direct statement: a craft's build does not move when the loadout it was made
+        // from does.
+        var mine = new Loadout { Class = PlayerClass.Tank };
+        var craft = new PlayerTank(Vector2.Zero, 0f, mine);
+        mine.Class = PlayerClass.Fish;
+        if (craft.Build.Class != PlayerClass.Tank)
+            return $"editing a loadout turned an existing craft into a {craft.Build.Class}";
+        if (craft.Class != craft.Build.Class)
+            return "a craft's Class and the build the renderer draws it from disagree";
+
+        // And the same thing through the whole session, which is where it actually bit: the
+        // host takes the chassis the client's own craft already was, so seat 0 is never
+        // rebuilt from a snapshot — and the client then picks something else.
+        Session3Plus s = OpenRoom(1, new MatchSettings { MaxPlayers = 4, Revives = 2 });
+        s.Host.Room!.PickForTest(PlayerClass.Tank);      // the same class every craft starts as
+        s.All[1].Room!.PickForTest(PlayerClass.Fish);
+        s.Step(40);
+        s.Launch();
+        s.Step(240);
+
+        World.World cw = s.All[1].World;
+        if (!s.All[1].InMatch) return "the client never came in";
+        // Asserted on Build, because that is what DrawCraft reads.
+        if (cw.Players[0].Build.Class != PlayerClass.Tank)
+            return $"the client draws the host as a {cw.Players[0].Build.Class}, " +
+                   $"not the TANK the host chose";
+        if (cw.Players[1].Build.Class != PlayerClass.Fish)
+            return $"the client draws itself as a {cw.Players[1].Build.Class}, not its FISH";
+        // ...and the host's view of the client, for the mirror image of the same bug.
+        World.World hw = s.Host.World;
+        if (hw.Players[1].Build.Class != PlayerClass.Fish)
+            return $"the host draws the client as a {hw.Players[1].Build.Class}, not their FISH";
+        if (hw.Players[0].Build.Class != PlayerClass.Tank)
+            return $"the host draws itself as a {hw.Players[0].Build.Class}";
+        return null;
+    }
+
+    /// <summary>
+    /// The join handshake, against the one condition it is guaranteed to meet: a P2P
+    /// connection that has a handle but not yet a route. The hello sent into that window is
+    /// gone for good — no reliable channel retransmits a message that never entered one — so
+    /// a single-shot hello left the joiner on CONNECTING for ever with no way back but Escape.
+    /// </summary>
+    private static string? HelloSurvivesADeadSocket()
+    {
+        Session3Plus s = OpenRoom(1, new MatchSettings { MaxPlayers = 4 }, joinNow: 0);
+
+        // The socket is not up. Everything this joiner says goes into the void.
+        s.Wire.Mute(1, true);
+        s.Join(1);
+        s.Step(90);
+        if (s.All[1].Net.LocalSeat >= 0) return "the joiner was seated through a dead socket";
+
+        // Steam finishes punching through. Nothing re-sends the lost hello but the client.
+        s.Wire.Mute(1, false);
+        s.Step(180);
+        if (s.All[1].Net.LocalSeat != 1)
+            return $"the link came up and the joiner never asked again (seat {s.All[1].Net.LocalSeat})";
+        if (s.Host.World.Occupied != 2) return "the host did not seat the joiner that got through";
+        return null;
+    }
+
+    /// <summary>
+    /// One player leaving is the most ordinary thing that happens in a room of five, and it
+    /// used to end the match for everybody: Steam reports a closed connection to both ends, the
+    /// host read its own report as "your session is dead" and tore the whole thing down. The
+    /// other four were evicted because one person alt-F4'd.
+    /// </summary>
+    private static string? AHostOutlivesItsPlayers()
+    {
+        Session3Plus s = OpenRoom(3, new MatchSettings { MaxPlayers = 8, Revives = 2 });
+        for (int i = 0; i < 4; i++) { s.All[i].Room!.PickForTest(PlayerClass.Tank); s.Step(15); }
+        s.Launch();
+        s.Step(120);
+
+        s.Leave(2);
+        s.Step(120);
+
+        if (s.Host.Net.World is null) return "the host tore its own world down when a player left";
+        if (!s.Host.InMatch) return "the host was thrown out of its own match";
+        for (int i = 0; i < 4; i++)
+        {
+            if (i == 2) continue;
+            if (!s.All[i].InMatch) return $"player {i} was evicted when player 2 left";
+            if (s.All[i].World.Players.Count != 4)
+                return $"player {i}'s roster fell apart when player 2 left";
+        }
+        // The one who left is held, frozen, for a reconnection — not deleted.
+        if (!s.Host.World.Players[2].Away) return "the departed craft was not marked away";
+        return null;
+    }
+
+    /// <summary>
+    /// Somebody who walks out of the lobby has nothing worth holding — no history, no salvage,
+    /// no position they earned — so their seat goes back in the pool. Held instead, a room that
+    /// people came and went from opened its match with a row of abandoned craft standing on the
+    /// grid, each one still counting against the host's seat limit.
+    /// </summary>
+    private static string? AbandonedSeatsAreReused()
+    {
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 3, Revives = 2 });
+        if (s.Host.World.Occupied != 3) return "three people did not fill three seats";
+        if (!s.Host.World.Full) return "a three-of-three room did not call itself full";
+
+        s.Leave(1);
+        s.Step(60);
+        if (s.Host.World.Occupied != 2) return "a lobby leaver kept their seat";
+        if (s.Host.World.Full) return "the room was still full after somebody left it";
+        if (s.Host.World.Players[1].Alive)
+            return "the abandoned craft was left standing on the grid";
+        if (s.Host.Room!.Avatars.ContainsKey(1)) return "their figure was left on the lobby floor";
+
+        // The next person through the door gets the seat that came free, not a fourth one.
+        s.Join(1);
+        s.Step(150);
+        if (s.All[1].Net.LocalSeat != 1)
+            return $"the next joiner took seat {s.All[1].Net.LocalSeat} rather than the free one";
+        if (s.Host.World.Players.Count != 3)
+            return $"the roster grew to {s.Host.World.Players.Count} for a three-seat match";
+        if (!s.Host.World.Players[1].Alive) return "the reused seat opened dead";
+        return null;
+    }
+
+    /// <summary>A match with no room in it has to say so. Ignoring the hello — which is what
+    /// used to happen — leaves the joiner watching the CONNECTING banner until they give up,
+    /// with nothing anywhere to tell them why.</summary>
+    private static string? AFullMatchRefusesOutLoud()
+    {
+        // Two seats, three machines: the host and one joiner fill it, the third is turned away.
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 2 }, joinNow: 1);
+        if (!s.Host.World.Full) return "a two-of-two match did not call itself full";
+
+        s.Join(2);
+        s.Step(180);
+        if (s.All[2].Net.Rejected is null)
+            return "a full match ignored the third joiner instead of refusing them";
+        if (s.All[2].Net.LocalSeat >= 0) return "a full match seated a third player anyway";
+        if (s.All[2].Room!.Trouble is null) return "the refused joiner was left with no reason";
+        if (s.Host.World.Players.Count != 2)
+            return $"the refused joiner still cost the host a seat ({s.Host.World.Players.Count})";
+        return null;
+    }
+
+    /// <summary>
+    /// Dialling into a match that is already running. The host seats them and tells them START
+    /// in the same breath, so there is no lobby moment left to choose a craft in — and before
+    /// this they were dropped in permanently as the placeholder tank their hello carried, with
+    /// no way ever to be anything else. Now they stand at the pod until they pick, and the pick
+    /// crosses mid-match like any other.
+    /// </summary>
+    private static string? LateJoinerPicksTheirChassis()
+    {
+        // Host and one player launch; the third machine has not dialled yet.
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 4, Revives = 2 }, joinNow: 1);
+        s.All[0].Room!.PickForTest(PlayerClass.Tank);
+        s.All[1].Room!.PickForTest(PlayerClass.Spider);
+        s.Step(40);
+        s.Launch();
+        s.Step(180);
+
+        // Somebody dials in with the match already running.
+        s.Join(2);
+        s.Step(240);
+
+        if (s.All[2].Net.LocalSeat < 0) return "the mid-match joiner was never seated";
+        if (!s.All[2].Net.MatchStarted) return "the mid-match joiner was never told the match was on";
+        if (s.All[2].InMatch)
+            return "the mid-match joiner was walked into the match before choosing a craft";
+
+        s.All[2].Room!.PickForTest(PlayerClass.Fish);
+        s.Step(300);
+
+        if (!s.All[2].InMatch) return "picking a craft did not bring the joiner in";
+        int seat = s.All[2].Net.LocalSeat;
+        for (int who = 0; who < 3; who++)
+        {
+            if (!s.All[who].InMatch) continue;
+            World.World w = s.All[who].World;
+            if (seat >= w.Players.Count)
+                return $"player {who} cannot see the late joiner's seat at all";
+            if (w.Players[seat].Class != PlayerClass.Fish)
+                return $"player {who} sees the late joiner as {w.Players[seat].Class}, not a FISH";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// A player's whole bench crosses to everybody: the points they spent and the colours they
+    /// chose, not just which chassis they picked.
+    ///
+    /// <para>A pick used to be one chassis byte, so a build died on the machine that made it —
+    /// every other player saw a default-painted craft with the machine's default stats, and
+    /// the HOST simulated those defaults, which meant the shield and speed a player had bought
+    /// were not the shield and speed they were played with. This is the test for the whole of
+    /// that, on the two ends that can disagree: the host, and a third machine that only ever
+    /// learns about it second-hand.</para>
+    /// </summary>
+    private static string? ABuildReachesEveryone()
+    {
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 4, Revives = 2 });
+
+        // Player 1 goes to the pod and actually uses the bench: a FISH, points dragged off
+        // ammo onto hull, and a repaint of its hide.
+        Loadout mine = s.All[1].Room!.MyBuild;
+        mine.Class = PlayerClass.Fish;
+        while (mine.Adjust(Loadout.Stat.Ammo, -1)) { }
+        while (mine.Adjust(Loadout.Stat.Health, +1)) { }
+        mine.CycleSwatch(PlayerClass.Fish, 0, +5);
+        int paint = mine.SwatchIndex(PlayerClass.Fish, 0);
+        int hull = mine.Health, ammo = mine.Ammo;
+        if (hull == 5 || ammo == 5) return "the test failed to make a build worth sending";
+
+        s.All[1].Room!.ConfirmPodForTest();          // presses READY at the pod
+        s.All[0].Room!.PickForTest(PlayerClass.Tank);
+        s.All[2].Room!.PickForTest(PlayerClass.Spider);
+        s.Step(60);
+
+        int seat = s.All[1].Net.LocalSeat;
+        if (seat < 0) return "the builder was never seated";
+
+        // In the room, before anybody launches: the host is simulating that seat and has to
+        // have been told what it is.
+        Loadout? onHost = s.Host.Net.BuildOf(seat);
+        if (onHost is null) return "the host never learned the build";
+        if (onHost.Health != hull || onHost.Ammo != ammo)
+            return $"the host has the seat at {onHost.Health} hull / {onHost.Ammo} ammo, sent {hull}/{ammo}";
+        if (onHost.SwatchIndex(PlayerClass.Fish, 0) != paint)
+            return "the host did not get the paint";
+
+        s.Launch();
+        s.Step(240);
+
+        // And every machine — the host, the builder, and the third player who was never told
+        // anything directly — draws and simulates that craft from the same build.
+        for (int who = 0; who < 3; who++)
+        {
+            if (!s.All[who].InMatch) return $"player {who} never came into the match";
+            World.World w = s.All[who].World;
+            if (seat >= w.Players.Count) return $"player {who} cannot see the builder's seat";
+            PlayerTank craft = w.Players[seat];
+
+            // Build.Class, not Class: the renderer reads Build, and the two drifting apart is
+            // exactly the bug that made everyone see the host as their own chassis.
+            if (craft.Build.Class != PlayerClass.Fish)
+                return $"player {who} sees the builder as {craft.Build.Class}, not a FISH";
+            if (craft.Build.Health != hull)
+                return $"player {who} has the builder on {craft.Build.Health} hull, not {hull}";
+            if (craft.Build.SwatchIndex(PlayerClass.Fish, 0) != paint)
+                return $"player {who} draws the builder in the wrong paint";
+            // The points have to reach the LIVE stats, not just sit on the build — this is
+            // what decides how much punishment the host lets that craft take.
+            if (MathF.Abs(craft.MaxHealth - craft.Build.MaxHealth) > 0.01f)
+                return $"player {who} simulates the builder with the wrong hull";
+            if (craft.MaxAmmo != craft.Build.MaxAmmo)
+                return $"player {who} simulates the builder with the wrong magazine";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Names used to reach the match only by being copied off the lobby room at LAUNCH, so
+    /// everyone who arrived after that — every rejoin, every late joiner — was a nameless craft
+    /// on every screen but the host's for the rest of the match.
+    /// </summary>
+    private static string? NamesReachEveryoneAfterLaunch()
+    {
+        Session3Plus s = OpenRoom(2, new MatchSettings { MaxPlayers = 4, Revives = 2 });
+        for (int i = 0; i < 3; i++) { s.All[i].Room!.PickForTest(PlayerClass.Tank); s.Step(15); }
+        s.Launch();
+        s.Step(180);
+
+        for (int who = 0; who < 3; who++)
+            for (int seat = 0; seat < 3; seat++)
+            {
+                string expect = seat == 0 ? "HOST" : $"PLAYER{seat}";
+                if (s.All[who].World.NameOf(seat) != expect)
+                    return $"player {who} knows seat {seat} as " +
+                           $"'{s.All[who].World.NameOf(seat)}', not '{expect}'";
+            }
+
+        // Somebody leaves and a stranger takes the seat, all while the match runs.
+        s.Leave(2);
+        s.Step(60);
+        s.All[2].Name = "STRANGER";
+        s.Join(2);
+        s.Step(180);
+        s.All[2].Room?.PickForTest(PlayerClass.Tank);
+        s.Step(180);
+
+        int took = s.All[2].Net.LocalSeat;
+        if (took < 0) return "the replacement was never seated";
+        for (int who = 0; who < 3; who++)
+        {
+            if (!s.All[who].InMatch) continue;
+            if (s.All[who].World.NameOf(took) != "STRANGER")
+                return $"player {who} knows the new arrival as " +
+                       $"'{s.All[who].World.NameOf(took)}', not 'STRANGER'";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// A rules change has to reach the client's <em>world</em>, not just the readout on its
+    /// lobby console. The seat count is the load-bearing one: a client refuses to grow its
+    /// roster past its own MaxPlayers, so a host who widened the room after somebody joined
+    /// left that person unable to see anyone past the old limit — named by every snapshot and
+    /// created by none.
+    /// </summary>
+    private static string? RulesReachTheClientsWorld()
+    {
+        Session3Plus s = OpenRoom(1, new MatchSettings { MaxPlayers = 2, Revives = 2 });
+        if (s.All[1].World.Match.MaxPlayers != 2)
+            return $"the joiner opened on {s.All[1].World.Match.MaxPlayers} seats, not the host's 2";
+
+        // The host widens the room at the console.
+        s.Host.Room!.SetRulesForTest(new MatchSettings { MaxPlayers = 6, Revives = 4 });
+        s.Step(90);
+
+        if (s.All[1].World.Match.MaxPlayers != 6)
+            return $"the widened room never reached the client's world " +
+                   $"({s.All[1].World.Match.MaxPlayers} seats)";
+        if (s.All[1].Room!.Match.Revives != 4)
+            return "the new revive count never reached the client's lobby";
+        return null;
     }
 }

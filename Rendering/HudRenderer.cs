@@ -1,14 +1,14 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// The in-world dashboard, drawn flat over the low-res target after the 3D pass
 /// so it shares the chunky pixels. A thin strip runs across the TOP of the
-/// viewport: the vital bars (Shields / Ammo / Hyper) grouped on the left, the
+/// viewport: the vital bars (Hull / Shields / Ammo / hYper) grouped on the left, the
 /// tactical radar on the right. Cold chrome on the void, no warmth — an
 /// instrument panel bolted to the inside of the cockpit, not a friendly HUD.
 ///
@@ -27,18 +27,118 @@ internal static class HudRenderer
     private const int BarTop = 6;
     private const int BarBottom = StripH - 6;
     private const int BarW = 7;
-    private const int BarGap = 16;   // centre-to-centre spacing of the three bars
-    private const int BarsLeft = 10; // left edge of the first (Shields) bar
+    // Centre-to-centre spacing. Set by the widest LABEL rather than by the widest bar: the
+    // shield gauge is captioned with a count, and "10/10" on a maxed build is five characters
+    // where every other gauge is one. At the old spacing that caption ran straight through the
+    // letters either side of it. There is room — the radar does not start until x=262.
+    private const int BarGap = 24;
+    private const int BarsLeft = 6;  // left edge of the first (Hull) bar
 
     // --- Radar (right group) ---
     private const int RadarSize = 52;               // square side, internal px
     private const int RadarMargin = 6;
     private const float RadarWorldRange = 90f;       // world units mapped to the radar edge
 
+    /// <summary>
+    /// The join/quit feed: a few short yellow lines stacked at the bottom-right, under the
+    /// instruments, each fading out as it ages. Multiplayer only — single player never has a
+    /// feed to draw. Drawn last, over everything, so a notice is never lost behind the world.
+    /// </summary>
+    public static void DrawNotices(Net.NoticeFeed feed)
+    {
+        Font font = Raylib.GetFontDefault();
+        const int size = 9;
+        const int pad = 6;
+        var lines = feed.Entries;
+
+        // Newest at the bottom, older ones stacked above it and climbing off the corner.
+        for (int i = 0; i < lines.Count; i++)
+        {
+            Net.NoticeFeed.Entry e = lines[lines.Count - 1 - i];
+            // Fade over the last second and a half of a line's life.
+            float a = Math.Clamp(e.Remaining / 1.5f, 0f, 1f);
+            byte alpha = (byte)(a * 255);
+            Vector2 m = Raylib.MeasureTextEx(font, e.Text, size, 1);
+            float x = W - pad - m.X;
+            float y = H - pad - size - i * (size + 3);
+            var col = new Color(Palette.Flag.R, Palette.Flag.G, Palette.Flag.B, alpha);
+            Raylib.DrawTextEx(font, e.Text, new Vector2(x, y), size, 1, col);
+        }
+    }
+
+    /// <summary>
+    /// The scoreboard, held open on a key. Every seat in the match: their name, the chassis
+    /// they are flying, what they have destroyed, how many times they have gone down, what
+    /// revives they have left and their round trip.
+    ///
+    /// <para>Its real job is legibility. Twenty players is a room, and a room where you cannot
+    /// see who is in it, who is doing well and whose connection is falling apart is a room
+    /// where a bad experience is indistinguishable from a bug. The ping column especially:
+    /// a player being thrown about by a bad line deserves to be able to see that that is what
+    /// is happening.</para>
+    /// </summary>
+    public static void DrawScoreboard(World.World world)
+    {
+        Font font = Raylib.GetFontDefault();
+        const int size = 8;
+        int rows = world.Players.Count;
+
+        const int panelW = 220;
+        int panelH = 22 + rows * 11 + 6;
+        int x = (W - panelW) / 2;
+        int y = (H - panelH) / 2 - 10;
+
+        Raylib.DrawRectangle(x, y, panelW, panelH, new Color((byte)6, (byte)8, (byte)14, (byte)225));
+        Raylib.DrawRectangleLines(x, y, panelW, panelH, Scale(Palette.HudChrome, 0.45f));
+
+        Color head = Scale(Palette.HudChrome, 0.7f);
+        Raylib.DrawTextEx(font, "PLAYER", new Vector2(x + 8, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "CRAFT", new Vector2(x + 96, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "K", new Vector2(x + 142, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "D", new Vector2(x + 158, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "REV", new Vector2(x + 172, y + 7), size, 1, head);
+        Raylib.DrawTextEx(font, "MS", new Vector2(x + 196, y + 7), size, 1, head);
+        Raylib.DrawRectangle(x + 6, y + 18, panelW - 12, 1, Scale(Palette.GridFar, 0.7f));
+
+        for (int seat = 0; seat < rows; seat++)
+        {
+            PlayerTank p = world.Players[seat];
+            int ry = y + 22 + seat * 11;
+
+            // A dropped player is dimmed rather than removed: their seat is being held for
+            // them and the room should be able to see that it is.
+            bool mine = seat == world.LocalIndex;
+            float bright = p.Away ? 0.35f : p.Spectating ? 0.55f : 1f;
+            Color col = mine ? Scale(Palette.Flag, bright) : Scale(Palette.HudChrome, bright * 0.85f);
+
+            string name = world.NameOrSeat(seat);
+            if (name.Length > 13) name = name[..13];
+            if (p.Away) name += " *";
+
+            Raylib.DrawTextEx(font, name, new Vector2(x + 8, ry), size, 1, col);
+            Raylib.DrawTextEx(font, p.Build.Class.ToString().ToUpperInvariant(),
+                new Vector2(x + 96, ry), size, 1, col);
+            Raylib.DrawTextEx(font, world.KillsOf(seat).ToString(), new Vector2(x + 142, ry), size, 1, col);
+            Raylib.DrawTextEx(font, world.DeathsOf(seat).ToString(), new Vector2(x + 158, ry), size, 1, col);
+            Raylib.DrawTextEx(font, p.Spectating ? "-" : p.Lives.ToString(),
+                new Vector2(x + 174, ry), size, 1, col);
+
+            // The one column that changes colour on its own. A line going bad is the single
+            // most useful thing this panel can tell somebody, so it says it in red.
+            int ping = world.PingOf(seat);
+            Color pc = ping >= 200 ? Palette.Warning : ping >= 110 ? Palette.Flag : col;
+            Raylib.DrawTextEx(font, seat == world.LocalIndex ? "--" : ping.ToString(),
+                new Vector2(x + 194, ry), size, 1, pc);
+        }
+    }
+
     public static void Draw(World.World world, ItemIconRenderer icons)
     {
         _icons = icons;
-        PlayerTank p = world.Player;
+        // The craft the instruments describe. Normally this machine's own; once its revives
+        // are spent, the team-mate the camera has moved to — a spent player's own bars are a
+        // row of zeroes and tell them nothing about the fight they are now watching.
+        PlayerTank p = world.Eye;
 
         // A faint panel behind the strip so the bars/radar sit on a surface
         // rather than floating over the grid — but kept dark and translucent so
@@ -47,7 +147,13 @@ internal static class HudRenderer
         Raylib.DrawRectangle(0, StripH, W, 1, Scale(Palette.GridFar, 0.6f)); // seam line
 
         DrawBars(p);
-        DrawWeaponSlots(world.Inventory);
+        // DESCENT's own instruments — the wave bar, the boss's layer stack, the salvage clock.
+        // Drawn straight after the vitals so they sit in the band under the strip, and behind
+        // everything a chassis adds, so a SOLDIER's or a FISH's own overlay still wins the
+        // pixels it needs. Draws nothing at all in SANDBOX.
+        if (world.IsDescent) DescentHud.Draw(world);
+        DrawWeaponSlots(world.InventoryOf(world.ViewSeat));
+        if (world.Spectating) DrawSpectating(world);
         DrawRadar(world, p);
         // The firing sight sits dead centre, where the mouse aims the gun, and only on the
         // two machines: the SOLDIER and the FISH draw their own centre reticles (which
@@ -72,12 +178,28 @@ internal static class HudRenderer
         // dashboard has never had an instrument for: the radar says where things are on
         // the plane, and this chassis lives in the column. See FishHud.
         if (p.Fish is { } body) FishHud.DrawOverlay(world, body, p);
+        // And the FLOWER's, for the same reason: this chassis's state is six discrete objects
+        // and a crop clock, and neither of those is expressible as a bar in the strip.
+        if (p.Flower is { } stalk) FlowerHud.DrawOverlay(world, stalk, p);
 
         // And the VIRUS, whose additions are the two things no other chassis has to say:
         // how much of the worn host is left before it bursts, and — the state shout — whether
         // there is a host at all. It also draws its own crosshair, since it is not a machine
         // and the dashboard's centre sight above is skipped for it. See VirusHud.
         if (p.Virus is { } virus) VirusHud.DrawOverlay(world, virus, p);
+    }
+
+    /// <summary>
+    /// Says whose eyes these are. A player out of revives is no longer in the match but is
+    /// still in the room, and the one thing they must not be left to wonder is why the craft
+    /// on screen is not answering their keys. Named, so it also tells them who is left.
+    /// </summary>
+    private static void DrawSpectating(World.World world)
+    {
+        string who = world.NameOf(world.ViewSeat);
+        if (who.Length == 0) who = $"SEAT {world.ViewSeat}";
+        PixelFont.DrawCentered("SPECTATING", W / 2, StripH + 6, 1, Palette.Warning);
+        PixelFont.DrawCentered(who, W / 2, StripH + 14, 1, Palette.HudChrome);
     }
 
     // --- The SPIDER's lance meter: 0..100 down the right-hand edge ---
@@ -177,7 +299,7 @@ internal static class HudRenderer
     // --- Equip slots (R T Y U): the crafted CRAB CORE lives here ---
     // A small row of four boxes in the strip's free centre band, between the vital bars
     // on the left and the radar on the right. Pressing the matching key throws the slot's
-    // contents (see InputMap.WeaponSlotPressed / World.UseWeaponSlot).
+    // contents (see InputFrame.WeaponSlotPressed / World.UseWeaponSlot).
     private const int WSlot = 16;      // box side
     private const int WGap = 6;
     private const int WTop = 3;
@@ -273,19 +395,71 @@ internal static class HudRenderer
         Raylib.DrawRectangle(cx, cy, 1, 1, line);
     }
 
-    // --- Vital bars: three vertical gauges, letter-labelled S / A / H ---
+    // --- Vital bars: four vertical gauges, letter-labelled H / S / A / Y ---
+    //
+    // Hull leads because it is the one that ends the run: the shield in front of it is
+    // spendable and replaceable, and hull is neither. Hyper gives up its H to it and takes
+    // the Y — the letter matters less than which gauge a player finds first when something
+    // is going wrong, and that has to be the one they can die from.
 
     private static void DrawBars(PlayerTank p)
     {
-        // Shields dip to the warning red when critically low — the one gauge whose
-        // emptiness ends the run, so it earns the alarm colour.
-        Color shieldColor = p.ShieldFraction <= 0.25f
-            ? Lerp(Palette.Warning, Palette.HudChrome, p.ShieldFraction / 0.25f)
+        // Hull dips to the warning red when critically low. It is the only gauge that earns
+        // the alarm colour now — a spent shield is a bad afternoon, an empty hull is the end
+        // of one, and giving both the same red taught the player to ignore it.
+        Color hullColor = p.HealthFraction <= 0.25f
+            ? Lerp(Palette.Warning, Palette.HudChrome, p.HealthFraction / 0.25f)
             : Palette.HudChrome;
 
-        DrawBar(BarsLeft + BarGap * 0, "S", p.ShieldFraction, shieldColor);
-        DrawBar(BarsLeft + BarGap * 1, "A", p.AmmoFraction, Palette.Flag);
-        DrawBar(BarsLeft + BarGap * 2, "H", p.HyperFraction, Palette.GridNear);
+        DrawBar(BarsLeft + BarGap * 0, "H", p.HealthFraction, hullColor);
+        DrawCharges(BarsLeft + BarGap * 1, p);
+        DrawBar(BarsLeft + BarGap * 2, "A", p.AmmoFraction, Palette.Flag);
+        DrawBar(BarsLeft + BarGap * 3, "Y", p.HyperFraction, Palette.GridNear);
+    }
+
+    /// <summary>
+    /// The shield stack, which is not a bar: it is a count. The build buys whole charges and
+    /// the player spends whole charges, so the gauge is drawn as that many stacked blocks
+    /// filling from the bottom, with the count written under it — 3/5 and falling reads as
+    /// something being taken off you, which a sliding bar never did.
+    ///
+    /// <para>The topmost standing charge is dimmed by how far into it the next hit has to
+    /// bite. That is the only continuous thing on this gauge, and it is what stops a charge
+    /// with a sliver left looking exactly like a fresh one.</para>
+    /// </summary>
+    private static void DrawCharges(int x, PlayerTank p)
+    {
+        int barH = BarBottom - BarTop;
+        int n = Math.Max(1, p.ShieldCharges);
+        int left = p.ChargesLeft;
+
+        Raylib.DrawRectangle(x, BarTop, BarW, barH, new Color(10, 20, 24, 220));
+
+        // One cell per charge, stacked bottom-up with a hairline of well showing between
+        // them so ten of them still read as ten and not as a solid column.
+        float cell = barH / (float)n;
+        for (int i = 0; i < n; i++)
+        {
+            int y1 = BarBottom - (int)MathF.Round(cell * i);
+            int y0 = BarBottom - (int)MathF.Round(cell * (i + 1));
+            int h = Math.Max(1, y1 - y0 - (n > 1 ? 1 : 0));
+            if (i >= left) continue;
+
+            // The top standing charge fades as it is eaten into; every one below it is whole.
+            float lit = i == left - 1 ? 0.35f + 0.65f * p.TopChargeFraction : 1f;
+            Raylib.DrawRectangle(x, y0, BarW, h, Scale(Palette.BatteryCore, lit));
+        }
+        Raylib.DrawRectangleLines(x, BarTop, BarW, barH, Scale(Palette.HudChrome, 0.5f));
+
+        // "3/5" under the stack instead of a letter. It is the one gauge with a number worth
+        // reading, and the number is the whole point of it.
+        Font font = Raylib.GetFontDefault();
+        const int size = 8;
+        string text = left + "/" + n;
+        Vector2 m = Raylib.MeasureTextEx(font, text, size, 1);
+        Raylib.DrawTextEx(font, text,
+            new Vector2(x + (BarW - m.X) * 0.5f, StripH - size + 1), size, 1,
+            Scale(left > 0 ? Palette.HudChrome : Palette.Warning, left > 0 ? 0.85f : 1.6f));
     }
 
     private static void DrawBar(int x, string label, float fraction, Color fill)
@@ -392,7 +566,8 @@ internal static class HudRenderer
         }
 
         // Floating salvage shows as friendly blips so the player can steer toward a
-        // resupply: charged green for batteries, flag-yellow for stray rounds.
+        // resupply — each in its own colour, so a thrown core and a stray round are not the
+        // same dot.
         foreach (var pk in world.Pickups)
         {
             Vector2 rel = Torus.Delta(p.Position, pk.Position);
@@ -404,8 +579,7 @@ internal static class HudRenderer
             px = Math.Clamp(px, x0 + 1, x0 + RadarSize - 2);
             py = Math.Clamp(py, y0 + 1, y0 + RadarSize - 2);
 
-            Color blip = pk.Kind == PickupKind.Battery ? Palette.BatteryCore : Palette.Flag;
-            Raylib.DrawRectangle((int)px, (int)py, 1, 1, blip);
+            Raylib.DrawRectangle((int)px, (int)py, 1, 1, World.World.SalvageColour(pk.Kind));
         }
 
         // Player: a small chrome triangle fixed at centre, always pointing up.

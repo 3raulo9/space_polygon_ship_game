@@ -1,8 +1,8 @@
 using System.Numerics;
-using VoidTanks.Core;
-using VoidTanks.World;
+using Unrendered.Core;
+using Unrendered.World;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// What the city looks like to something that hangs from it. The one question a flier
@@ -269,6 +269,11 @@ public sealed class EnemySoldier
     /// never breathes in unison.</summary>
     public int Slot;
 
+    /// <summary>The key this soldier goes by in the host's rewind history, so a laggy client's
+    /// shot can be tested against where it actually was on that client's screen. Assigned
+    /// lazily host-side — see <c>World.RecordRewind</c>.</summary>
+    public int HitId;
+
     /// <summary>
     /// True while this one is fighting for the player rather than against them — a squad
     /// escorting the body their comrade is being worn as. Written by the world every tick,
@@ -490,6 +495,53 @@ public sealed class EnemySoldier
     /// building the way an anchor does.</summary>
     private Structure? _perch;
 
+    // --- Client puppet --------------------------------------------------------
+    // A client is shown the squad, not simulating it. A puppet carries the host's transform,
+    // movement state and bank for the flight pose; its cables and AI never run.
+
+    /// <summary>True on a client's render-only copy of a soldier.</summary>
+    public bool IsPuppet { get; private set; }
+
+    /// <summary>Makes a render-only soldier for a client to place a host's squad member.</summary>
+    public static EnemySoldier Puppet(Vector2 at, float height, bool leader, int slot)
+        => new(at, height, leader, slot) { IsPuppet = true };
+
+    /// <summary>Client-side: adopt the host's account of this soldier this snapshot. Sets only
+    /// what the renderer reads; no AI, no cables, no Random.</summary>
+    public void NetSet(Vector2 pos, float height, float heading, SoldierMove move,
+        float bank, float speed, bool allied, bool alive)
+    {
+        // Transform is eased, not snapped: store it as the target and let the client's step
+        // glide the drawn soldier onto it, so a squad that updates twenty times a second still
+        // flies smoothly. The first sighting snaps so a new member appears where it is.
+        if (_glide.Report(pos)) { Position = pos; Height = height; Heading = heading; }
+        _netHeight = height; _netHeading = heading;
+        // The rest is display state the renderer reads outright — no in-between to interpolate.
+        Move = move;
+        Bank = bank;
+        Allied = allied;
+        Velocity = new Vector3(MathF.Sin(heading) * speed, 0f, MathF.Cos(heading) * speed);
+        Shield = alive ? MathF.Max(Shield, BaseShield) : 0f;
+    }
+
+    /// <summary>Scratch flag for the client's adopt sweep, matched on <see cref="Slot"/>: set on
+    /// every squad member the latest packet named so the rest can be dropped.</summary>
+    public bool NetSeen;
+
+    private NetGlide _glide;
+    private float _netHeight, _netHeading;
+
+    /// <summary>Client-side: eases this soldier one frame toward its last reported transform,
+    /// which coasts through a missed packet rather than standing still — see <see cref="NetGlide"/>.</summary>
+    public void EaseToNet(float k, float dt)
+    {
+        if (!_glide.Has) return;
+        _glide.Coast(dt);
+        Position = Torus.Wrap(Position + Torus.Delta(Position, _glide.Target) * k);
+        Height += (_netHeight - Height) * k;
+        Heading += MathF.IEEERemainder(_netHeading - Heading, MathF.Tau) * k;
+    }
+
     public EnemySoldier(Vector2 at, float height, bool leader, int slot)
     {
         Position = Torus.Wrap(at);
@@ -531,14 +583,56 @@ public sealed class EnemySoldier
         Move = SoldierMove.Perched;
     }
 
-    public void TakeDamage(float amount)
+    public void TakeDamage(float amount) => TakeDamage(amount, null);
+
+    /// <summary>
+    /// Takes a hit. <paramref name="from"/> is where it came from, if the caller knows —
+    /// which is the only thing the body needs in order to flinch away from it rather than
+    /// merely flinch.
+    ///
+    /// The direction is recorded rather than acted on: nothing about the simulation changes
+    /// because a round arrived from the left. What changes is that the drawn figure snaps
+    /// its head away from the left, and a hit that reads as having come from somewhere is
+    /// worth more than any amount of shake that does not.
+    /// </summary>
+    public void TakeDamage(float amount, Vector2? from)
     {
         Shield -= amount;
+
+        if (from is { } at)
+        {
+            Vector2 d = Torus.Delta(Position, at);
+            if (d.LengthSquared() > 1e-6f) FlinchAngle = MathF.Atan2(d.X, d.Y);
+        }
+        FlinchAmount = Math.Clamp(amount / BaseShield, 0.25f, 1f);
+        FlinchSeq++;
+
         // Being hit at all breaks a perch: nobody hangs still on a wall once a round has
         // gone past their head. They drop off it and start flying, which makes shooting at
         // a perched soldier and missing an actively bad idea.
         if (Move == SoldierMove.Perched && Alive) LeavePerch(0.5f);
     }
+
+    /// <summary>
+    /// The last hit, for the figure to react to: which way it came from in world radians
+    /// (the heading convention — 0 is +Z), how hard, and a counter that ticks once per hit.
+    ///
+    /// The counter is the part that matters. A renderer running faster than the simulation
+    /// would otherwise replay the same flinch every frame it saw the angle sitting there,
+    /// and one running slower would miss hits entirely; a sequence number it can compare
+    /// against the last one it acted on is right at any pair of rates.
+    /// </summary>
+    public float FlinchAngle { get; private set; }
+    public float FlinchAmount { get; private set; }
+    public int FlinchSeq { get; private set; }
+
+    /// <summary>Ticks once per blade pass, on the same principle: the figure swings when
+    /// this changes, not while it is nonzero.</summary>
+    public int SlashSeq { get; private set; }
+
+    /// <summary>And once per round out of the rifle, so the shoulder takes each shot
+    /// exactly once however fast the machine drawing them is running.</summary>
+    public int ShotSeq { get; private set; }
 
     /// <summary>
     /// Test hatch: puts them on a committed run this instant, without waiting for a squad
@@ -556,6 +650,7 @@ public sealed class EnemySoldier
     public void RegisterSlash()
     {
         _blade = BladeCooldownTime;
+        SlashSeq++;
         // Off the back of a connected pass they break away rather than grinding on the
         // spot. A slash is a fly-past, not a melee.
         Enter(SoldierMove.Breaking);
@@ -1302,6 +1397,7 @@ public sealed class EnemySoldier
         ShotOrigin = muzzle;
         ShotDir = dir;
         JustFired = true;
+        ShotSeq++;
         _fireCooldown = IsLeader ? LeaderFireInterval : FireInterval;
     }
 

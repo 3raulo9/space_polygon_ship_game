@@ -1,4 +1,4 @@
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
 /// A small BFXR/sfxr-style sound engine. It builds a retro sound effect from
@@ -2181,6 +2181,323 @@ public static class SfxSynth
             CrushBits = rng.Next(5, 9),
             CrushRate = 1,                          // rate-crush can't be made seamless
             Volume = 0.4f,
+            Seed = rng.Next(),
+        };
+    }
+
+    // --- The FLOWER -----------------------------------------------------------
+    // This chassis's noises split cleanly in two, and the split is the whole point of it.
+    //
+    // Everything the plant does to *itself* — wilting, uprooting, opening, setting seed —
+    // is wet, low and organic: a body doing something to a body. Those are built the way the
+    // rest of the bank is built, crushed and filtered and grim.
+    //
+    // The petal is not. The petal is *sung*. There is exactly one other clean sound in this
+    // game — the Crab-Core's beam, which is a chord held at you by the thing that is about to
+    // kill you (see BeamAngelic / BeamChoir) — and this is that same trick handed to the
+    // player and pointed the other way. Nothing about a boomerang blade needs to sound holy;
+    // it sounds holy because a bank made entirely of grinding metal has one hymn in it, and
+    // whoever hears that hymn go up across the city knows precisely what is now in the air.
+    //
+    // The three voices below are one chord: a root, a fifth over it, and an octave over that.
+    // Rendered separately and stacked at play time rather than as one recipe with two detunes,
+    // because they need different envelopes — the root arrives with the throw, the fifth swells
+    // in behind it, and the octave is a shimmer on top that is gone before either.
+
+    /// <summary>
+    /// The root of the petal's chord: a pure sine, no crush, a long slow swell. This is the
+    /// note the player will actually identify the weapon by.
+    ///
+    /// It rises very slightly across its life rather than falling, which is the single detail
+    /// that makes it read as <em>leaving</em>. Everything else in this bank that moves in pitch
+    /// moves down — a gun report, a body landing, a thing dying. A note that goes up is going
+    /// somewhere, and the petal is the only object in the game the player throws and expects
+    /// to see again.
+    /// </summary>
+    public static Params PetalHymn(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(288f, 300f);
+        return new Params
+        {
+            Wave = Osc.Sine,                        // pure: not one harmonic of grit
+            Length = 1.5f,
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.05f, 1.09f),  // rises: it is going somewhere
+
+            Attack = Range(0.05f, 0.09f),           // arrives with the throw
+            Sustain = Range(0.34f, 0.42f),
+            Decay = Range(0.5f, 0.6f),              // and hangs a long time after
+
+            TremoloDepth = Range(0.10f, 0.18f),     // the shimmer
+            TremoloSpeed = Range(5.5f, 7.5f),
+
+            VibratoDepth = Range(0.003f, 0.008f),   // a voice, not a siren
+            VibratoSpeed = Range(5f, 6.5f),
+
+            Detune = Range(1.003f, 1.007f),         // cents apart: a chorus of one
+            DetuneGain = Range(0.65f, 0.85f),
+
+            LpCutoff = 1f,
+            HpCutoff = 0f,
+
+            CrushBits = 0,                          // the whole trick
+            CrushRate = 0,
+            Volume = 0.6f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>The fifth over the root, swelling in a beat behind it. A single held sine is a
+    /// test tone; two in a consonant interval is somebody singing.</summary>
+    public static Params PetalFifth(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(288f, 300f) * 1.5f;
+        return new Params
+        {
+            Wave = Osc.Sine,
+            Length = 1.5f,
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.04f, 1.08f),
+
+            Attack = Range(0.16f, 0.24f),           // behind the root, on purpose
+            Sustain = Range(0.3f, 0.38f),
+            Decay = Range(0.45f, 0.55f),
+
+            TremoloDepth = Range(0.18f, 0.3f),
+            TremoloSpeed = Range(3.5f, 5f),         // slower: the two voices drift apart
+
+            Detune = Range(1.002f, 1.005f),
+            DetuneGain = Range(0.4f, 0.55f),
+
+            LpCutoff = 1f,
+            HpCutoff = Range(0.01f, 0.03f),
+
+            CrushBits = 0,
+            CrushRate = 0,
+            Volume = 0.4f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The octave on top, and the only part of the chord that is short. It is the *edge* of
+    /// the sound — the bit that says a physical thing left a physical ring — and if it hung
+    /// around like the other two the whole cue would turn to organ and stop being a throw.
+    /// </summary>
+    public static Params PetalGleam(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(288f, 300f) * 3f;       // the octave over the fifth
+        return new Params
+        {
+            Wave = Osc.Sine,
+            Length = 0.55f,
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(1.1f, 1.2f),
+
+            Attack = 0.02f,                         // struck, not sung
+            Sustain = 0.14f,
+            Decay = 0.84f,
+
+            TremoloDepth = Range(0.25f, 0.4f),
+            TremoloSpeed = Range(9f, 13f),
+
+            Detune = Range(1.5f, 1.505f),
+            DetuneGain = Range(0.2f, 0.3f),
+
+            LpCutoff = 1f,
+            HpCutoff = Range(0.05f, 0.1f),
+
+            CrushBits = 0,
+            CrushRate = 0,
+            Volume = 0.26f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// A petal re-seating in the gap it left. The hymn's last note, alone and very short —
+    /// the same root pitch an octave up, struck and gone. Deliberately the quietest thing this
+    /// chassis does: catching a petal is the <em>default</em> outcome, and a default that
+    /// announces itself six times in ten seconds becomes wallpaper.
+    /// </summary>
+    public static Params PetalSeat(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(560f, 610f);
+        return new Params
+        {
+            Wave = Osc.Sine,
+            Length = 0.22f,
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.96f, 1.0f),
+
+            Attack = 0.01f,
+            Sustain = 0.1f,
+            Decay = 0.89f,
+
+            Detune = Range(1.49f, 1.51f),
+            DetuneGain = 0.3f,
+
+            LpCutoff = 1f,
+            HpCutoff = 0.04f,
+
+            CrushBits = 0,
+            CrushRate = 0,
+            Volume = 0.3f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The rosette: a petal going off in something. This is where the two halves of the
+    /// chassis's voice meet — a wet organic burst with the hymn's own root note ringing
+    /// underneath it, so a kill made with a petal is audibly the same weapon that left the
+    /// ring singing four seconds earlier. The burst itself is a filtered noise pop with a
+    /// steep pitch drop: soft-edged rather than sharp, because what is coming apart here is a
+    /// flower rather than ordnance.
+    /// </summary>
+    public static Params BloomBurst(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.5f, 0.62f),
+
+            StartFreq = Range(560f, 700f),
+            EndFreq = Range(60f, 95f),              // falls away fast: a soft, spreading burst
+
+            Attack = 0.01f,
+            Sustain = Range(0.16f, 0.24f),
+            Decay = Range(0.72f, 0.8f),
+
+            LpCutoff = Range(0.4f, 0.52f),          // no top end at all — nothing here cracks
+            LpResonance = Range(0.2f, 0.3f),
+            LpSweep = Range(0.9994f, 0.9997f),      // and it closes as it goes
+            HpCutoff = Range(0.008f, 0.02f),
+
+            CrushBits = 9,                          // barely degraded: soft, not sharp
+            CrushRate = 0,
+            Volume = 0.72f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The ring under the rosette — the hymn's root note struck once and left to die. Voiced
+    /// with <see cref="BloomBurst"/> so the blast has the weapon's own pitch inside it.
+    /// </summary>
+    public static Params BloomRing(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(288f, 300f);
+        return new Params
+        {
+            Wave = Osc.Sine,
+            Length = 1.1f,
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.96f, 1.0f),
+
+            Attack = 0.01f,
+            Sustain = 0.12f,
+            Decay = 0.87f,
+
+            TremoloDepth = Range(0.15f, 0.28f),
+            TremoloSpeed = Range(4f, 6f),
+
+            Detune = Range(1.499f, 1.502f),
+            DetuneGain = 0.45f,
+
+            LpCutoff = 1f,
+            HpCutoff = 0f,
+
+            CrushBits = 0,
+            CrushRate = 0,
+            Volume = 0.45f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// A ripe head setting seed: a short wet burst with a rising tail, which is the shape of
+    /// something being <em>given</em> rather than something breaking. Crushed and filtered like
+    /// the rest of the bank — the harvest is the plant's body doing plant things, and only the
+    /// petal gets to be clean.
+    /// </summary>
+    public static Params SeedBurst(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(0.3f, 0.38f),
+
+            StartFreq = Range(180f, 240f),
+            EndFreq = Range(400f, 520f),            // rises: an offering, not a failure
+
+            Attack = 0.03f,
+            Sustain = 0.3f,
+            Decay = 0.67f,
+
+            LpCutoff = Range(0.42f, 0.55f),
+            LpResonance = Range(0.25f, 0.38f),
+            LpSweep = Range(1.0002f, 1.0006f),      // opening, so the tail gets brighter
+            HpCutoff = Range(0.02f, 0.04f),
+
+            CrushBits = 7,
+            CrushRate = 2,
+            Volume = 0.5f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// Roots coming out of the plate. A long tearing scrape with a falling pitch: this is the
+    /// least pleasant noise the chassis makes, and it should be, because it is the sound of the
+    /// player having decided to be somewhere else and not being anywhere yet.
+    /// </summary>
+    public static Params RootTear(Random rng, bool leaving)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = leaving ? Range(0.42f, 0.52f) : Range(0.6f, 0.72f),
+
+            StartFreq = leaving ? Range(300f, 380f) : Range(90f, 130f),
+            EndFreq = leaving ? Range(70f, 110f) : Range(220f, 300f),
+
+            Attack = leaving ? 0.02f : 0.3f,        // a tear is sudden; a growth swells
+            Sustain = 0.24f,
+            Decay = leaving ? 0.74f : 0.46f,
+
+            TremoloDepth = Range(0.3f, 0.5f),       // the grain of fibre giving way
+            TremoloSpeed = Range(22f, 34f),
+
+            LpCutoff = Range(0.3f, 0.42f),
+            LpResonance = Range(0.15f, 0.25f),
+            LpSweep = leaving ? Range(0.9995f, 0.9998f) : Range(1.0002f, 1.0005f),
+            HpCutoff = Range(0.01f, 0.03f),
+
+            CrushBits = 6,
+            CrushRate = 2,
+            Volume = 0.55f,
             Seed = rng.Next(),
         };
     }

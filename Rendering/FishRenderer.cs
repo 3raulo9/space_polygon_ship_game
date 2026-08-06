@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
+using Unrendered.Core;
+using Unrendered.Entities;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Everything the FISH puts on screen: the parts of its own body that hang permanently in
@@ -29,7 +29,9 @@ public sealed class FishRenderer
     /// </summary>
     public void Draw(World.World world, Vector3 cameraPos, float elapsed)
     {
-        PlayerTank p = world.Player;
+        // The craft the camera is riding — see SoldierRenderer for why a viewmodel follows
+        // the eye rather than the seat.
+        PlayerTank p = world.Eye;
         if (p.Fish is not { } body) return;
 
         // The camera's own basis, rebuilt here rather than passed down: the viewmodel has
@@ -275,7 +277,7 @@ public sealed class FishRenderer
     /// </summary>
     public static void DrawScreenEffects(World.World world, float elapsed)
     {
-        if (world.Player.Fish is not { } body) return;
+        if (world.Eye.Fish is not { } body) return;
 
         const int w = Config.InternalWidth;
         const int h = Config.InternalHeight;

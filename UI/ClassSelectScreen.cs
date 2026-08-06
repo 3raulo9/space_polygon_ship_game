@@ -1,7 +1,7 @@
-using VoidTanks.Core;
-using VoidTanks.Input;
+using Unrendered.Core;
+using Unrendered.Input;
 
-namespace VoidTanks.UI;
+namespace Unrendered.UI;
 
 /// <summary>
 /// The hangar: the screen that stands between choosing Single Player and actually
@@ -44,15 +44,15 @@ public sealed class ClassSelectScreen
         _loadout = loadout;
         ClassIndex = (int)loadout.Class;
 
-        // Capture harness: VOIDTANKS_CLASS_INDEX / _PANE / _PAINT open the screen in a
+        // Capture harness: UNRENDERED_CLASS_INDEX / _PANE / _PAINT open the screen in a
         // chosen state so each pane and the paint bay can be screenshotted headlessly.
-        if (int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_CLASS_INDEX"), out int ci)
+        if (int.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_CLASS_INDEX"), out int ci)
             && ci >= 0 && ci < ClassCatalog.All.Count)
             SelectClass(ci, quiet: true);
-        if (int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_CLASS_PANE"), out int cp)
+        if (int.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_CLASS_PANE"), out int cp)
             && cp >= 0 && cp <= (int)Pane.Actions)
             Focus = (Pane)cp;
-        if (Environment.GetEnvironmentVariable("VOIDTANKS_CLASS_PAINT") == "1" && CanCustomise)
+        if (Environment.GetEnvironmentVariable("UNRENDERED_CLASS_PAINT") == "1" && CanCustomise)
             Customising = true;
     }
 
@@ -128,7 +128,7 @@ public sealed class ClassSelectScreen
 
     private void UpdateStats()
     {
-        int count = 3;
+        int count = Loadout.StatCount;
         if (InputMap.MenuUp) { StatRow = (Loadout.Stat)(((int)StatRow - 1 + count) % count); Audio.PlayBlip(); }
         if (InputMap.MenuDown) { StatRow = (Loadout.Stat)(((int)StatRow + 1) % count); Audio.PlayBlip(); }
 

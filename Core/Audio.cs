@@ -1,446 +1,462 @@
-using System.Runtime.InteropServices;
+using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Entities;   // CrabRig, for the boss's leg count
+using Unrendered.Acoustics;
+using Unrendered.Entities;   // CrabRig, for the boss's leg count
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
-/// Central sound-effects bank. Loads the game's clips once and plays them by
-/// name from anywhere in the sim. Every call is a no-op until <see cref="Init"/>
-/// has run against a live audio device, so the headless self-test (which never
-/// opens a window or an audio device) can drive the same simulation code without
-/// touching Raylib's audio at all.
+/// The sound bank: what each cue in the game is <em>made of</em>. Which clip, which synth
+/// recipe, how the layers stack, how fast a repeating cue is allowed to repeat.
+///
+/// <para>What it deliberately no longer decides is how loud anything is, or where it sits,
+/// or how it is coloured by the distance and the city between it and the player. All of
+/// that now belongs to <see cref="Unrendered.Acoustics.AudioEngine"/>, which is handed a
+/// world position and looks the rest up in the cue table. That split is the whole point:
+/// before it, forty of the fifty cues in the game were played at full volume dead centre
+/// whatever was happening, which is why a firefight on the far side of the map sounded
+/// exactly like a firefight in your lap.</para>
+///
+/// <para>Every call is a no-op until <see cref="Init"/> has run against a live audio
+/// device, so the headless self-test can drive the same simulation code and stay silent.
+/// The engine's arithmetic is exercised separately, without a device, by the offline
+/// renderer.</para>
 /// </summary>
 public static class Audio
 {
-    // Guards every play/load call. The self-test leaves this false, so audio is
-    // silently skipped; normal boot flips it on after InitAudioDevice succeeds.
+    // Guards every play/load call. The self-test leaves this false, so audio is silently
+    // skipped; normal boot flips it on after the device and the stream are up.
     private static bool _enabled;
 
-    private static Sound _blip;         // menu cursor moving between options
-    private static Sound _detonation;   // a barrel firing — player or enemy shot
-    private static Sound _explosion;    // a tank being destroyed (player or enemy)
-    private static Sound _distantBoom;  // an air shot coming down far off on the horizon
-    private static Sound _hit;          // the player's craft taking a hit
-    private static Sound _warning;      // shield crosses the low-health line
-    private static Sound _stomp;        // a Crab-Core foot planting on the grid
-    private static Sound _alarm;        // Crab-Core threat-display lurch to one side
+    private static AudioEngine _engine = new(CueBank.BuildTable());
 
-    // Assets are copied next to the executable by the .csproj, so a relative
-    // path off the working directory resolves at runtime.
+    /// <summary>The engine behind the bank. The world uses it to place the listener, to
+    /// answer occlusion questions and to set the state of the player's ears.</summary>
+    public static AudioEngine Engine => _engine;
+
+    // --- The clip bank -------------------------------------------------------------
+    // Decoded once at boot into mono float, which is what the mixer eats. Nothing here is
+    // a raylib Sound any more: a Sound cannot overlap itself, which is why this file used
+    // to carry four separate arrays of aliases just so a walking boss could put three feet
+    // down on one tick. The engine's voice pool makes all of that unnecessary.
+
+    private static Clip? _blip;         // menu cursor moving between options
+    private static Clip? _detonation;   // a barrel firing — player or enemy shot
+    private static Clip? _explosion;    // a tank being destroyed (player or enemy)
+    private static Clip? _distantBoom;  // an air shot coming down far off on the horizon
+    private static Clip? _hit;          // a craft taking a hit
+    private static Clip? _warning;      // shield crosses the low-health line
+    private static Clip? _stomp;        // a Crab-Core foot planting on the grid
+    private static Clip? _alarm;        // Crab-Core threat-display lurch to one side
+
+    // Assets are copied next to the executable by the .csproj, so a relative path off the
+    // working directory resolves at runtime.
     private const string SfxDir = "Assets/Audio/SFX/";
 
+    private static readonly Random _sfxRng = new();
+
     /// <summary>
-    /// Opens the audio device and loads every clip. Call once at startup, after
-    /// the window exists. Safe to skip entirely (the sim just stays silent).
+    /// Opens the audio device, loads every clip and starts the mixer. Call once at
+    /// startup, after the window exists.
     /// </summary>
     public static void Init()
     {
         Raylib.InitAudioDevice();
-        _blip = Load("blip.wav");
-        _detonation = Load("detonation.wav");
-        _explosion = Load("explosion.wav");
-        _distantBoom = Load("distantBoom.wav");
-        _hit = Load("hit.wav");
-        _warning = Load("warning.wav");
-        _stomp = Load("stomping.wav");
-        _alarm = Load("scaryAlarm.wav");
 
-        // Aliases — must come after their source clips are loaded, since they borrow
-        // those samples rather than owning any. Each set exists so one clip can
-        // overlap itself: seven simultaneous death blasts, a whole tripod of feet
-        // landing at once, and core pings that don't cut each other off.
-        for (int i = 0; i < BossBoomCount; i++)
-            _bossBooms[i] = Raylib.LoadSoundAlias(_explosion);
-        for (int i = 0; i < _stompVoices.Length; i++)
-            _stompVoices[i] = Raylib.LoadSoundAlias(_stomp);
-        for (int i = 0; i < CoreHitVoices; i++)
-            _coreHits[i] = Raylib.LoadSoundAlias(_hit);
-        for (int i = 0; i < BeamWarnVoices; i++)
-            _beamWarns[i] = Raylib.LoadSoundAlias(_warning);
+        _blip = AudioEngine.LoadFile(SfxDir + "blip.wav");
+        _detonation = AudioEngine.LoadFile(SfxDir + "detonation.wav");
+        _explosion = AudioEngine.LoadFile(SfxDir + "explosion.wav");
+        _distantBoom = AudioEngine.LoadFile(SfxDir + "distantBoom.wav");
+        _hit = AudioEngine.LoadFile(SfxDir + "hit.wav");
+        _warning = AudioEngine.LoadFile(SfxDir + "warning.wav");
+        _stomp = AudioEngine.LoadFile(SfxDir + "stomping.wav");
+        _alarm = AudioEngine.LoadFile(SfxDir + "scaryAlarm.wav");
 
-        // The two continuous beds, synthesised once per session so each run's monsters
-        // hum and hover at slightly different pitches and throbs. Rolled here rather
-        // than per monster: they are streaming loops, not one-shots, and rebuilding
-        // one mid-fight would mean tearing down a stream that is currently audible.
-        _hum.Load(SfxSynth.RenderWav(SfxSynth.Hum(_sfxRng)));
-        _mawHover.Load(SfxSynth.RenderWav(SfxSynth.MawHover(_sfxRng)));
-        // The player's own bed: the SPIDER's lance winding up. Same machinery as the
-        // monsters' — a loop whose playback rate is driven per frame — because the
-        // charge has no fixed length, so no one-shot envelope could ever match it.
-        _lanceCharge.Load(SfxSynth.RenderWav(SfxSynth.LanceCharge(_sfxRng)));
-
-        // And the SOLDIER's two: the gas jet under a reel, and the wind. Beds for the
-        // same reason — neither has a length. A swing lasts as long as it lasts, and the
-        // one thing audio has to do on that chassis is carry the sense of speed
+        // The beds, synthesised once per session so each run's monsters hum and hover at
+        // slightly different pitches and throbs. Rolled here rather than per monster: they
+        // are loops, and rebuilding one mid-fight would mean tearing down something
+        // currently audible.
+        _hum.Load(SfxSynth.Render(SfxSynth.Hum(_sfxRng)), "hum");
+        _mawHover.Load(SfxSynth.Render(SfxSynth.MawHover(_sfxRng)), "mawhover");
+        // The player's own beds: the SPIDER's lance winding up, and the SOLDIER's gas jet,
+        // wind and cable strain. Beds because none of them has a length — a swing lasts as
+        // long as it lasts, and what audio has to do on those chassis is carry speed
         // continuously rather than in events.
-        _reelJet.Load(SfxSynth.RenderWav(SfxSynth.ReelJet(_sfxRng)));
-        _wind.Load(SfxSynth.RenderWav(SfxSynth.WindRush(_sfxRng)));
-        _cableStrain.Load(SfxSynth.RenderWav(SfxSynth.CableStrain(_sfxRng)));
+        _lanceCharge.Load(SfxSynth.Render(SfxSynth.LanceCharge(_sfxRng)), "lance");
+        _reelJet.Load(SfxSynth.Render(SfxSynth.ReelJet(_sfxRng)), "reel");
+        _wind.Load(SfxSynth.Render(SfxSynth.WindRush(_sfxRng)), "wind");
+        _cableStrain.Load(SfxSynth.Render(SfxSynth.CableStrain(_sfxRng)), "strain");
+
+        _engine.WorldWrap = Torus.Size;
+        CueBank.ApplyOverrideFile(_engine.Specs);
+        _engine.Open();
+
+        // The soundtrack. Owns its own clip list and its own clock; it streams through
+        // raylib rather than through the mixer, because it is the one sound in the game
+        // that has no position and would gain nothing from having one.
+        MusicBox.Init();
 
         _enabled = true;
     }
 
-    /// <summary>Menu cursor stepping to a new option. Mapped to blip.wav.</summary>
-    public static void PlayBlip()
+    /// <summary>Where the ears are this frame. Driven from the world's <c>Eye</c>, which is
+    /// the craft whose screen this is — a spectator's ears ride the team-mate they are
+    /// watching, not their own wreck.</summary>
+    public static void Listen(Vector2 pos, float height, float heading, float pitch)
     {
-        if (_enabled) Raylib.PlaySound(_blip);
+        _ear.Position = pos;
+        _ear.Height = height;
+        _ear.Heading = heading;
+        _ear.Pitch = pitch;
     }
 
-    /// <summary>A shot leaving a barrel — player or enemy. Mapped to detonation.wav.</summary>
-    public static void PlayDetonation()
-    {
-        if (_enabled) Raylib.PlaySound(_detonation);
-    }
+    private static Listener _ear;
 
-    /// <summary>A tank being destroyed — player or enemy. Mapped to explosion.wav.</summary>
-    public static void PlayExplosion()
-    {
-        if (!_enabled) return;
-        Raylib.SetSoundVolume(_explosion, 1f);   // full-volume, up close
-        Raylib.PlaySound(_explosion);
-    }
+    /// <summary>The state of the room and of the player's ears — concussion, being
+    /// swallowed, how much city is standing around. Driven by the world.</summary>
+    public static Ambience Room => _engine.Env;
+
+    // --- The mixer's faders --------------------------------------------------------
 
     /// <summary>
-    /// The dedicated far-off detonation — an air shot coming down out on the horizon.
-    /// Its own low, rolling boom (distantBoom.wav), with volume falling off further
-    /// with range so a shot landing deep downrange is a faint thud rather than a bang
-    /// in your ear.
+    /// Pushes the player's audio settings into the mixer. Cheap and idempotent, so the
+    /// settings screen can simply call it on every change rather than diffing anything.
     /// </summary>
-    public static void PlayExplosionAt(float distance)
+    public static void ApplySettings(Settings s)
     {
-        if (!_enabled) return;
-        // Linear falloff to a quiet floor: nearby is full, ~200 units out is barely
-        // there. Clamped so it never goes fully silent or over unity.
-        float vol = Math.Clamp(1f - distance / 200f, 0.1f, 1f);
-        Raylib.SetSoundVolume(_distantBoom, vol);
-        Raylib.PlaySound(_distantBoom);
+        _engine.Env.MasterVolume = s.MasterVolume;
+
+        // Walked rather than listed. A bus with no fader of its own answers 1 from
+        // VolumeOf, so adding a category to the mixer and a row to the settings page is two
+        // edits and never a third one here that somebody forgets.
+        foreach (var bus in Enum.GetValues<Bus>()) _engine.SetBusGain(bus, s.VolumeOf(bus));
+
+        _engine.Mix.MonoDownmix = s.MonoAudio;
+        _engine.Mix.SoftenLoud = s.SoftenLoudSounds;
+
+        // The soundtrack streams through raylib rather than the mixer, so its bus gain has
+        // to reach it by hand — see MusicBox.Fader.
+        MusicBox.Fader = s.MusicVolume;
     }
 
-    /// <summary>The player's craft absorbing a hit.</summary>
-    public static void PlayHit()
-    {
-        if (_enabled) Raylib.PlaySound(_hit);
-    }
-
-    /// <summary>Low-shield alarm — fired once when crossing the threshold, not per frame.</summary>
-    public static void PlayWarning()
-    {
-        if (_enabled) Raylib.PlaySound(_warning);
-    }
+    // --- Adaptive music ------------------------------------------------------------
 
     /// <summary>
-    /// A support giving way — the groan that warns a topple has begun and a second or so of
-    /// falling mass is coming, giving anything under it time to move. A low stone-grind (the
-    /// same the thrown core makes, dropped in level), mixed down with range.
+    /// How hard the fight is right now, 0..1. Fed by the world each frame; the soundtrack
+    /// rides it, and it also decides how far the music gets out of the way when something
+    /// large happens. Not a mood system — the game has two tracks — but the difference
+    /// between an empty grid and a boss fight ought to be audible in more than the gunfire.
     /// </summary>
-    public static void PlayStructureGroan(float distance)
-    {
-        if (!_enabled) return;
-        float vol = Math.Clamp(1f - distance / 220f, 0.12f, 0.9f);
-        PlaySynth(SfxSynth.CrabBlastGrind(_sfxRng), vol);
-    }
+    public static float Intensity { get; private set; }
+
+    /// <summary>Set by the world each frame from what is actually on the field.</summary>
+    public static void SetIntensity(float value) => _intensityTarget = Math.Clamp(value, 0f, 1f);
+
+    // --- Taking the world away ------------------------------------------------------
 
     /// <summary>
-    /// A crack of masonry shearing off where a beam is biting a structure — short and hard,
-    /// jittered across the synth pool so a dwelling beam reads as stone breaking rather than
-    /// one clip stuttering. Quieter and shorter-ranged than a detonation: it is a chip, not
-    /// the collapse.
-    /// </summary>
-    public static void PlayStructureCrack(float distance)
-    {
-        if (!_enabled) return;
-        float vol = Math.Clamp(1f - distance / 160f, 0.1f, 0.6f);
-        PlaySynth(SfxSynth.RifleCrack(_sfxRng), vol);
-    }
-
-    // --- The Crab-Core's lance: charge, three warnings, then the beam ---------
-
-    /// <summary>
-    /// The boss's crystal spinning up to fire. One shot, fired as the charge begins —
-    /// <see cref="SfxSynth.BeamCharge"/>'s own envelope carries it across the whole
-    /// wind-up, so nothing has to drive it per-frame.
-    /// </summary>
-    public static void PlayBeamCharge()
-    {
-        if (_enabled) PlaySynth(SfxSynth.BeamCharge(_sfxRng));
-    }
-
-    /// <summary>Voices for the beam's warnings. Aliases of warning.wav so the three
-    /// can overlap each other and, more importantly, so re-pitching them never
-    /// touches the pitch of the low-shield alarm, which shares the source clip and
-    /// must always sound the same.</summary>
-    private const int BeamWarnVoices = 3;
-    private static readonly Sound[] _beamWarns = new Sound[BeamWarnVoices];
-
-    /// <summary>
-    /// One of the three warnings that count the charge down. <paramref name="step"/>
-    /// is which it is (0, 1, 2), and both layers climb with it: the bank's alarm clip
-    /// is re-pitched a clear step higher each time — the slide up — under a
-    /// synthesised beep (<see cref="SfxSynth.WarningBeep"/>) that steps with it.
+    /// How much of the world is still audible: 1 the whole of it, 0 silence. One control over
+    /// both halves of the sound — the mixer's spatial world and the soundtrack streaming
+    /// beside it — because "everything except the menu" is a single idea and having to
+    /// remember two places to say it is how one of them ends up still making noise.
     ///
-    /// The pairing is what makes it land: the clip alone is a sound the player has
-    /// heard all game meaning "your shield is low", and hearing it here would read as
-    /// the wrong alarm. Sliding it upward and welding a synthetic tone to it turns it
-    /// into something the boss is doing rather than something the craft is reporting.
+    /// <para>Menu sound (the <see cref="Bus.Ui"/> bus) deliberately survives this: it is how a
+    /// screen answers the keys being pressed on it.</para>
+    ///
+    /// <para>Used by the end of a solo run, which walks it to zero as the ending panel comes
+    /// in. Reset to 1 whenever a run starts, by <see cref="ResumeWorldSound"/>.</para>
     /// </summary>
-    public static void PlayBeamWarning(int step)
+    public static float WorldFade { get; private set; } = 1f;
+
+    /// <summary>Sets how much of the world can still be heard. The caller owns the curve —
+    /// this is a level, not a fade, and it is expected to be written every frame.</summary>
+    public static void SetWorldFade(float amount)
+    {
+        WorldFade = Math.Clamp(amount, 0f, 1f);
+        _engine.Mix.WorldFadeTarget = WorldFade;
+        MusicBox.WorldFade = WorldFade;
+    }
+
+    /// <summary>Hands the world its voice back — on entering a run, and on leaving a faded
+    /// one for any screen at all. A fade nobody clears is a game that boots silent the second
+    /// time it is played.</summary>
+    public static void ResumeWorldSound() => SetWorldFade(1f);
+
+    private static float _intensityTarget;
+
+    /// <summary>How far the music is pushed down at full intensity, and how fast it moves.
+    /// Slow on the way back up: a soundtrack that pops back the instant a boss stops
+    /// roaring sounds like a mistake, and one that creeps back sounds like relief.</summary>
+    private const float MusicDuckAtPeak = 0.45f;
+    private const float IntensityRise = 2.2f;
+    private const float IntensityFall = 0.35f;
+
+    private static void ServiceMusic(float dt)
+    {
+        // Rises fast, falls slowly. A firefight starting is news; a firefight ending is
+        // something the player works out over several seconds.
+        float rate = _intensityTarget > Intensity ? IntensityRise : IntensityFall;
+        Intensity = Approach(Intensity, _intensityTarget, rate * dt);
+
+        // The soundtrack gets out of the way of the world rather than the other way round.
+        // A hard sidechain on top of that: a boss death or a beam firing drops it further
+        // still for as long as the master limiter is actually working, which is exactly the
+        // moments that need the room.
+        float duck = 1f - MusicDuckAtPeak * Intensity;
+        duck *= 1f - 0.4f * Math.Clamp(_engine.Mix.LimiterReduction * 2f, 0f, 1f);
+        MusicBox.Duck = duck;
+    }
+
+    // --- Posting -------------------------------------------------------------------
+
+    /// <summary>
+    /// Hands one rendered sound to the engine at a place in the world. Every cue below
+    /// funnels through here.
+    ///
+    /// <paramref name="gain"/> is a <em>layer</em> level — how loud this component is
+    /// relative to the others in the same cue — and never a distance volume. The engine
+    /// owns distance.
+    /// </summary>
+    private static void Post(Cue id, Clip? clip, Vector2 at, float pitch = 1f, float gain = 1f)
+    {
+        if (_enabled && clip != null) _engine.Play((int)id, clip, at, 0f, -1, pitch, gain);
+    }
+
+    /// <summary>Renders a synth recipe and posts it. A fresh roll every time, which is what
+    /// keeps repeated cues from sounding sampled — and now cheaper than it was, since the
+    /// mixer eats the float buffer directly instead of it being wrapped in a WAV header and
+    /// uploaded to the sound card.</summary>
+    private static void Synth(Cue id, SfxSynth.Params p, Vector2 at, float gain = 1f)
+    {
+        // Checked before rendering, not after. Rendering a recipe is real work — a second of
+        // 44.1kHz float — and the argument to a Post that is about to throw it away is still
+        // rendered. Without this the headless self-test synthesises a buffer for every cue
+        // the whole simulation raises and drops all of them.
+        if (!_enabled) return;
+        Post(id, AudioEngine.FromSamples(SfxSynth.Render(p)), at, 1f, gain);
+    }
+
+    /// <summary>A sound with no place in the world — a menu click, a gauge on your own
+    /// panel. Centred and dry however loud the fight outside is.</summary>
+    private static void Flat(Cue id, Clip? clip, float pitch = 1f, float gain = 1f)
+    {
+        if (_enabled && clip != null) _engine.PlayFlat((int)id, clip, pitch, gain);
+    }
+
+    private static void FlatSynth(Cue id, SfxSynth.Params p, float gain = 1f)
     {
         if (!_enabled) return;
-        int i = Math.Clamp(step, 0, BeamWarnVoices - 1);
+        Flat(id, AudioEngine.FromSamples(SfxSynth.Render(p)), 1f, gain);
+    }
 
-        Sound voice = _beamWarns[i];
-        Raylib.SetSoundPitch(voice, 1f + i * 0.32f);   // the slide up
-        Raylib.SetSoundVolume(voice, 0.85f);
-        Raylib.PlaySound(voice);
+    // --- Guns, rounds and impacts --------------------------------------------------
 
-        PlaySynth(SfxSynth.WarningBeep(_sfxRng, i));
+    /// <summary>Menu cursor stepping to a new option.</summary>
+    public static void PlayBlip() => Flat(Cue.Pickup, _blip);
+
+    /// <summary>A shot leaving a barrel — player or enemy.</summary>
+    public static void PlayDetonation(Vector2 at) => Post(Cue.Detonation, _detonation, at);
+
+    /// <summary>A tank being destroyed — player or enemy, up close.</summary>
+    public static void PlayExplosion(Vector2 at) => Post(Cue.Explosion, _explosion, at);
+
+    /// <summary>The far-off detonation — an air shot coming down out on the horizon. Its
+    /// own low, rolling boom, and the one cue in the bank that carries a travel delay, so
+    /// a blast across the map flashes before it arrives.</summary>
+    public static void PlayExplosionAt(Vector2 at) => Post(Cue.ExplosionAt, _distantBoom, at);
+
+    /// <summary>A craft absorbing a hit.</summary>
+    public static void PlayHit(Vector2 at) => Post(Cue.Hit, _hit, at);
+
+    /// <summary>Low-shield alarm. Flat by design — it is your own panel talking, so it does
+    /// not belong anywhere in the world and it is not muffled by anything.</summary>
+    public static void PlayWarning(Vector2 at) => Flat(Cue.Warning, _warning);
+
+    /// <summary>A support giving way — the groan that warns a topple has begun and a second
+    /// or so of falling mass is coming.</summary>
+    public static void PlayStructureGroan(Vector2 at)
+        => Synth(Cue.StructureGroan, SfxSynth.CrabBlastGrind(_sfxRng), at);
+
+    /// <summary>Masonry shearing off where a beam is biting. A chip, not the collapse.</summary>
+    public static void PlayStructureCrack(Vector2 at)
+        => Synth(Cue.StructureCrack, SfxSynth.RifleCrack(_sfxRng), at, 0.7f);
+
+    // --- The Crab-Core's lance: charge, three warnings, then the beam ---------------
+
+    /// <summary>The boss's crystal spinning up to fire. One shot — the recipe's own
+    /// envelope carries it across the whole wind-up.</summary>
+    public static void PlayBeamCharge(Vector2 at)
+        => Synth(Cue.BeamCharge, SfxSynth.BeamCharge(_sfxRng), at);
+
+    /// <summary>
+    /// One of the three warnings counting the charge down. Both layers climb with
+    /// <paramref name="step"/>: the alarm clip is re-pitched a clear step higher each time
+    /// under a synthesised beep that steps with it.
+    ///
+    /// The pairing is what makes it land. The clip alone is a sound the player has heard
+    /// all game meaning "your shield is low", and hearing it here would read as the wrong
+    /// alarm; sliding it upward and welding a tone to it turns it into something the boss
+    /// is doing rather than something the craft is reporting.
+    /// </summary>
+    public static void PlayBeamWarning(Vector2 at, int step)
+    {
+        int i = Math.Clamp(step, 0, 2);
+        Post(Cue.BeamWarning, _warning, at, 1f + i * 0.32f, 0.85f);
+        Synth(Cue.BeamWarning, SfxSynth.WarningBeep(_sfxRng, i), at);
+    }
+
+    /// <summary>The beam firing: two clean synthesised voices a fifth apart, both exactly
+    /// as long as the burn. The only consonant, un-crushed thing in the bank.</summary>
+    public static void PlayBeamFire(Vector2 at)
+    {
+        Synth(Cue.BeamFire, SfxSynth.BeamAngelic(_sfxRng), at);
+        Synth(Cue.BeamFire, SfxSynth.BeamChoir(_sfxRng), at);
+    }
+
+    /// <summary>A thrown CRAB CORE going off: the boss's own sung beam voices layered under
+    /// a low dissonant grind and a metallic clatter, plus a clamp snap at the front — the
+    /// crab's attack torn loose and misfiring.</summary>
+    public static void PlayCrabCoreBlast(Vector2 at)
+    {
+        Synth(Cue.CrabCoreBlast, SfxSynth.BeamAngelic(_sfxRng), at, 0.7f);
+        Synth(Cue.CrabCoreBlast, SfxSynth.BeamChoir(_sfxRng), at, 0.6f);
+        Synth(Cue.CrabCoreBlast, SfxSynth.CrabBlastGrind(_sfxRng), at);
+        Synth(Cue.CrabCoreBlast, SfxSynth.CrabBlastMetal(_sfxRng), at);
+        PlayClamp(at);
     }
 
     /// <summary>
-    /// The beam firing: two clean synthesised voices a fifth apart
-    /// (<see cref="SfxSynth.BeamAngelic"/> and <see cref="SfxSynth.BeamChoir"/>),
-    /// both exactly as long as the burn, so the sound ends when the light does. The
-    /// only consonant, un-crushed thing in the bank — see the recipes for why the
-    /// lethal attack is the pretty one.
+    /// One of the SPIDER's small lasers leaving the emitter: a dry zap and, a beat behind
+    /// it, the same zap again lower and far quieter — a tiny echo, and nothing more. The
+    /// cannon's report has body to it, which at this cadence stacks into a continuous roar;
+    /// this is built to get out of the way the instant the shot has left.
     /// </summary>
-    public static void PlayBeamFire()
+    public static void PlayLaser(Vector2 at)
     {
-        if (!_enabled) return;
-        PlaySynth(SfxSynth.BeamAngelic(_sfxRng));
-        PlaySynth(SfxSynth.BeamChoir(_sfxRng));
-    }
+        Synth(Cue.Laser, SfxSynth.Laser(_sfxRng), at);
 
-    /// <summary>
-    /// A thrown CRAB CORE going off: the boss's own sung beam voices, layered under two
-    /// crushed mechanical layers — a low dissonant grind and a metallic clatter — plus a
-    /// clamp snap at the front, so the radial star reads as the crab's attack torn loose
-    /// and misfiring. Creepier and more machined than the clean lance it echoes.
-    /// </summary>
-    public static void PlayCrabCoreBlast()
-    {
-        if (!_enabled) return;
-        // The sung pair, still present but now buried under the wrongness.
-        PlaySynth(SfxSynth.BeamAngelic(_sfxRng), 0.7f);
-        PlaySynth(SfxSynth.BeamChoir(_sfxRng), 0.6f);
-        // The two degraded layers that make it sound broken.
-        PlaySynth(SfxSynth.CrabBlastGrind(_sfxRng));
-        PlaySynth(SfxSynth.CrabBlastMetal(_sfxRng));
-        // A mechanical snap of the housing as it discharges.
-        PlayClamp();
-    }
-
-    /// <summary>
-    /// One of the SPIDER's small lasers leaving the emitter: a dry zap and, a beat
-    /// behind it, the same zap again at a fifth of the level and a touch lower — a tiny
-    /// echo, and nothing more. The cannon's <see cref="PlayDetonation"/> is a report
-    /// with body to it, which at the laser's cadence stacks into a continuous roar; this
-    /// is built to get out of the way the instant the shot has left.
-    /// </summary>
-    public static void PlayLaser()
-    {
-        if (!_enabled) return;
-        PlaySynth(SfxSynth.Laser(_sfxRng));
-
-        // The echo is the same recipe rendered again rather than a delay line — there
-        // is no delay in the synth — so it is a genuinely different roll of the same
-        // sound, which is closer to a reflection than a duplicate would be.
         var tail = SfxSynth.Laser(_sfxRng);
         tail.StartFreq *= 0.82f;
         tail.EndFreq *= 0.82f;
         tail.Length *= 1.3f;
-        PlaySynth(tail, 0.22f);
+        Synth(Cue.Laser, tail, at, 0.22f);
     }
 
     /// <summary>
     /// The SPIDER's lance discharging: a short crushed discharge, a clamp snap for the
-    /// housing, a quiet tail a fifth down — and, underneath all of it, the Crab-Core's
-    /// own sung beam.
+    /// housing, a quiet tail a fifth down — and underneath all of it the Crab-Core's own
+    /// sung beam.
     ///
-    /// That last layer is the point of the class. The chassis is a boss's weapon cut
-    /// down and bolted to a person, and the sung pair is the single most recognisable
-    /// sound the boss makes; hearing a ghost of it every time you fire is what tells the
-    /// player, without a line of text, whose gun they are holding. It is mixed low and
-    /// — critically — rendered at the <em>player's</em> burn length rather than the
-    /// boss's, since <see cref="PlayCrabCoreBlast"/>'s five-second voices are what left
-    /// the old cue sounding for four seconds after the light had gone. Same voice,
-    /// quarter the level, a tenth of the length: present, not playing.
+    /// That last layer is the point of the class. The chassis is a boss's weapon cut down
+    /// and bolted to a person, and hearing a ghost of the boss's most recognisable sound
+    /// every time you fire is what tells the player whose gun they are holding.
     /// </summary>
-    public static void PlayLanceFire()
+    public static void PlayLanceFire(Vector2 at)
     {
-        if (!_enabled) return;
-        PlaySynth(SfxSynth.LanceFire(_sfxRng));
+        Synth(Cue.LanceFire, SfxSynth.LanceFire(_sfxRng), at);
 
         var tail = SfxSynth.LanceFire(_sfxRng);
         tail.StartFreq *= 0.66f;
         tail.EndFreq *= 0.66f;
-        PlaySynth(tail, 0.3f);
+        Synth(Cue.LanceFire, tail, at, 0.3f);
 
-        // The boss's beam, cut to the length of the shaft the player actually fired.
-        // Keyed off SpiderWeapon.BeamTime rather than a literal so retuning the burn
-        // moves the sound with it instead of quietly desynchronising the two.
+        // The boss's beam, cut to the length of the shaft the player actually fired. Keyed
+        // off BeamTime rather than a literal so retuning the burn moves the sound with it.
         float burn = SpiderWeapon.BeamTime;
 
         var sung = SfxSynth.BeamAngelic(_sfxRng);
         sung.Length = burn;
-        PlaySynth(sung, 0.26f);
+        Synth(Cue.LanceFire, sung, at, 0.26f);
 
         var choir = SfxSynth.BeamChoir(_sfxRng);
         choir.Length = burn;
-        PlaySynth(choir, 0.18f);
+        Synth(Cue.LanceFire, choir, at, 0.18f);
 
-        PlayClamp();
+        PlayClamp(at);
     }
 
     /// <summary>
-    /// The worn Crab-Core's lance — the boss's own discharge fired through a corrupted
-    /// core, and nothing about it sits right. The main shot goes out detuned off true by a
-    /// fresh random amount every pull, with two more rolls of the same recipe under it
-    /// shoved a long way apart in pitch — a weapon audibly firing several ways at once,
-    /// which is exactly what the picture shows. Under that, the thrown core's grind and
-    /// metal layers do the work they were built for: failing machinery. And where the
-    /// intact lance carries a ghost of the boss's sung beam, this one gets a single sick,
-    /// warbling fragment of it — the choir is in there, but it is not singing anymore.
+    /// The worn Crab-Core's lance — the boss's own discharge through a corrupted core, and
+    /// nothing about it sits right. The main shot goes out detuned off true by a fresh
+    /// random amount every pull, with two more rolls shoved a long way apart in pitch: a
+    /// weapon audibly firing several ways at once, which is what the picture shows. The
+    /// choir is in there, but it is not singing anymore.
     /// </summary>
-    public static void PlayUnstableLance()
+    public static void PlayUnstableLance(Vector2 at)
     {
-        if (!_enabled) return;
-
-        // The main discharge, off true — differently off true every time.
         var main = SfxSynth.LanceFire(_sfxRng);
         main.StartFreq *= 0.85f + (float)_sfxRng.NextDouble() * 0.35f;
         main.EndFreq *= 0.6f + (float)_sfxRng.NextDouble() * 0.6f;
-        PlaySynth(main);
+        Synth(Cue.UnstableLance, main, at);
 
-        // The breaks: the same recipe again, thrown high and short and low and dragging —
-        // one roll per direction the beam visibly went.
         var high = SfxSynth.LanceFire(_sfxRng);
         high.StartFreq *= 1.5f;
         high.EndFreq *= 1.8f;
         high.Length *= 0.45f;
-        PlaySynth(high, 0.4f);
+        Synth(Cue.UnstableLance, high, at, 0.4f);
 
         var low = SfxSynth.LanceFire(_sfxRng);
         low.StartFreq *= 0.45f;
         low.EndFreq *= 0.35f;
         low.Length *= 1.4f;
-        PlaySynth(low, 0.5f);
+        Synth(Cue.UnstableLance, low, at, 0.5f);
 
-        // Machinery failing under the shot.
-        PlaySynth(SfxSynth.CrabBlastGrind(_sfxRng), 0.5f);
-        PlaySynth(SfxSynth.CrabBlastMetal(_sfxRng), 0.45f);
+        Synth(Cue.UnstableLance, SfxSynth.CrabBlastGrind(_sfxRng), at, 0.5f);
+        Synth(Cue.UnstableLance, SfxSynth.CrabBlastMetal(_sfxRng), at, 0.45f);
 
-        // The sung beam, sick: a short fragment bent a whole fourth downward mid-note.
         var sung = SfxSynth.BeamAngelic(_sfxRng);
         sung.Length = 0.5f;
         sung.EndFreq = sung.StartFreq * 0.75f;
-        PlaySynth(sung, 0.2f);
+        Synth(Cue.UnstableLance, sung, at, 0.2f);
 
-        PlayClamp();
+        PlayClamp(at);
     }
 
-    // --- Synthesised cues: built from nothing, fresh on every trigger ---------
-    // These load no asset. SfxSynth rolls a new recipe each time and renders it to
-    // .wav bytes in memory, so the sounds below never repeat themselves.
-
-    /// <summary>How many generated clips stay alive at once. A slot is only reused
-    /// once the mixer has actually finished with the clip in it — age alone is not
-    /// enough, since a crab fight can fire sixteen short cues (footsteps, clamps,
-    /// hunting calls) while a seconds-long beam voice is still sounding, and freeing
-    /// a clip out from under the audio thread corrupts the mixer. Shared by every
-    /// synthesised cue, which also lets them overlap each other freely (a file-backed
-    /// Sound can't overlap itself; these are all distinct objects).</summary>
-    private const int SynthPoolSize = 32;
-
-    private static readonly Sound[] _synthPool = new Sound[SynthPoolSize];
-    private static readonly bool[] _synthLoaded = new bool[SynthPoolSize];
-    private static int _synthSlot;
-
-    private static readonly Random _sfxRng = new();
-
-    /// <summary>
-    /// Renders a recipe, hands it to the audio device and plays it, reusing a ring
-    /// slot whose previous clip has finished sounding. If every slot is still
-    /// audible the cue is dropped rather than stealing a voice — silence for one
-    /// footstep is cheaper than freeing a buffer the mixer is reading.
-    /// </summary>
-    private static void PlaySynth(SfxSynth.Params p, float volume = 1f)
-    {
-        // Claim a slot before rendering anything: a slot is free if it never held a
-        // clip, or if the one it holds has run out.
-        int slot = -1;
-        for (int i = 0; i < SynthPoolSize; i++)
-        {
-            int c = (_synthSlot + i) % SynthPoolSize;
-            if (!_synthLoaded[c] || !Raylib.IsSoundPlaying(_synthPool[c])) { slot = c; break; }
-        }
-        if (slot < 0) return;   // everything still sounding — drop this one
-
-        // Raylib copies the samples into the Sound's own buffer, so the staging
-        // Wave can go straight back after the handoff.
-        Wave wave = Raylib.LoadWaveFromMemory(".wav", SfxSynth.RenderWav(p));
-        Sound sound = Raylib.LoadSoundFromWave(wave);
-        Raylib.UnloadWave(wave);
-
-        if (_synthLoaded[slot]) Raylib.UnloadSound(_synthPool[slot]);
-        _synthPool[slot] = sound;
-        _synthLoaded[slot] = true;
-        _synthSlot = (slot + 1) % SynthPoolSize;
-
-        if (volume < 1f) Raylib.SetSoundVolume(sound, volume);
-        Raylib.PlaySound(sound);
-    }
+    // --- The Crab-Core's protocol --------------------------------------------------
 
     private static double _lastClampTime = double.NegativeInfinity;
     private static int _clampStep;
 
-    /// <summary>A gap longer than this means a new charge cycle has begun, so the
-    /// spin-up starts over from its lowest step instead of climbing forever.</summary>
+    /// <summary>A gap longer than this means a new charge cycle has begun, so the spin-up
+    /// starts over from its lowest step instead of climbing forever.</summary>
     private const double ClampBurstGap = 1.2;
 
     /// <summary>
-    /// The Crab-Core winding up to attack — its claw-plates snapping shut as the
-    /// machine draws power. Synthesised on the spot, so no two clamps in the game
-    /// ever sound alike.
-    ///
-    /// Consecutive snaps inside one burst climb in pitch (see
-    /// <see cref="SfxSynth.CreepyPowerUp"/>), so the boss's three clicks build into
-    /// a single spin-up rather than repeating; leave it alone for
-    /// <see cref="ClampBurstGap"/> seconds and the next burst resets to the bottom.
+    /// The Crab-Core winding up — claw-plates snapping shut as the machine draws power.
+    /// Consecutive snaps inside one burst climb in pitch, so the boss's three clicks build
+    /// into a single spin-up rather than repeating.
     /// </summary>
-    public static void PlayClamp()
+    public static void PlayClamp(Vector2 at)
     {
         if (!_enabled) return;
 
-        // Where in the spin-up this snap falls — restart the climb after a lull.
         double now = Raylib.GetTime();
         _clampStep = now - _lastClampTime > ClampBurstGap ? 0 : _clampStep + 1;
         _lastClampTime = now;
 
-        PlaySynth(SfxSynth.CreepyPowerUp(_sfxRng, _clampStep));
+        Synth(Cue.Clamp, SfxSynth.CreepyPowerUp(_sfxRng, _clampStep), at);
     }
 
-    /// <summary>Past this many world units a hunting Crab-Core is inaudible.</summary>
+    /// <summary>Past this many world units a hunting Crab-Core is inaudible. The cue table
+    /// is the authority now; this is kept because the boss's own code reads it.</summary>
     public const float HuntRange = 65f;
 
     private static double _nextHuntTime;
 
+    /// <summary>Bounds on the irregular gap between hunting calls, in seconds.</summary>
+    private const double HuntMinGap = 0.75;
+    private const double HuntMaxGap = 1.9;
+
     /// <summary>
-    /// The Crab-Core's hunting call, voiced while it is running you down: a low,
-    /// wavering machine-groan that swells up out of the floor and sags away again,
-    /// each one a different shape (see <see cref="SfxSynth.HuntingCall"/>).
+    /// The Crab-Core's hunting call, voiced while it is running you down: a low, wavering
+    /// machine-groan that swells up out of the floor and sags away again.
     ///
-    /// Safe to call every single tick of the pursuit — this method owns its own
-    /// cadence and rate-limits itself to one call every <see cref="HuntMinGap"/>..
-    /// <see cref="HuntMaxGap"/> seconds, re-rolled each time so the calls never fall
-    /// into an audible rhythm. Keeping the jitter here rather than in the boss also
-    /// keeps the simulation itself deterministic.
-    ///
-    /// <paramref name="distance"/> is the world gap to the player: the groan fades
-    /// out with range so a crab hunting you from across the arena is a tremor
-    /// somewhere behind you, and only becomes a throat-level growl as it closes.
+    /// Safe to call every tick of the pursuit — this method owns its own cadence and
+    /// rate-limits itself to one call every <see cref="HuntMinGap"/>..<see cref="HuntMaxGap"/>
+    /// seconds, re-rolled each time so the calls never fall into an audible rhythm. Keeping
+    /// the jitter here rather than in the boss is what keeps the simulation deterministic.
     /// </summary>
-    public static void PlayHuntCall(float distance)
+    public static void PlayHuntCall(Vector2 at)
     {
         if (!_enabled) return;
 
@@ -448,888 +464,470 @@ public static class Audio
         if (now < _nextHuntTime) return;
         _nextHuntTime = now + HuntMinGap + _sfxRng.NextDouble() * (HuntMaxGap - HuntMinGap);
 
-        if (distance >= HuntRange) return;      // too far off to hear at all
-        // Falls away with the square root of range rather than linearly, so the
-        // groan stays present through the middle distance and only truly thins out
-        // at the edge — it should feel like it is following you, not switching off.
-        float vol = MathF.Sqrt(1f - distance / HuntRange);
-        PlaySynth(SfxSynth.HuntingCall(_sfxRng), vol);
-    }
-
-    /// <summary>Bounds on the irregular gap between hunting calls, in seconds.</summary>
-    private const double HuntMinGap = 0.75;
-    private const double HuntMaxGap = 1.9;
-
-    // --- The seizure: the boss has hold of the player ------------------------
-
-    /// <summary>
-    /// The Crab-Core screaming point-blank into the held player. Two synthesised
-    /// voices fired on the same tick — a rising, dissonant shriek
-    /// (<see cref="SfxSynth.CrabScream"/>) and a slow heaving sub-roar under it
-    /// (<see cref="SfxSynth.CrabScreamUnder"/>). They are deliberately voiced as a
-    /// pair: the shriek alone is thin and reads as a noise being played at the
-    /// player, while the low layer gives it a body and makes it something with mass
-    /// doing the screaming.
-    ///
-    /// The synth pool holds distinct Sound objects, so the two layers overlap
-    /// cleanly rather than cutting each other off the way one re-triggered clip
-    /// would. No distance falloff: this happens with the crab's face in yours.
-    /// </summary>
-    public static void PlayCrabScream()
-    {
-        if (!_enabled) return;
-        PlaySynth(SfxSynth.CrabScream(_sfxRng));
-        PlaySynth(SfxSynth.CrabScreamUnder(_sfxRng));
+        Synth(Cue.HuntCall, SfxSynth.HuntingCall(_sfxRng), at);
     }
 
     /// <summary>
-    /// The free claw landing its blow on the held player. The bank's explosion clip
-    /// carries the blast, with a synthesised crunch over the top
-    /// (<see cref="SfxSynth.ClawSlam"/>) so the hit reads as a heavy mass connecting
-    /// rather than another detonation — the player has heard that clip all game, and
-    /// this moment should not sound like anything else in it.
+    /// The Crab-Core screaming point-blank into the held player. Two voices on the same
+    /// tick — a rising dissonant shriek and a slow heaving sub-roar under it. Voiced as a
+    /// pair on purpose: the shriek alone is thin and reads as a noise being played at the
+    /// player, while the low layer gives it a body and makes it something with mass doing
+    /// the screaming.
     /// </summary>
-    public static void PlayClawSlam()
+    public static void PlayCrabScream(Vector2 at)
     {
-        if (!_enabled) return;
-        Raylib.SetSoundVolume(_explosion, 1f);
-        Raylib.PlaySound(_explosion);
-        PlaySynth(SfxSynth.ClawSlam(_sfxRng));
+        Synth(Cue.CrabScream, SfxSynth.CrabScream(_sfxRng), at);
+        Synth(Cue.CrabScream, SfxSynth.CrabScreamUnder(_sfxRng), at);
     }
 
-    /// <summary>The air tearing past across the thrown player's arc. One shot, fired
-    /// as they leave the claw — the recipe's own envelope shapes it over the flight,
-    /// so nothing has to drive it per-frame.</summary>
-    public static void PlayThrowWhoosh()
+    /// <summary>The free claw landing its blow. The explosion clip carries the blast with a
+    /// synthesised crunch over the top, so the hit reads as a heavy mass connecting rather
+    /// than another detonation.</summary>
+    public static void PlayClawSlam(Vector2 at)
     {
-        if (_enabled) PlaySynth(SfxSynth.ThrowWhoosh(_sfxRng));
+        Post(Cue.ClawSlam, _explosion, at);
+        Synth(Cue.ClawSlam, SfxSynth.ClawSlam(_sfxRng), at);
     }
 
-    /// <summary>The craft coming down at the end of the throw: a low synthesised
-    /// thud under the bank's standard impact clip, so the landing registers as
-    /// damage taken and not just a sound effect.</summary>
-    public static void PlayCrashLanding()
+    /// <summary>The air tearing past across a thrown arc.</summary>
+    public static void PlayThrowWhoosh(Vector2 at)
+        => Synth(Cue.ThrowWhoosh, SfxSynth.ThrowWhoosh(_sfxRng), at);
+
+    /// <summary>A craft coming down hard: a low thud under the standard impact clip, so the
+    /// landing registers as damage taken and not just a sound effect.</summary>
+    public static void PlayCrashLanding(Vector2 at)
     {
-        if (!_enabled) return;
-        Raylib.PlaySound(_hit);
-        PlaySynth(SfxSynth.LandThud(_sfxRng));
+        Post(Cue.CrashLanding, _hit, at);
+        Synth(Cue.CrashLanding, SfxSynth.LandThud(_sfxRng), at);
     }
 
-    // --- The Crab-Core's death: a scream over a cascade of pitched blasts -----
+    // --- A boss coming apart: a scream over a cascade of pitched blasts -------------
 
     /// <summary>How many detonations tear through the rig as it comes apart.</summary>
     private const int BossBoomCount = 7;
 
-    /// <summary>Seconds the cascade is spread across — matched to the length of the
-    /// boss's death glitch, so the last blast lands as the rig finishes tearing.</summary>
+    /// <summary>Seconds the cascade is spread across — matched to the length of the boss's
+    /// death glitch, so the last blast lands as the rig finishes tearing.</summary>
     private const double BossBoomSpread = 1.15;
 
-    // Aliases of the explosion clip. An alias shares the source's sample data but
-    // carries its own playback head, pitch and volume — which is the only way one
-    // clip can overlap itself. Playing _explosion seven times would just restart
-    // the same voice and yield a single blast.
-    private static readonly Sound[] _bossBooms = new Sound[BossBoomCount];
-
-    // The pending cascade: each blast's due time, pitch and level.
     private static readonly double[] _boomDue = new double[BossBoomCount];
     private static readonly float[] _boomPitch = new float[BossBoomCount];
     private static readonly float[] _boomVol = new float[BossBoomCount];
+    private static readonly Vector2[] _boomAt = new Vector2[BossBoomCount];
     private static readonly bool[] _boomPending = new bool[BossBoomCount];
 
     /// <summary>
-    /// The Crab-Core coming apart. Fires a long falling scream
-    /// (<see cref="SfxSynth.DeathScream"/>) immediately, then schedules
-    /// <see cref="BossBoomCount"/> detonations across the next
-    /// <see cref="BossBoomSpread"/> seconds — the same explosion clip replayed
-    /// through aliases, each pitched lower than the last so the cascade descends
-    /// with the scream: it opens on tight, high cracks up where the core sat and
-    /// ends on a slow, detuned boom as the carapace hits the grid.
+    /// A boss coming apart. Fires a long falling scream immediately, then schedules
+    /// <see cref="BossBoomCount"/> detonations across the next <see cref="BossBoomSpread"/>
+    /// seconds, each pitched lower than the last so the cascade descends with the scream:
+    /// it opens on tight, high cracks up where the core sat and ends on a slow, detuned
+    /// boom as the carapace hits the grid.
     ///
-    /// The blasts are only queued here; <see cref="Update"/> voices them as they
-    /// come due.
+    /// The blasts are only queued here; <see cref="Update"/> voices them as they come due —
+    /// at the position the rig died, which is why that is stored with them.
     /// </summary>
-    public static void PlayBossDeath()
+    public static void PlayBossDeath(Vector2 at)
     {
         if (!_enabled) return;
 
-        PlaySynth(SfxSynth.DeathScream(_sfxRng));
+        Synth(Cue.BossDeath, SfxSynth.DeathScream(_sfxRng), at);
 
         double now = Raylib.GetTime();
         for (int i = 0; i < BossBoomCount; i++)
         {
             float f = (float)i / (BossBoomCount - 1);        // 0..1 through the cascade
 
-            // Jittered spacing — an even one would tick like a metronome and read
-            // as mechanical rather than as a structure failing.
+            // Jittered spacing — an even one would tick like a metronome and read as
+            // mechanical rather than as a structure failing.
             double jitter = (_sfxRng.NextDouble() - 0.5) * 0.07;
             _boomDue[i] = now + f * BossBoomSpread + jitter;
 
-            // Pitch walks down from a tight crack to a dragging sub-boom.
             _boomPitch[i] = 1.85f - f * 1.5f + (float)(_sfxRng.NextDouble() - 0.5) * 0.12f;
-
-            // ...and the level climbs, so the deepest blast is also the heaviest and
-            // the whole cascade lands on it rather than petering out.
             _boomVol[i] = 0.62f + f * 0.38f;
-
+            _boomAt[i] = at;
             _boomPending[i] = true;
         }
     }
 
-    // --- Continuous beds: the crab's rotor and the maw's hover ----------------
+    /// <summary>The Maw-Core coming apart. The same failure as the crab's, because they are
+    /// the same machine and nothing about dying is specific to which half survived.</summary>
+    public static void PlayMawDeath(Vector2 at) => PlayBossDeath(at);
 
     /// <summary>
-    /// One looping ambience owned by a monster — a bed rather than an event, running
-    /// for as long as its owner is on the field, with its playback rate driven by how
-    /// worked-up that owner is.
-    ///
-    /// A looping Music stream rather than a Sound. A Sound is a one-shot: to hold a
-    /// continuous bed you would have to re-trigger it as it ended, and the frame of
-    /// slack between "finished" and "restarted" is an audible hole once per lap. A
-    /// Music stream loops in the mixer itself, seamlessly.
-    ///
-    /// Both rate and level are eased toward their targets rather than set outright, so
-    /// <see cref="Set"/> is safe to call every tick with whatever the monster's
-    /// current state happens to be.
+    /// An air shot threading the Crab-Core's exposed gem. The impact clip pitched up —
+    /// this is glass and neon rather than the armour a tank hit lands on — under a
+    /// synthesised shriek that gets higher, faster and more unstable the closer the core is
+    /// to going. <paramref name="severity"/> runs 0 on the first hit to 1 as the last of
+    /// the core's integrity goes, so the boss audibly comes apart across the fight instead
+    /// of making the same noise four times.
     /// </summary>
-    private sealed class Bed
+    public static void PlayCoreHit(Vector2 at, float severity)
     {
-        private Music _music;
-        private bool _ready;        // stream exists
-        private bool _running;      // ...and is currently voiced
-        private IntPtr _wav;        // its encoded bytes, in unmanaged memory
-
-        private float _pitch = 1f, _pitchTarget = 1f;
-        private float _volume, _volumeTarget;
-
-        private readonly float _wokenPitch;
-        private readonly float _range;
-        private readonly float _maxVolume;
-
-        /// <param name="wokenPitch">Playback rate once its owner is fully agitated.
-        /// Driving the rate rather than the frequency is what makes it a faster
-        /// <em>spin</em> than a higher note — every part of the loop, throb included,
-        /// speeds up together.</param>
-        /// <param name="range">Past this many world units it can't be heard.</param>
-        /// <param name="maxVolume">Level with the player standing underneath it. Kept
-        /// well under the one-shot cues: a bed runs constantly, so it should be felt
-        /// rather than listened to.</param>
-        public Bed(float wokenPitch, float range, float maxVolume)
-        {
-            _wokenPitch = wokenPitch;
-            _range = range;
-            _maxVolume = maxVolume;
-        }
-
-        /// <summary>
-        /// Renders the recipe and hands it to raylib as a streaming Music.
-        ///
-        /// The bytes must be copied into unmanaged memory first, and must stay there
-        /// for as long as the stream lives. Unlike a Sound — which is decoded up front
-        /// into its own buffer — a Music stream decodes lazily: raylib keeps a bare
-        /// pointer to this buffer and reads more of it on every UpdateMusicStream.
-        /// Handing it a managed byte[] pins that array only for the duration of the
-        /// P/Invoke, so once Init returns the GC is free to move or collect it and the
-        /// stream is left reading whatever now occupies that address. The result is a
-        /// use-after-free that only bites once a collection happens to run — which is
-        /// why it looked like a Crab-Core bug: the fight is what allocates hard enough
-        /// (a fresh WAV per footstep, clamp and hunting call) to trigger the GC that
-        /// pulls the rug.
-        /// </summary>
-        public unsafe void Load(byte[] wav)
-        {
-            _wav = Marshal.AllocHGlobal(wav.Length);
-            Marshal.Copy(wav, 0, _wav, wav.Length);
-
-            fixed (byte* type = ".wav"u8)   // u8 literals are NUL-terminated
-                _music = Raylib.LoadMusicStreamFromMemory((sbyte*)type, (byte*)_wav, wav.Length);
-
-            _music.Looping = true;
-            _ready = true;
-        }
-
-        /// <summary>Sets this frame's targets. <paramref name="present"/> is false
-        /// whenever there is no live owner, which fades the bed out and stops it.</summary>
-        public void Set(bool present, float distance, float agitation)
-        {
-            if (!_ready) return;
-            _pitchTarget = 1f + (_wokenPitch - 1f) * Math.Clamp(agitation, 0f, 1f);
-            _volumeTarget = present && distance < _range
-                ? _maxVolume * (1f - distance / _range)
-                : 0f;
-        }
-
-        /// <summary>Eases toward the targets and refills the stream. Once per frame.</summary>
-        public void Service(float dt)
-        {
-            if (!_ready) return;
-
-            _pitch = Approach(_pitch, _pitchTarget, SpoolRate * dt);
-            _volume = Approach(_volume, _volumeTarget, FadeRate * dt);
-
-            // Start on the first frame it is wanted and stop once it has faded out, so
-            // an empty arena costs nothing and no bed is left running after its owner
-            // is gone.
-            if (_volume > 0.001f && !_running)
-            {
-                Raylib.PlayMusicStream(_music);
-                _running = true;
-            }
-            else if (_volume <= 0.001f && _running)
-            {
-                Raylib.StopMusicStream(_music);
-                _running = false;
-            }
-
-            if (!_running) return;
-            Raylib.SetMusicPitch(_music, _pitch);
-            Raylib.SetMusicVolume(_music, _volume);
-            Raylib.UpdateMusicStream(_music);     // refills the stream's buffers
-        }
-
-        /// <summary>Stops and frees the stream, then the buffer it was reading from —
-        /// in that order, since the stream holds a bare pointer into it.</summary>
-        public void Unload()
-        {
-            if (_ready)
-            {
-                if (_running) { Raylib.StopMusicStream(_music); _running = false; }
-                Raylib.UnloadMusicStream(_music);
-                _ready = false;
-            }
-            if (_wav != IntPtr.Zero) { Marshal.FreeHGlobal(_wav); _wav = IntPtr.Zero; }
-        }
-
-        /// <summary>How fast a bed spools between rates and levels, per second. Slow
-        /// enough to hear it wind up — an instant jump sounds like a cut, not like a
-        /// machine coming to life.</summary>
-        private const float SpoolRate = 0.9f;
-        private const float FadeRate = 1.6f;
-    }
-
-    /// <summary>The Crab-Core's internal rotor.</summary>
-    private static readonly Bed _hum = new(wokenPitch: 1.95f, range: HumRange, maxVolume: 0.42f);
-
-    /// <summary>The Maw-Core holding itself up. Carries further than the crab's rotor
-    /// and sits a touch quieter: it is in the air, so there is nothing between it and
-    /// the player, but it is also the sound of something hovering rather than of
-    /// machinery grinding through a floor.</summary>
-    private static readonly Bed _mawHover = new(wokenPitch: 1.7f, range: 70f, maxVolume: 0.38f);
-
-    /// <summary>Past this many world units the rotor can't be heard.</summary>
-    public const float HumRange = 55f;
-
-    // --- The core taking a hit -----------------------------------------------
-
-    // Round-robin voices for the core ping, so rapid fire overlaps instead of
-    // cutting itself off mid-ring.
-    private const int CoreHitVoices = 3;
-    /// <summary>
-    /// The SPIDER's lance charge. Ranged at 1 unit and always fed a distance of 0, since
-    /// it is the player's own weapon and there is nothing to fall off with — the bed's
-    /// distance channel is simply not the axis this one varies on. Its rate is driven
-    /// hard (a wide spool) because the whole point of the cue is that the pitch tells
-    /// you how full the meter is without looking at it.
-    /// </summary>
-    private static readonly Bed _lanceCharge = new(wokenPitch: 2.4f, range: 1f, maxVolume: 0.5f);
-
-    private static readonly Sound[] _coreHits = new Sound[CoreHitVoices];
-    private static int _coreHitSlot;
-
-    /// <summary>
-    /// An air shot threading the Crab-Core's exposed gem. Layers the bank's impact
-    /// clip — pitched up, because this is glass and neon rather than the armour a
-    /// tank hit lands on — under a synthesised high shriek that gets higher, faster
-    /// and more unstable the closer the core is to going
-    /// (<see cref="SfxSynth.CoreSting"/>).
-    ///
-    /// <paramref name="severity"/> runs 0 on the first hit to 1 as the last of the
-    /// core's integrity goes, so the boss audibly comes apart across the fight
-    /// instead of making the same noise four times.
-    /// </summary>
-    public static void PlayCoreHit(float severity)
-    {
-        if (!_enabled) return;
         severity = Math.Clamp(severity, 0f, 1f);
-
-        Sound voice = _coreHits[_coreHitSlot];
-        _coreHitSlot = (_coreHitSlot + 1) % CoreHitVoices;
-        Raylib.SetSoundPitch(voice, 1.35f + severity * 0.45f);
-        Raylib.SetSoundVolume(voice, 1f);
-        Raylib.PlaySound(voice);
-
-        PlaySynth(SfxSynth.CoreSting(_sfxRng, severity));
+        Post(Cue.CoreHit, _hit, at, 1.35f + severity * 0.45f);
+        Synth(Cue.CoreHit, SfxSynth.CoreSting(_sfxRng, severity), at);
     }
 
-    /// <summary>
-    /// Voices the Crab-Core's internal rotor for this frame. <paramref name="present"/>
-    /// is false whenever there is no live boss, which fades the hum out and stops it;
-    /// <paramref name="distance"/> is the world gap to the player, and
-    /// <paramref name="agitation"/> is 0 while it idles and 1 once it has noticed the
-    /// player — the rotor spools up as that rises, so the machine audibly winds up the
-    /// moment it wakes. Safe to call every tick with whatever state the boss is in.
-    /// </summary>
-    public static void SetBossHum(bool present, float distance, float agitation)
-    {
-        if (_enabled) _hum.Set(present, distance, agitation);
-    }
-
-    /// <summary>
-    /// The Maw-Core holding station overhead — its equivalent bed, driven the same way
-    /// and running the whole time one is on the field. Deliberately a different sound
-    /// from the crab's rotor rather than a re-pitch of it: two monsters that hummed
-    /// alike would be impossible to tell apart when both are out in the fog, and this
-    /// one has to be identifiable as coming from <em>above</em> you.
-    /// </summary>
-    public static void SetMawHover(bool present, float distance, float agitation)
-    {
-        if (_enabled) _mawHover.Set(present, distance, agitation);
-    }
-
-    /// <summary>
-    /// The SPIDER's lance winding up. <paramref name="charging"/> is whether the trigger
-    /// is currently held and <paramref name="fraction"/> is the meter, 0..1 — the whine
-    /// climbs with it and holds once the meter tops out. Fed every tick with whatever
-    /// state the emitter is in; releasing simply stops feeding it, and the bed's own
-    /// fade carries the tail out over a fraction of a second.
-    /// </summary>
-    public static void SetLanceCharge(bool charging, float fraction)
-    {
-        if (_enabled) _lanceCharge.Set(charging, 0f, fraction);
-    }
-
-    /// <summary>
-    /// Drains any scheduled sounds that have come due and services the rotor hum.
-    /// Call once per frame from the main loop. The death cascade has to be spread
-    /// over time and the hum stream needs refilling every frame; everything else in
-    /// the bank fires the instant it is asked to and needs no clock.
-    /// </summary>
-    public static void Update()
-    {
-        if (!_enabled) return;
-
-        double now = Raylib.GetTime();
-        for (int i = 0; i < BossBoomCount; i++)
-        {
-            if (!_boomPending[i] || now < _boomDue[i]) continue;
-            _boomPending[i] = false;
-            Raylib.SetSoundPitch(_bossBooms[i], _boomPitch[i]);
-            Raylib.SetSoundVolume(_bossBooms[i], _boomVol[i]);
-            Raylib.PlaySound(_bossBooms[i]);
-        }
-
-        float dt = Raylib.GetFrameTime();
-        _hum.Service(dt);
-        _mawHover.Service(dt);
-        _lanceCharge.Service(dt);
-        _reelJet.Service(dt);
-        _wind.Service(dt);
-        _cableStrain.Service(dt);
-
-        // The lance bed is fed-or-it-dies, unlike the two monster beds. Those are
-        // driven from the world's own step, which runs whenever their owner exists;
-        // this one is driven from the player's trigger handler, which does not run at
-        // all while the game is paused, while a cinematic has the craft, or after a
-        // bail to the menu. Clearing the target here — after servicing, so a frame that
-        // did set it still counts — means any frame that stops asking for the whine
-        // lets it fade out on its own, rather than leaving a charge humming behind the
-        // pause panel forever.
-        _lanceCharge.Set(false, 0f, 0f);
-        // The soldier's two beds are driven from the same player-side code and want the
-        // same treatment: a paused game, a bail to the menu or a cinematic taking the
-        // rig away all simply stop asking, and both fade rather than hanging.
-        _reelJet.Set(false, 0f, 0f);
-        _wind.Set(false, 0f, 0f);
-        _cableStrain.Set(false, 0f, 0f);
-    }
-
-    /// <summary>Moves <paramref name="v"/> toward <paramref name="target"/> by at
-    /// most <paramref name="step"/>, without overshooting.</summary>
-    private static float Approach(float v, float target, float step)
-    {
-        if (v < target) return MathF.Min(target, v + step);
-        return MathF.Max(target, v - step);
-    }
-
-    // One stomp voice per leg. Aliases again: the rig walks as a tripod, so three
-    // feet land on the same tick, and a bare Sound would only be able to voice one
-    // of them — the previous version had to pick the nearest foot and drop the rest.
-    private static readonly Sound[] _stompVoices = new Sound[CrabRig.Legs.Length];
-
-    /// <summary>
-    /// One leg of the Crab-Core planting on the grid. Every foot is voiced
-    /// separately, so a landing tripod is three overlapping impacts rather than one
-    /// thud — that density is most of what makes the gait sound like a six-legged
-    /// machine. <paramref name="leg"/> indexes <see cref="CrabRig.Legs"/> and fixes
-    /// the limb's pitch, giving each joint a consistent voice; the servo whine
-    /// layered on top is synthesised per step so no two are quite the same.
-    ///
-    /// <paramref name="distance"/> is the gap from that foot to the player, so the
-    /// gait swells as the crab closes and stays a faint tremor while it is still
-    /// stalking the far side of the arena.
-    /// </summary>
-    public static void PlayFootstep(int leg, float distance)
-    {
-        if (!_enabled) return;
-        float vol = 1f - distance / StompRange;
-        if (vol <= 0f) return;                  // too far off to hear at all
-
-        // Each limb keeps its own pitch — heavier at the back, tighter at the front,
-        // with a touch of jitter so repeated steps don't sound sampled.
-        int i = Math.Clamp(leg, 0, _stompVoices.Length - 1);
-        float pitch = 0.82f + i * 0.06f + (float)(_sfxRng.NextDouble() - 0.5) * 0.05f;
-        Raylib.SetSoundPitch(_stompVoices[i], pitch);
-        // Scaled down because these stack: the rig walks as a tripod, so three of
-        // these land on the very same tick. At full level they would sum past unity
-        // and clip the mixer on every single step.
-        Raylib.SetSoundVolume(_stompVoices[i], vol * TripodMix);
-        Raylib.PlaySound(_stompVoices[i]);
-
-        // The actuator itself, over the top of the impact. Only on a fraction of
-        // steps: on every one, six legs' worth of servo whine turns into a solid
-        // mechanical drone and stops reading as individual joints.
-        if (_sfxRng.NextDouble() < ServoStepChance)
-            PlaySynth(SfxSynth.ServoStep(_sfxRng, i), vol * 0.75f);
-    }
-
-    /// <summary>How often a planting foot also gets its servo layer voiced.</summary>
+    /// <summary>How often a planting foot also gets its servo layer voiced. On every one,
+    /// six legs' worth of whine turns into a solid drone and stops reading as joints.</summary>
     private const double ServoStepChance = 0.45;
 
-    /// <summary>Per-foot level, set so a whole tripod landing at once stays inside
-    /// the mixer's headroom instead of clipping. Three feet × this is still under
-    /// two, which the pitch spread and short attack keep from sounding squashed.</summary>
+    /// <summary>Per-foot level. The rig walks as a tripod, so three of these land on the
+    /// very same tick; at full level they would sum past unity on every step.</summary>
     private const float TripodMix = 0.55f;
 
     /// <summary>Beyond this many world units a Crab-Core footfall is inaudible.</summary>
     public const float StompRange = 70f;
 
     /// <summary>
-    /// The Crab-Core's threat-display lurch — a rising alarm blare fired each time
-    /// it hard-slides to a new side, telegraphing the hunt before it commits.
+    /// One leg of the Crab-Core planting on the grid. Every foot is voiced separately, so a
+    /// landing tripod is three overlapping impacts rather than one thud — that density is
+    /// most of what makes the gait sound like a six-legged machine. <paramref name="leg"/>
+    /// fixes the limb's pitch, giving each joint a consistent voice.
     /// </summary>
-    public static void PlayAlarm()
+    public static void PlayFootstep(Vector2 at, int leg)
     {
-        if (_enabled) Raylib.PlaySound(_alarm);
+        if (!_enabled) return;
+        int i = Math.Clamp(leg, 0, CrabRig.Legs.Length - 1);
+        float pitch = 0.82f + i * 0.06f + (float)(_sfxRng.NextDouble() - 0.5) * 0.05f;
+        Post(Cue.Footstep, _stomp, at, pitch, TripodMix);
+
+        if (_sfxRng.NextDouble() < ServoStepChance)
+            Synth(Cue.Footstep, SfxSynth.ServoStep(_sfxRng, i), at, 0.75f);
     }
 
-    // --- The Maw-Core: the hanging mouth --------------------------------------
-    // Every cue here is voiced through the synth pool rather than the clip bank, so
-    // none of them ever plays the same twice — which matters more for this monster
-    // than for anything else in the game, because several of them fire on a loop for
-    // as long as it is on the field. A sampled drip repeating every half-second is a
-    // fault; a drip that is a slightly different drip each time is weather.
+    /// <summary>The Crab-Core's threat-display lurch — a rising blare fired each time it
+    /// hard-slides to a new side, telegraphing the hunt before it commits.</summary>
+    public static void PlayAlarm(Vector2 at) => Post(Cue.Alarm, _alarm, at);
+
+    // --- The Maw-Core: the hanging mouth -------------------------------------------
+    // Every cue here is synthesised rather than sampled, so none plays the same twice —
+    // which matters more for this monster than anything else in the game, because several
+    // fire on a loop for as long as it is on the field. A sampled drip repeating every half
+    // second is a fault; a drip that is a slightly different drip each time is weather.
 
     /// <summary>Past this many world units the mouth's cues stop being audible.</summary>
     public const float MawRange = 62f;
 
-    /// <summary>Linear distance falloff to a quiet floor, shared by the ranged cues
-    /// below so they all thin out at the same rate. Returns 0 past the range, which
-    /// the callers take as "don't bother voicing it".</summary>
-    private static float MawFalloff(float distance)
-        => distance >= MawRange ? 0f : Math.Clamp(1f - distance / MawRange, 0f, 1f);
+    /// <summary>One of the little lasers being spat at a player.</summary>
+    public static void PlayMawSpit(Vector2 at) => Synth(Cue.MawSpit, SfxSynth.MawSpit(_sfxRng), at);
 
-    /// <summary>One of the little lasers being spat at the player.</summary>
-    public static void PlayMawSpit(float distance)
+    /// <summary>The rings of teeth grinding. Voiced on a cadence while it hunts, and far
+    /// more often — with <paramref name="grinding"/> set, which lengthens and darkens it —
+    /// while it is actually chewing someone.</summary>
+    public static void PlayMawTeeth(Vector2 at, bool grinding = false)
+        => Synth(Cue.MawTeeth, SfxSynth.ToothGrind(_sfxRng, grinding), at, grinding ? 1f : 0.8f);
+
+    /// <summary>The crystal turning in its well. <paramref name="agitation"/> winds the
+    /// whole thing faster and higher as it fixes on a player.</summary>
+    public static void PlayMawCrystal(Vector2 at, float agitation)
+        => Synth(Cue.MawCrystal, SfxSynth.CrystalWhirr(_sfxRng, agitation), at, 0.8f);
+
+    /// <summary>One bead of the black stuff letting go.</summary>
+    public static void PlayMawDrip(Vector2 at) => Synth(Cue.MawTeeth, SfxSynth.MawDrip(_sfxRng), at, 0.5f);
+
+    /// <summary>The mouth dropping.</summary>
+    public static void PlayMawDive(Vector2 at) => Synth(Cue.MawDive, SfxSynth.MawDive(_sfxRng), at);
+
+    /// <summary>The throat closing and hauling a craft up into it. Layered over the impact
+    /// clip so the swallow registers as something that happened <em>to</em> the craft.</summary>
+    public static void PlayMawSwallow(Vector2 at)
     {
-        if (!_enabled) return;
-        float vol = MawFalloff(distance);
-        if (vol > 0f) PlaySynth(SfxSynth.MawSpit(_sfxRng), vol);
+        Post(Cue.MawSwallow, _hit, at);
+        Synth(Cue.MawSwallow, SfxSynth.MawSwallow(_sfxRng), at);
     }
+
+    /// <summary>One bite while it digests, fired per damage tick so the player can count
+    /// their shield going.</summary>
+    public static void PlayMawDigest(Vector2 at)
+        => Synth(Cue.MawTeeth, SfxSynth.MawDigestBite(_sfxRng), at);
+
+    /// <summary>The thing being shot from the inside. <paramref name="severity"/> runs
+    /// toward 1 as the escape count fills, so the third shot is audibly the one that broke
+    /// its hold.</summary>
+    public static void PlayMawHurt(Vector2 at, float severity)
+    {
+        Post(Cue.MawHurt, _hit, at);
+        Synth(Cue.MawHurt, SfxSynth.MawWail(_sfxRng, severity), at);
+    }
+
+    /// <summary>The jaw springing open and throwing a craft clear.</summary>
+    public static void PlayMawRelease(Vector2 at)
+        => Synth(Cue.MawRelease, SfxSynth.MawRelease(_sfxRng), at);
+
+    // --- The SOLDIER's rig ---------------------------------------------------------
+    // Audio carries the entire sense of speed on this chassis. There is no engine note to
+    // ride and no chassis to hear: what the player has is a gas bottle, two steel cables
+    // and the air. So this bank is deliberately mechanical and dry — pressure, metal and
+    // wind — with nothing sung or synthetic-sounding anywhere in it.
 
     /// <summary>
-    /// The rings of teeth grinding. Voiced on a cadence while it hunts, and far more
-    /// often — with <paramref name="grinding"/> set, which lengthens and darkens it —
-    /// while it is actually chewing someone. Distance is ignored in the grinding case
-    /// on purpose: if you can hear that version, it is happening to you.
+    /// The high jump: the signature whoosh, and the loudest thing this class does.
+    /// <paramref name="starvation"/> is how empty the reserve is, 0..1 — as it rises the
+    /// burst thins toward a hiss, which is how a player learns they are nearly out of gas
+    /// without ever reading the gauge.
     /// </summary>
-    public static void PlayMawTeeth(float distance, bool grinding = false)
+    public static void PlayGasJump(Vector2 at, float starvation)
     {
-        if (!_enabled) return;
-        float vol = grinding ? 1f : MawFalloff(distance);
-        if (vol > 0f) PlaySynth(SfxSynth.ToothGrind(_sfxRng, grinding), vol);
-    }
-
-    /// <summary>The crystal turning in its well — the rotating-crystal layer over the
-    /// hover bed, voiced on a slow cadence. <paramref name="agitation"/> winds the
-    /// whole thing faster and higher as it fixes on the player.</summary>
-    public static void PlayMawCrystal(float distance, float agitation)
-    {
-        if (!_enabled) return;
-        float vol = MawFalloff(distance);
-        if (vol > 0f) PlaySynth(SfxSynth.CrystalWhirr(_sfxRng, agitation), vol * 0.8f);
-    }
-
-    /// <summary>One bead of the black stuff letting go. Barely audible by design —
-    /// see <see cref="SfxSynth.MawDrip"/> for why it has to stay that way.</summary>
-    public static void PlayMawDrip()
-    {
-        if (_enabled) PlaySynth(SfxSynth.MawDrip(_sfxRng), 0.5f);
-    }
-
-    /// <summary>The mouth dropping on the player. Full volume, no falloff: it is
-    /// directly overhead, which is the only situation this ever fires in.</summary>
-    public static void PlayMawDive()
-    {
-        if (_enabled) PlaySynth(SfxSynth.MawDive(_sfxRng));
-    }
-
-    /// <summary>
-    /// The throat closing and hauling the player up into it. Layered over the bank's
-    /// impact clip so the swallow registers as something that happened <em>to</em> the
-    /// craft, not just as a noise the world made — the same pairing the crab's claw
-    /// slam uses, and for the same reason.
-    /// </summary>
-    public static void PlayMawSwallow()
-    {
-        if (!_enabled) return;
-        Raylib.PlaySound(_hit);
-        PlaySynth(SfxSynth.MawSwallow(_sfxRng));
-    }
-
-    /// <summary>One bite while it digests the player — fired per damage tick, so the
-    /// player can count their shield going.</summary>
-    public static void PlayMawDigest()
-    {
-        if (_enabled) PlaySynth(SfxSynth.MawDigestBite(_sfxRng));
-    }
-
-    /// <summary>
-    /// The thing being shot from the inside. <paramref name="severity"/> runs toward 1
-    /// as the escape count fills, so the third shot is audibly the one that broke its
-    /// hold. This is the player's only confirmation that firing into a throat is doing
-    /// anything at all, so it is layered over the bank's impact clip as well.
-    /// </summary>
-    public static void PlayMawHurt(float severity)
-    {
-        if (!_enabled) return;
-        Raylib.PlaySound(_hit);
-        PlaySynth(SfxSynth.MawWail(_sfxRng, severity));
-    }
-
-    /// <summary>The jaw springing open and throwing the player clear.</summary>
-    public static void PlayMawRelease()
-    {
-        if (_enabled) PlaySynth(SfxSynth.MawRelease(_sfxRng));
-    }
-
-    /// <summary>
-    /// The Maw-Core coming apart. Reuses the Crab-Core's death cascade wholesale — a
-    /// falling scream over scheduled, descending blasts — because they are the same
-    /// machine and should fail identically. Nothing about dying is specific to which
-    /// half of it survived.
-    /// </summary>
-    public static void PlayMawDeath() => PlayBossDeath();
-
-    // --- The SOLDIER's rig ----------------------------------------------------
-    // Audio carries the entire sense of speed on this chassis. There is no engine note
-    // to ride and no chassis to hear: what the player has is a gas bottle, two steel
-    // cables and the air. So the bank below is deliberately mechanical and dry —
-    // pressure, metal and wind — with nothing sung or synthetic-sounding anywhere in it.
-
-    /// <summary>
-    /// The high jump: the signature whoosh, and the loudest thing this class does. A
-    /// hard pressurised release with a fabric-and-air rush layered over it, tailing into
-    /// wind as the player rises. Plays every single jump, at full level, because the
-    /// moment of leaving the ground is the moment the class is about.
-    ///
-    /// <paramref name="starvation"/> is how empty the reserve is, 0..1. As it rises the
-    /// burst thins toward a hiss — quieter, higher, shorter — which is how a player
-    /// learns they are nearly out of gas without ever reading the gauge.
-    /// </summary>
-    public static void PlayGasJump(float starvation)
-    {
-        if (!_enabled) return;
         starvation = Math.Clamp(starvation, 0f, 1f);
+        Synth(Cue.GasJump, SfxSynth.GasBurst(_sfxRng, starvation), at, 1f - 0.45f * starvation);
 
-        PlaySynth(SfxSynth.GasBurst(_sfxRng, starvation), 1f - 0.45f * starvation);
-
-        // The air rush over the top of the release, cut short and opened up so it reads
-        // as the body accelerating rather than as the bottle emptying. Dropped entirely
-        // on a nearly-dry tank: a thin hiss with no rush behind it is exactly the sound
-        // of a jump that is about to not clear anything.
+        // The air rush over the top, cut short and opened up so it reads as the body
+        // accelerating rather than as the bottle emptying. Dropped entirely on a nearly-dry
+        // tank: a thin hiss with no rush behind it is exactly the sound of a jump that is
+        // about to not clear anything.
         if (starvation > 0.85f) return;
         var rush = SfxSynth.ThrowWhoosh(_sfxRng);
         rush.Length *= 0.55f;
         rush.Attack = 0.06f;
         rush.Decay = 0.7f;
-        PlaySynth(rush, (1f - starvation) * 0.75f);
+        Synth(Cue.GasJump, rush, at, (1f - starvation) * 0.75f);
     }
 
-    /// <summary>A hook leaving its launcher: a compressed-air pop with the cable's
-    /// whipping hiss rising behind it as the line pays out.</summary>
-    public static void PlayCableFire()
+    /// <summary>A hook leaving its launcher: a compressed-air pop with the cable's whipping
+    /// hiss rising behind it as the line pays out.</summary>
+    public static void PlayCableFire(Vector2 at)
+        => Synth(Cue.CableFire, SfxSynth.CableLaunch(_sfxRng), at);
+
+    /// <summary>Steel biting in. Hard, short and metallic, and the single most important
+    /// cue on the chassis — it is the difference between a swing and a fall, and the player
+    /// has to know which they are in without looking at the HUD.</summary>
+    public static void PlayAnchorBite(Vector2 at)
+        => Synth(Cue.AnchorBite, SfxSynth.AnchorClank(_sfxRng), at);
+
+    /// <summary>A cable coming home, and also what a shot at open sky sounds like — which
+    /// is the point: a miss should be audible as a miss.</summary>
+    public static void PlayCableZip(Vector2 at)
+        => Synth(Cue.CableZip, SfxSynth.CableZip(_sfxRng), at);
+
+    /// <summary>An anchor tearing out of weak material: a splintering crack, and the sound
+    /// of the ground getting closer.</summary>
+    public static void PlayAnchorTear(Vector2 at)
     {
-        if (_enabled) PlaySynth(SfxSynth.CableLaunch(_sfxRng));
+        Synth(Cue.AnchorTear, SfxSynth.AnchorTear(_sfxRng), at);
+        Synth(Cue.AnchorTear, SfxSynth.CableZip(_sfxRng), at, 0.6f);
     }
 
-    /// <summary>
-    /// Steel biting in. Hard, short and metallic, and the single most important cue on
-    /// the chassis — it is the difference between a swing and a fall, and the player has
-    /// to know which they are in without looking at the HUD.
-    ///
-    /// <paramref name="distance"/> is how far off the bite landed, which only thins it a
-    /// little: an anchor eighty metres away is still a thing that just happened to you.
-    /// </summary>
-    public static void PlayAnchorBite(float distance)
-    {
-        if (!_enabled) return;
-        float vol = Math.Clamp(1f - distance / (SoldierAudioRange * 2f), 0.45f, 1f);
-        PlaySynth(SfxSynth.AnchorClank(_sfxRng), vol);
-    }
-
-    /// <summary>A cable coming home: the fast metallic zip of the line retracting and
-    /// the click of the hook seating in its launcher. Also what a shot at open sky
-    /// sounds like, which is the point — a miss should be audible as a miss.</summary>
-    public static void PlayCableZip()
-    {
-        if (_enabled) PlaySynth(SfxSynth.CableZip(_sfxRng));
-    }
-
-    /// <summary>An anchor tearing out of weak material: a splintering crack, and the
-    /// sound of the ground getting closer. Deliberately unlike every other cue here —
-    /// nothing else in the rig's bank splinters.</summary>
-    public static void PlayAnchorTear()
-    {
-        if (!_enabled) return;
-        PlaySynth(SfxSynth.AnchorTear(_sfxRng));
-        PlaySynth(SfxSynth.CableZip(_sfxRng), 0.6f);
-    }
-
-    /// <summary>A rifle round: a sharp dry crack with none of the cannon's body. The
-    /// cadence is 600 a minute, so anything with weight to it stacks into a roar within
-    /// half a second.</summary>
-    public static void PlayRifleShot()
-    {
-        if (_enabled) PlaySynth(SfxSynth.RifleCrack(_sfxRng));
-    }
+    /// <summary>A rifle round: a sharp dry crack with none of the cannon's body. The cadence
+    /// is 600 a minute, so anything with weight to it stacks into a roar within half a
+    /// second — which is also why the cue table caps how many may sound at once.</summary>
+    public static void PlayRifleShot(Vector2 at)
+        => Synth(Cue.RifleShot, SfxSynth.RifleCrack(_sfxRng), at);
 
     /// <summary>A rocket leaving the tube: the motor lighting, then tearing away.</summary>
-    public static void PlayRocketLaunch()
+    public static void PlayRocketLaunch(Vector2 at)
+        => Synth(Cue.RocketLaunch, SfxSynth.RocketLaunch(_sfxRng), at);
+
+    /// <summary>A rocket going off. The blast clip carries the body — it is the heaviest
+    /// thing in the bank and this is the heaviest thing the class does — under a bass-first
+    /// synthesised concussion.</summary>
+    public static void PlayRocketBlast(Vector2 at)
     {
-        if (_enabled) PlaySynth(SfxSynth.RocketLaunch(_sfxRng));
+        Post(Cue.RocketBlast, _explosion, at);
+        Synth(Cue.RocketBlast, SfxSynth.LandThud(_sfxRng), at, 0.9f);
     }
 
-    /// <summary>
-    /// A rocket going off. The bank's own blast clip carries the body — it is the
-    /// heaviest thing in the bank and this is the heaviest thing the class does — under
-    /// a bass-first synthesised concussion, both falling away with range.
-    /// </summary>
-    public static void PlayRocketBlast(float distance)
-    {
-        if (!_enabled) return;
-        float vol = Math.Clamp(1f - distance / 160f, 0.15f, 1f);
-        Raylib.SetSoundVolume(_explosion, vol);
-        Raylib.PlaySound(_explosion);
-        PlaySynth(SfxSynth.LandThud(_sfxRng), vol * 0.9f);
-    }
-
-    /// <summary>Past this the rig's own cues thin out. Generous: these are things
-    /// happening to the player, not to something across the arena.</summary>
-    private const float SoldierAudioRange = 90f;
-
-    /// <summary>The gas jet under a reel. Ranged at 1 unit and fed a distance of 0 like
-    /// the lance charge — it is on the player's own hips, so distance is not an axis it
-    /// varies on. Its rate rides the reserve's pressure, which is what makes a starved
-    /// reel audibly sag rather than merely pull less hard.</summary>
-    private static readonly Bed _reelJet = new(wokenPitch: 1.9f, range: 1f, maxVolume: 0.45f);
-
-    /// <summary>The air. Light rustle building to a roaring buffet — the single cue
-    /// carrying most of the sense of speed, so it is the loudest bed in the game.</summary>
-    private static readonly Bed _wind = new(wokenPitch: 2.2f, range: 1f, maxVolume: 0.55f);
-
-    /// <summary>Steel under load: a low creak with a fine vibration hum in it. Quiet by
-    /// design — it should be felt through the other two rather than heard over them, the
-    /// way you notice a rope you are hanging from without listening to it.</summary>
-    private static readonly Bed _cableStrain = new(wokenPitch: 1.6f, range: 1f, maxVolume: 0.3f);
-
-    /// <summary>
-    /// The cables taking weight. <paramref name="loaded"/> is whether either is actually
-    /// taut and <paramref name="tension"/> (0..1) is how hard the harder-working of the
-    /// two is pulling — the creak tightens with it, so a player at the bottom of a fast
-    /// arc can hear how much the rig is being asked for.
-    /// </summary>
-    public static void SetCableStrain(bool loaded, float tension)
-    {
-        if (_enabled) _cableStrain.Set(loaded, 0f, tension);
-    }
-
-    /// <summary>
-    /// The reserve running dry: a small warning tick, rate-limited here rather than by
-    /// the caller so it can safely be asked for every tick the gauge is low. Deliberately
-    /// tiny — the sag in the reel and the thinning of the jump are what actually tell the
-    /// player, and this only confirms it.
-    /// </summary>
-    public static void PlayGasLow()
-    {
-        if (!_enabled) return;
-
-        double now = Raylib.GetTime();
-        if (now < _nextGasTick) return;
-        _nextGasTick = now + GasTickGap;
-
-        PlaySynth(SfxSynth.WarningBeep(_sfxRng, 0), 0.35f);
-    }
-
-    private static double _nextGasTick;
-    private const double GasTickGap = 1.1;
-
-    /// <summary>
-    /// The reel's gas jet for this frame. <paramref name="reeling"/> is whether the
-    /// player is actually pulling on a cable and <paramref name="pressure"/> is how much
-    /// is left in the bottle, 0..1 — the roar climbs with it, so a dry reel is heard as
-    /// a weak one before it is felt as one. Fed every tick; stopping feeding it fades it.
-    /// </summary>
-    public static void SetReel(bool reeling, float pressure)
-    {
-        if (_enabled) _reelJet.Set(reeling, 0f, pressure);
-    }
-
-    /// <summary>
-    /// The wind past the ears. <paramref name="fast"/> gates it on at all and
-    /// <paramref name="intensity"/> (0..1) drives it from a light rustle to a roaring
-    /// buffet. Same contract as the reel: fed every tick, fades on its own.
-    /// </summary>
-    public static void SetWind(bool fast, float intensity)
-    {
-        if (_enabled) _wind.Set(fast, 0f, intensity);
-    }
-
-    // --- The FISH -------------------------------------------------------------
+    // --- The FISH ------------------------------------------------------------------
     // Built entirely out of the bank that already exists, and deliberately so. The
-    // soldier's cues are dry and mechanical — pressure, steel, air — because that chassis
-    // is a person wearing equipment. This one is a body in water, so the same voices are
-    // reused with their envelopes opened up and their attacks softened: nothing here
-    // should click or clank, and everything should sound like it is displacing something.
+    // soldier's cues are dry and mechanical because that chassis is a person wearing
+    // equipment. This one is a body in water, so the same voices are reused with their
+    // envelopes opened up and their attacks softened: nothing here should click or clank,
+    // and everything should sound like it is displacing something.
 
     /// <summary>
-    /// One beat of the tail. The gas burst is the right transient for it — a shove of
-    /// mass through a fluid — with the attack rounded off and the tail extended, which is
-    /// the whole difference between a valve opening and a body pushing water.
-    ///
-    /// <paramref name="starvation"/> thins it as the reserve empties, exactly as it does
-    /// for the soldier's jump, so a player learns their breath is going without ever
-    /// reading the gauge. <paramref name="beached"/> swaps it for the flat, dry slap of
-    /// something out of its element — the one cue on this chassis that is <em>meant</em>
-    /// to sound wrong.
+    /// One beat of the tail. The gas burst is the right transient for it — a shove of mass
+    /// through a fluid — with the attack rounded off and the tail extended, which is the
+    /// whole difference between a valve opening and a body pushing water.
+    /// <paramref name="beached"/> swaps it for the flat, dry slap of something out of its
+    /// element: the one cue on this chassis that is <em>meant</em> to sound wrong.
     /// </summary>
-    public static void PlayTailBeat(float starvation, bool beached)
+    public static void PlayTailBeat(Vector2 at, float starvation, bool beached)
     {
-        if (!_enabled) return;
         starvation = Math.Clamp(starvation, 0f, 1f);
 
         if (beached)
         {
-            // Flopping: no rush behind it, just the slap and the grit. A beat that moves
-            // nothing should sound like a beat that moved nothing.
             var slap = SfxSynth.LandThud(_sfxRng);
             slap.Length *= 0.4f;
-            PlaySynth(slap, 0.55f);
+            Synth(Cue.TailFlop, slap, at, 0.55f);
             return;
         }
 
         var push = SfxSynth.GasBurst(_sfxRng, starvation);
         push.Attack = 0.12f;    // no valve click — water doesn't start instantly
         push.Decay = 0.75f;
-        PlaySynth(push, (1f - 0.4f * starvation) * 0.7f);
+        Synth(Cue.TailBeat, push, at, (1f - 0.4f * starvation) * 0.7f);
 
-        // The wash behind the stroke. Dropped on a nearly-dry reserve, where a beat is
-        // barely displacing anything and should sound like it.
         if (starvation > 0.8f) return;
         var wash = SfxSynth.ThrowWhoosh(_sfxRng);
         wash.Length *= 0.7f;
         wash.Attack = 0.15f;
         wash.Decay = 0.8f;
-        PlaySynth(wash, (1f - starvation) * 0.5f);
+        Synth(Cue.TailBeat, wash, at, (1f - starvation) * 0.5f);
     }
 
-    /// <summary>The body gathering before a strike: a short indrawn hiss, the one moment
-    /// on this chassis where everything else goes quiet.</summary>
-    public static void PlayFishCoil()
+    /// <summary>The body gathering before a strike: a short indrawn hiss, the one moment on
+    /// this chassis where everything else goes quiet.</summary>
+    public static void PlayFishCoil(Vector2 at)
     {
-        if (!_enabled) return;
         var draw = SfxSynth.ThrowWhoosh(_sfxRng);
         draw.Length *= 0.5f;
         draw.Attack = 0.4f;     // swelling in rather than hitting — an intake, not a blow
         draw.Decay = 0.25f;
-        PlaySynth(draw, 0.5f);
+        Synth(Cue.FishCoil, draw, at, 0.5f);
     }
 
     /// <summary>
-    /// The lunge. The loudest thing the class does and the only cue in this game that is
-    /// a piece of music rather than a noise — a crushed, detuned power chord over its own
-    /// octave, straight off a Mega Drive. See <see cref="SfxSynth.StrikeRiff"/> for why
-    /// that exception is worth making here and nowhere else.
-    ///
-    /// Layered guitar-over-bass, then a thin wash of water on top so the moment still
-    /// belongs to a body moving through a fluid and not to a jukebox. The wash goes last
-    /// and quietest: if the synth pool is saturated it is the one that should be dropped,
-    /// because the riff is the cue and the water is the garnish.
+    /// The lunge. The loudest thing the class does and the only cue in this game that is a
+    /// piece of music rather than a noise — a crushed, detuned power chord over its own
+    /// octave. The wash of water goes last and quietest: if the pool is saturated it is the
+    /// one that should be dropped, because the riff is the cue and the water is the garnish.
     /// </summary>
-    public static void PlayFishStrike()
+    public static void PlayFishStrike(Vector2 at)
     {
-        if (!_enabled) return;
-
-        PlaySynth(SfxSynth.StrikeRiff(_sfxRng, bass: true), 0.85f);
-        PlaySynth(SfxSynth.StrikeRiff(_sfxRng), 1f);
+        Synth(Cue.FishStrike, SfxSynth.StrikeRiff(_sfxRng, bass: true), at, 0.85f);
+        Synth(Cue.FishStrike, SfxSynth.StrikeRiff(_sfxRng), at);
 
         var wash = SfxSynth.ThrowWhoosh(_sfxRng);
         wash.Length *= 0.6f;
         wash.Attack = 0.02f;
-        PlaySynth(wash, 0.4f);
+        Synth(Cue.FishStrike, wash, at, 0.4f);
     }
 
     /// <summary>A strike connecting. Heavy and blunt — this is a body at fifty metres a
-    /// second arriving somewhere, and it should sound like mass rather than like a
-    /// weapon.</summary>
-    public static void PlayFishImpact()
+    /// second arriving somewhere, and it should sound like mass rather than a weapon.</summary>
+    public static void PlayFishImpact(Vector2 at)
     {
-        if (!_enabled) return;
-        PlaySynth(SfxSynth.LandThud(_sfxRng), 0.95f);
-        PlaySynth(SfxSynth.ClawSlam(_sfxRng), 0.5f);
+        Synth(Cue.FishImpact, SfxSynth.LandThud(_sfxRng), at, 0.95f);
+        Synth(Cue.FishImpact, SfxSynth.ClawSlam(_sfxRng), at, 0.5f);
     }
 
-    /// <summary>The spit: a small wet pop with none of the rifle's dry crack. Fired at
-    /// seven a second, so anything with weight to it would stack into a drone.</summary>
-    public static void PlayFishSpit()
+    /// <summary>The spit: a small wet pop with none of the rifle's dry crack.</summary>
+    public static void PlayFishSpit(Vector2 at)
     {
-        if (!_enabled) return;
         var pop = SfxSynth.MawSpit(_sfxRng);
         pop.Length *= 0.55f;
-        PlaySynth(pop, 0.55f);
+        Synth(Cue.FishSpit, pop, at, 0.55f);
     }
 
-    /// <summary>
-    /// Approaching the bloom: a small, dry warning tick. Rate-limited here rather than by
-    /// the caller so it is safe to ask for on every tick the body is in the warned band.
-    /// Deliberately quiet and deliberately not an alarm — this is the free notice, and
-    /// making it frightening would waste the alarm that comes after it.
-    /// </summary>
-    public static void PlayBloomWarning()
+    /// <summary>Meeting the seabed. <paramref name="force"/> scales the whole thing from a
+    /// settling scrape to the full-weight thud of a body driven into the grid — plus, past
+    /// halfway, the wail underneath it, which is the one place this chassis is allowed to
+    /// sound like it is in distress.</summary>
+    public static void PlayFishBeach(Vector2 at, float force)
     {
-        if (!_enabled) return;
-
-        double now = Raylib.GetTime();
-        if (now < _nextBloomTick) return;
-        _nextBloomTick = now + BloomTickGap;
-
-        PlaySynth(SfxSynth.WarningBeep(_sfxRng, 1), 0.4f);
+        force = Math.Clamp(force, 0f, 1f);
+        Synth(Cue.FishBeach, SfxSynth.LandThud(_sfxRng), at, 0.4f + 0.6f * force);
+        if (force > 0.5f) Synth(Cue.FishBeach, SfxSynth.MawWail(_sfxRng, force), at, force * 0.55f);
     }
 
+    // --- The FLOWER ----------------------------------------------------------------
+
     /// <summary>
-    /// Actually in it. The stock alarm clip — the same one the Crab-Core's threat display
-    /// lurches to, and the most alarming sound in the bank — over a rising warning tone.
-    /// Rate-limited on its own, slower clock, so it tolls rather than screams.
+    /// A petal leaving the ring: the one hymn in this bank. Three pure sines stacked into a
+    /// chord — root, fifth, octave — with no crush on any of them, over a small breath of the
+    /// throw itself so it is still a physical thing being thrown and not merely an organ note
+    /// appearing somewhere.
+    ///
+    /// The whoosh is deliberately quiet and deliberately underneath. Loud enough that the ear
+    /// places the chord on an object; quiet enough that what carries across the city is the
+    /// singing, which is the entire point of the cue.
     /// </summary>
-    public static void PlayBloomAlarm()
+    public static void PlayPetalThrow(Vector2 at)
+    {
+        Synth(Cue.FlowerPetalThrow, SfxSynth.PetalHymn(_sfxRng), at);
+        Synth(Cue.FlowerPetalThrow, SfxSynth.PetalFifth(_sfxRng), at, 0.8f);
+        Synth(Cue.FlowerPetalThrow, SfxSynth.PetalGleam(_sfxRng), at, 0.7f);
+
+        var air = SfxSynth.ThrowWhoosh(_sfxRng);
+        air.Length *= 0.45f;
+        air.Attack = 0.01f;
+        Synth(Cue.FlowerPetalThrow, air, at, 0.22f);
+    }
+
+    /// <summary>One re-seating in its gap. The hymn's last note, alone.</summary>
+    public static void PlayPetalCatch(Vector2 at)
+        => Synth(Cue.FlowerPetalCatch, SfxSynth.PetalSeat(_sfxRng), at, 0.75f);
+
+    /// <summary>A petal going off in something: the soft burst with the weapon's own note
+    /// ringing under it, so a kill sounds like the thing that made it.</summary>
+    public static void PlayFlowerBloom(Vector2 at)
+    {
+        Synth(Cue.FlowerBloom, SfxSynth.BloomBurst(_sfxRng), at);
+        Synth(Cue.FlowerBloom, SfxSynth.BloomRing(_sfxRng), at, 0.7f);
+    }
+
+    /// <summary>A ripe head setting seed — three things hitting the grid, so the burst is
+    /// followed by the same collect chime the salvage itself uses, one step up.</summary>
+    public static void PlayFlowerHarvest(Vector2 at)
+    {
+        Synth(Cue.FlowerHarvest, SfxSynth.SeedBurst(_sfxRng), at, 0.9f);
+        Synth(Cue.FlowerHarvest, SfxSynth.PetalSeat(_sfxRng), at, 0.4f);
+    }
+
+    /// <summary>Roots letting go of the plate.</summary>
+    public static void PlayFlowerWilt(Vector2 at)
+        => Synth(Cue.FlowerWilt, SfxSynth.RootTear(_sfxRng, leaving: true), at);
+
+    /// <summary>The plant gone, and the hole where it stood. The tear plus a low thud, which
+    /// is the only part of a replant anybody standing nearby actually gets to react to.</summary>
+    public static void PlayFlowerUproot(Vector2 at)
+    {
+        Synth(Cue.FlowerUproot, SfxSynth.RootTear(_sfxRng, leaving: true), at, 0.8f);
+        var thud = SfxSynth.LandThud(_sfxRng);
+        thud.Length *= 0.7f;
+        Synth(Cue.FlowerUproot, thud, at, 0.55f);
+    }
+
+    /// <summary>Six petals unfurling on new ground: the growth swell, and the chord's own
+    /// fifth over the top of it — the plant tuning up before it can sing again.</summary>
+    public static void PlayFlowerOpen(Vector2 at)
+    {
+        Synth(Cue.FlowerBloomOpen, SfxSynth.RootTear(_sfxRng, leaving: false), at, 0.8f);
+        Synth(Cue.FlowerBloomOpen, SfxSynth.PetalFifth(_sfxRng), at, 0.45f);
+    }
+
+    // --- Things that happen to you rather than somewhere ---------------------------
+
+    /// <summary>
+    /// Somebody put a mark on the world. Two clean tones a fifth apart, rising — the only
+    /// deliberately <em>pleasant</em> sound in a bank otherwise made of grinding and blast,
+    /// which is exactly what makes it read as a person talking rather than as the world
+    /// doing something to you. Placed at the mark and barely attenuated, because the whole
+    /// job of the cue is to say <em>where</em> to somebody facing the other way.
+    /// </summary>
+    public static void PlayMarker(Vector2 at)
+    {
+        var low = SfxSynth.WarningBeep(_sfxRng, 1);
+        low.Length *= 0.6f;
+        Synth(Cue.Marker, low, at, 0.55f);
+
+        var high = SfxSynth.WarningBeep(_sfxRng, 3);
+        high.Length *= 0.8f;
+        Synth(Cue.Marker, high, at, 0.7f);
+    }
+
+    /// <summary>Salvage being absorbed. Reuses the menu blip — the only bright, non-combat
+    /// transient in the bank — so a collect reads as a clean positive chirp against the
+    /// grim combat clips. Flat: it happens on your own hull.</summary>
+    public static void PlayPickup(Vector2 at) => Flat(Cue.Pickup, _blip);
+
+    /// <summary>The refusal a full magazine gives when you right-click more rounds into it.
+    /// The deliberate opposite of a pickup, so a rejected load never reads as a good one.</summary>
+    public static void PlayFull() => FlatSynth(Cue.Pickup, SfxSynth.FullBuzz(_sfxRng), 0.9f);
+
+    private static double _nextGasTick;
+    private const double GasTickGap = 1.1;
+
+    /// <summary>The reserve running dry: a small warning tick, rate-limited here rather
+    /// than by the caller so it can safely be asked for every tick the gauge is low.</summary>
+    public static void PlayGasLow()
     {
         if (!_enabled) return;
-
         double now = Raylib.GetTime();
-        if (now < _nextBloomAlarm) return;
-        _nextBloomAlarm = now + BloomAlarmGap;
-
-        PlaySynth(SfxSynth.WarningBeep(_sfxRng, 3), 0.8f);
-        Raylib.SetSoundVolume(_alarm, 0.5f);
-        Raylib.PlaySound(_alarm);
+        if (now < _nextGasTick) return;
+        _nextGasTick = now + GasTickGap;
+        FlatSynth(Cue.Warning, SfxSynth.WarningBeep(_sfxRng, 0), 0.35f);
     }
 
     private static double _nextBloomTick;
@@ -1337,72 +935,262 @@ public static class Audio
     private const double BloomTickGap = 0.85;
     private const double BloomAlarmGap = 1.6;
 
-    /// <summary>
-    /// Meeting the seabed. <paramref name="force"/> (0..1) is how hard, and it scales the
-    /// whole thing from a settling scrape to the full-weight thud of a body driven into
-    /// the grid — plus, past halfway, the wail underneath it, which is the one place this
-    /// chassis is allowed to sound like it is in distress.
-    /// </summary>
-    public static void PlayFishBeach(float force)
+    /// <summary>Approaching the bloom: a small, dry warning tick. Deliberately not an alarm
+    /// — this is the free notice, and making it frightening would waste the alarm that comes
+    /// after it.</summary>
+    public static void PlayBloomWarning()
     {
         if (!_enabled) return;
-        force = Math.Clamp(force, 0f, 1f);
-
-        PlaySynth(SfxSynth.LandThud(_sfxRng), 0.4f + 0.6f * force);
-        if (force > 0.5f) PlaySynth(SfxSynth.MawWail(_sfxRng, force), force * 0.55f);
+        double now = Raylib.GetTime();
+        if (now < _nextBloomTick) return;
+        _nextBloomTick = now + BloomTickGap;
+        FlatSynth(Cue.Warning, SfxSynth.WarningBeep(_sfxRng, 1), 0.4f);
     }
+
+    /// <summary>Actually in it. The stock alarm clip — the most alarming sound in the bank —
+    /// over a rising tone, on its own slower clock so it tolls rather than screams.</summary>
+    public static void PlayBloomAlarm()
+    {
+        if (!_enabled) return;
+        double now = Raylib.GetTime();
+        if (now < _nextBloomAlarm) return;
+        _nextBloomAlarm = now + BloomAlarmGap;
+        FlatSynth(Cue.Warning, SfxSynth.WarningBeep(_sfxRng, 3), 0.8f);
+        Flat(Cue.Alarm, _alarm, 1f, 0.5f);
+    }
+
+    // --- Continuous beds -----------------------------------------------------------
 
     /// <summary>
-    /// A pickup being absorbed — a battery cell or stray round. Reuses the menu
-    /// blip (the only bright, non-combat transient in the bank) so the collect
-    /// reads as a clean positive chirp against the grim combat clips, no new asset.
+    /// One looping voice owned by something in the world — a bed rather than an event,
+    /// running for as long as its owner is on the field, with its playback rate driven by
+    /// how worked-up that owner is.
+    ///
+    /// <para>This used to be a raylib <c>Music</c> stream, because a one-shot <c>Sound</c>
+    /// leaves a frame-sized hole once per lap. The engine's voices loop natively, so a bed
+    /// is now simply a voice that never ends — and, more to the point, a bed is now
+    /// <em>placed</em>: a boss's rotor is genuinely off to your left when the boss is, which
+    /// a stream with a single volume knob could never be.</para>
+    ///
+    /// <para>Rate and level are eased toward their targets rather than set outright, so
+    /// <see cref="Set"/> is safe to call every tick with whatever state its owner is in.</para>
     /// </summary>
-    public static void PlayPickup()
+    private sealed class Bed
     {
-        if (_enabled) Raylib.PlaySound(_blip);
+        private readonly Cue _cue;
+        private readonly float _wokenPitch;
+        private Clip? _clip;
+        private int _handle;
+
+        private float _pitch = 1f, _pitchTarget = 1f;
+        private float _level, _levelTarget;
+        private Vector2 _at;
+
+        /// <param name="wokenPitch">Playback rate once its owner is fully agitated. Driving
+        /// the rate rather than the frequency is what makes it a faster <em>spin</em> than a
+        /// higher note — every part of the loop, throb included, speeds up together.</param>
+        public Bed(Cue cue, float wokenPitch)
+        {
+            _cue = cue;
+            _wokenPitch = wokenPitch;
+        }
+
+        public void Load(float[] samples, string name)
+            => _clip = AudioEngine.FromSamples(samples, Mixer.SampleRate, name);
+
+        /// <summary>Sets this frame's targets. <paramref name="present"/> false fades the
+        /// bed out and eventually frees its voice.</summary>
+        public void Set(bool present, Vector2 at, float agitation)
+        {
+            _pitchTarget = 1f + (_wokenPitch - 1f) * Math.Clamp(agitation, 0f, 1f);
+            _levelTarget = present ? 1f : 0f;
+            if (present) _at = at;
+        }
+
+        /// <summary>Eases toward the targets and keeps the voice fed. Once per frame.</summary>
+        public void Service(float dt)
+        {
+            if (_clip == null) return;
+
+            _pitch = Approach(_pitch, _pitchTarget, SpoolRate * dt);
+            _level = Approach(_level, _levelTarget, FadeRate * dt);
+
+            if (_level > 0.001f && _handle == 0)
+                _handle = _engine.StartBed((int)_cue, _clip, _at, 0f, _pitch);
+
+            if (_handle != 0 && !_engine.BedAlive(_handle)) _handle = 0;
+
+            if (_handle != 0)
+            {
+                if (_level <= 0.001f) { _engine.StopBed(_handle); _handle = 0; }
+                else _engine.SetBed(_handle, _at, 0f, _pitch, _level);
+            }
+        }
+
+        public void Stop()
+        {
+            if (_handle != 0) { _engine.StopBed(_handle); _handle = 0; }
+            _level = _levelTarget = 0f;
+        }
+
+        /// <summary>How fast a bed spools between rates and levels, per second. Slow enough
+        /// to hear it wind up — an instant jump sounds like a cut, not like a machine coming
+        /// to life.</summary>
+        private const float SpoolRate = 0.9f;
+        private const float FadeRate = 1.6f;
     }
+
+    /// <summary>The Crab-Core's internal rotor.</summary>
+    private static readonly Bed _hum = new(Cue.BossHum, wokenPitch: 1.95f);
+
+    /// <summary>The Maw-Core holding itself up. Deliberately a different sound from the
+    /// crab's rotor rather than a re-pitch of it: two monsters that hummed alike would be
+    /// impossible to tell apart out in the fog, and this one has to be identifiable as
+    /// coming from <em>above</em> you.</summary>
+    private static readonly Bed _mawHover = new(Cue.MawHover, wokenPitch: 1.7f);
+
+    /// <summary>The SPIDER's lance charge. Flat — it is the player's own weapon, on their
+    /// own hull. Its rate is driven hard because the whole point of the cue is that the
+    /// pitch tells you how full the meter is without looking at it.</summary>
+    private static readonly Bed _lanceCharge = new(Cue.LanceCharge, wokenPitch: 2.4f);
+
+    /// <summary>The reel's gas jet. Its rate rides the reserve's pressure, which is what
+    /// makes a starved reel audibly sag rather than merely pull less hard.</summary>
+    private static readonly Bed _reelJet = new(Cue.ReelJet, wokenPitch: 1.9f);
+
+    /// <summary>The air. Light rustle building to a roaring buffet — the single cue carrying
+    /// most of the sense of speed, so it is the loudest bed in the game.</summary>
+    private static readonly Bed _wind = new(Cue.Wind, wokenPitch: 2.2f);
+
+    /// <summary>Steel under load. Quiet by design — it should be felt through the other two
+    /// rather than heard over them, the way you notice a rope you are hanging from without
+    /// listening to it.</summary>
+    private static readonly Bed _cableStrain = new(Cue.CableStrain, wokenPitch: 1.6f);
+
+    /// <summary>Past this many world units the rotor can't be heard. The cue table owns the
+    /// real number now; the boss reads this one.</summary>
+    public const float HumRange = 55f;
+
+    /// <summary>Voices the Crab-Core's rotor for this frame. Safe to call every tick with
+    /// whatever state the boss is in; <paramref name="agitation"/> is 0 while it idles and 1
+    /// once it has noticed a player, so the machine audibly winds up the moment it wakes.</summary>
+    public static void SetBossHum(bool present, Vector2 at, float agitation)
+    {
+        if (_enabled) _hum.Set(present, at, agitation);
+    }
+
+    /// <summary>The Maw-Core holding station overhead — its equivalent bed, driven the same
+    /// way and running the whole time one is on the field.</summary>
+    public static void SetMawHover(bool present, Vector2 at, float agitation)
+    {
+        if (_enabled) _mawHover.Set(present, at, agitation);
+    }
+
+    /// <summary>The SPIDER's lance winding up. Fed every tick with whatever state the
+    /// emitter is in; releasing simply stops feeding it and the bed fades on its own.</summary>
+    public static void SetLanceCharge(bool charging, float fraction)
+    {
+        if (_enabled) _lanceCharge.Set(charging, Vector2.Zero, fraction);
+    }
+
+    /// <summary>The reel's gas jet for this frame. <paramref name="pressure"/> is how much
+    /// is left in the bottle, 0..1 — the roar climbs with it, so a dry reel is heard as a
+    /// weak one before it is felt as one.</summary>
+    public static void SetReel(bool reeling, float pressure)
+    {
+        if (_enabled) _reelJet.Set(reeling, Vector2.Zero, pressure);
+    }
+
+    /// <summary>The wind past the ears — a light rustle to a roaring buffet.</summary>
+    public static void SetWind(bool fast, float intensity)
+    {
+        if (_enabled) _wind.Set(fast, Vector2.Zero, intensity);
+    }
+
+    /// <summary>The cables taking weight. The creak tightens with
+    /// <paramref name="tension"/>, so a player at the bottom of a fast arc can hear how much
+    /// the rig is being asked for.</summary>
+    public static void SetCableStrain(bool loaded, float tension)
+    {
+        if (_enabled) _cableStrain.Set(loaded, Vector2.Zero, tension);
+    }
+
+    // --- Per-frame -----------------------------------------------------------------
 
     /// <summary>
-    /// The refusal a full magazine gives when you right-click more rounds into it: a
-    /// short low buzz that sags in pitch (<see cref="SfxSynth.FullBuzz"/>). The
-    /// deliberate opposite of <see cref="PlayPickup"/>, so a rejected load never
-    /// reads as a successful one.
+    /// Drains scheduled sounds that have come due, services the beds and hands the engine
+    /// this frame's listener. Call once per frame from the main loop, above every early-out,
+    /// so a queued death cascade still finishes if the player pauses or exits to the menu.
+    ///
+    /// <paramref name="inWorld"/> is whether the player is actually in a match, which is all
+    /// <see cref="MusicBox"/> needs from the game.
     /// </summary>
-    public static void PlayFull()
+    public static void Update(bool inWorld)
     {
-        if (_enabled) PlaySynth(SfxSynth.FullBuzz(_sfxRng));
+        if (!_enabled) return;
+
+        float dt = Raylib.GetFrameTime();
+        ServiceMusic(dt);
+        MusicBox.Service(dt, inWorld);
+
+        double now = Raylib.GetTime();
+        for (int i = 0; i < BossBoomCount; i++)
+        {
+            if (!_boomPending[i] || now < _boomDue[i]) continue;
+            _boomPending[i] = false;
+            Post(Cue.BossDeath, _explosion, _boomAt[i], _boomPitch[i], _boomVol[i]);
+        }
+
+        _hum.Service(dt);
+        _mawHover.Service(dt);
+        _lanceCharge.Service(dt);
+        _reelJet.Service(dt);
+        _wind.Service(dt);
+        _cableStrain.Service(dt);
+
+        // The player's beds are fed-or-they-die, unlike the two monster beds. Those are
+        // driven from the world's own step, which runs whenever their owner exists; these
+        // are driven from the player's trigger handlers, which do not run at all while the
+        // game is paused, while a cinematic has the craft, or after a bail to the menu.
+        // Clearing the target here — after servicing, so a frame that did set it still
+        // counts — means any frame that stops asking lets the bed fade rather than hang.
+        _lanceCharge.Set(false, Vector2.Zero, 0f);
+        _reelJet.Set(false, Vector2.Zero, 0f);
+        _wind.Set(false, Vector2.Zero, 0f);
+        _cableStrain.Set(false, Vector2.Zero, 0f);
+
+        _engine.Update(_ear, dt);
     }
 
-    /// <summary>Unloads the clips and closes the device. Mirrors <see cref="Init"/>.</summary>
+    /// <summary>Cuts every voice at once — a scene change, a bail to the menu.</summary>
+    public static void Silence()
+    {
+        if (!_enabled) return;
+        _hum.Stop();
+        _mawHover.Stop();
+        _lanceCharge.Stop();
+        _reelJet.Stop();
+        _wind.Stop();
+        _cableStrain.Stop();
+        for (int i = 0; i < BossBoomCount; i++) _boomPending[i] = false;
+        _engine.StopAll();
+    }
+
+    /// <summary>Moves <paramref name="v"/> toward <paramref name="target"/> by at most
+    /// <paramref name="step"/>, without overshooting.</summary>
+    private static float Approach(float v, float target, float step)
+    {
+        if (v < target) return MathF.Min(target, v + step);
+        return MathF.Max(target, v - step);
+    }
+
+    /// <summary>Closes the mixer and the device. Mirrors <see cref="Init"/>.</summary>
     public static void Shutdown()
     {
         if (!_enabled) return;
-        _hum.Unload();
-        _mawHover.Unload();
-        _lanceCharge.Unload();
-        _reelJet.Unload();
-        _wind.Unload();
-        _cableStrain.Unload();
-        // Aliases first: they borrow their source clips' samples, so they must all
-        // be released before the clips that own those samples go.
-        for (int i = 0; i < BossBoomCount; i++) Raylib.UnloadSoundAlias(_bossBooms[i]);
-        for (int i = 0; i < _stompVoices.Length; i++) Raylib.UnloadSoundAlias(_stompVoices[i]);
-        for (int i = 0; i < CoreHitVoices; i++) Raylib.UnloadSoundAlias(_coreHits[i]);
-        for (int i = 0; i < BeamWarnVoices; i++) Raylib.UnloadSoundAlias(_beamWarns[i]);
-        Raylib.UnloadSound(_blip);
-        Raylib.UnloadSound(_detonation);
-        Raylib.UnloadSound(_explosion);
-        Raylib.UnloadSound(_distantBoom);
-        Raylib.UnloadSound(_hit);
-        Raylib.UnloadSound(_warning);
-        Raylib.UnloadSound(_stomp);
-        Raylib.UnloadSound(_alarm);
-        // Plus whatever synthesised clips are still held in the ring.
-        for (int i = 0; i < SynthPoolSize; i++)
-            if (_synthLoaded[i]) { Raylib.UnloadSound(_synthPool[i]); _synthLoaded[i] = false; }
+        MusicBox.Shutdown();
+        _engine.Close();
         Raylib.CloseAudioDevice();
         _enabled = false;
     }
-
-    private static Sound Load(string file) => Raylib.LoadSound(SfxDir + file);
 }

@@ -1,12 +1,11 @@
 using Raylib_cs;
 
-namespace VoidTanks.Core;
+namespace Unrendered.Core;
 
 /// <summary>
-/// What the player climbs into. The machine offers five chassis, and with the VIRUS
-/// finally loaded the whole manifest can now be assembled — though calling that one
-/// "assembled" is generous: it is the entry with no pattern, because it has no body.
-/// It takes one.
+/// What the player climbs into. The machine offers six chassis now, and the newest is the
+/// one it did not build at all: the FLOWER came up through the plate on its own, and the
+/// hangar has stopped trying to explain it.
 /// </summary>
 public enum PlayerClass
 {
@@ -15,6 +14,7 @@ public enum PlayerClass
     Virus,    // a naked mote that wears hunters as rotting armour
     Fish,     // the drowned swimmer: the void as an ocean
     Soldier,  // a person on foot with two gas-fired grappling hooks
+    Flower,   // a thing that grew out of the grid and cannot walk off it
 }
 
 /// <summary>
@@ -130,6 +130,27 @@ public static class ClassCatalog
             // is the only chassis on the roster that is a person, and it should read as
             // equipment worn rather than as a machine painted.
             DefaultSwatches: new[] { 6, 10, 0, 9 }),
+
+        new ClassArchetype(
+            PlayerClass.Flower, "FLOWER",
+            "PLANTED, NOT DRIVEN",
+            new[]
+            {
+                "IT DOES NOT WALK. WASD ONLY BENDS THE STALK, AND",
+                "E PICKS GROUND AND GROWS YOU THERE. Q SETS SEED -",
+                "THREE THINGS, ONCE IT IS RIPE. LEFT SPITS. RIGHT",
+                "THROWS A PETAL THAT COMES BACK. TWELVE OF THEM.",
+            },
+            Available: true,
+            // The head, the face it is set into, the stalk under it, and the one bright
+            // thing in the middle — this game's whole convention for a living core, worn
+            // here by something that is alive in a way nothing else on the roster is.
+            PartNames: new[] { "PETALS", "DISC", "STALK", "SEED" },
+            // The one honest yellow in the closed palette over the dead green of the face,
+            // on a stalk in the *grid's own colour* — because that is where this thing came
+            // from, and a player should be able to read that off the model before anybody
+            // tells them. The seed is neon red, like every other living core in this game.
+            DefaultSwatches: new[] { 4, 11, 5, 8 }),
     };
 
     public static ClassArchetype Get(PlayerClass kind) => All[(int)kind];

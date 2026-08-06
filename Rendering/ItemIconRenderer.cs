@@ -1,15 +1,17 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Renders each inventory item as a small rotating 3D model into its own little render
 /// texture, so the crafting panel shows the real polygon salvage turning slowly on the
-/// spot rather than flat coloured squares. One texture per item kind (there are only
-/// four), redrawn each frame at a shared slow spin; the panel then blits the right one
-/// into every slot holding that kind. Kept apart from the flat 2D panel drawing because
+/// spot rather than flat coloured squares. One texture per item kind, redrawn each frame at
+/// a shared slow spin; the panel then blits the right one into every slot holding that kind.
+/// A dozen 28×28 targets is nothing, and it means a slot, a bench arrow's ghosted promise and
+/// the stack riding the cursor are all the same picture. Kept apart from the flat 2D panel
+/// drawing because
 /// a 3D pass needs its own render target and camera, which can't be nested inside the
 /// panel's own texture pass.
 /// </summary>
@@ -36,12 +38,35 @@ public sealed class ItemIconRenderer : IDisposable
         _mesh[ItemKind.CrabFragment] = Meshes.Shard(Palette.NeonRed);
         _mesh[ItemKind.CrabCore] = Meshes.CrabCoreGem(Palette.NeonMagenta);
 
+        // The materials. Told apart by silhouette before colour, because at this size that is
+        // all a player really has: a flat torn plate, a round coil, a heap, a brick, a block,
+        // a crystal, a rod.
+        _mesh[ItemKind.ScrapMetal] = Meshes.ScrapPlate(Palette.ScrapSteel);
+        _mesh[ItemKind.CopperWire] = Meshes.WireCoil(Palette.CopperWire);
+        _mesh[ItemKind.SpaceGunpowder] = Meshes.PowderPile(Palette.PowderDark, Palette.PowderGrain);
+        _mesh[ItemKind.DenseAlloy] = Meshes.Ingot(Palette.AlloyIngot, Palette.HudChrome);
+        _mesh[ItemKind.Lead] = Meshes.MetalBlock(Palette.LeadGrey, Palette.ScrapSteel);
+        _mesh[ItemKind.Zinc] = Meshes.Crystal(Palette.ZincPale);
+        _mesh[ItemKind.Lithium] = Meshes.Rod(Palette.HudChrome, Palette.LithiumRose);
+        _mesh[ItemKind.RepairKit] = Meshes.RepairKit(Palette.RepairShell, Palette.RepairMark);
+        _mesh[ItemKind.MoonFragment] = Meshes.MoonShard(Palette.MoonStone, Palette.MoonBreak);
+
         // Per-kind scale (to frame each silhouette at a similar size) and the model-space
         // Y centre to spin about (these meshes sit base-at-origin, so most are lifted).
         _scale[ItemKind.Battery] = 1.15f;      _centerY[ItemKind.Battery] = 0.89f;
         _scale[ItemKind.Bullet] = 1.25f;       _centerY[ItemKind.Bullet] = 0.85f;
         _scale[ItemKind.CrabFragment] = 2.4f;  _centerY[ItemKind.CrabFragment] = 0.12f;
         _scale[ItemKind.CrabCore] = 0.85f;     _centerY[ItemKind.CrabCore] = 1.25f;
+
+        _scale[ItemKind.ScrapMetal] = 1.30f;     _centerY[ItemKind.ScrapMetal] = 0.16f;
+        _scale[ItemKind.CopperWire] = 1.30f;     _centerY[ItemKind.CopperWire] = 0.40f;
+        _scale[ItemKind.SpaceGunpowder] = 1.35f; _centerY[ItemKind.SpaceGunpowder] = 0.34f;
+        _scale[ItemKind.DenseAlloy] = 1.35f;     _centerY[ItemKind.DenseAlloy] = 0.23f;
+        _scale[ItemKind.Lead] = 1.55f;           _centerY[ItemKind.Lead] = 0.45f;
+        _scale[ItemKind.Zinc] = 1.30f;           _centerY[ItemKind.Zinc] = 0.58f;
+        _scale[ItemKind.Lithium] = 1.20f;        _centerY[ItemKind.Lithium] = 0.60f;
+        _scale[ItemKind.RepairKit] = 1.25f;      _centerY[ItemKind.RepairKit] = 0.31f;
+        _scale[ItemKind.MoonFragment] = 1.40f;   _centerY[ItemKind.MoonFragment] = 0.44f;
 
         foreach (var kind in _mesh.Keys)
         {

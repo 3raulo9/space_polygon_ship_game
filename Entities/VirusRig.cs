@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>What a mote is currently wearing. The whole class is which of these the
 /// player is, so nearly everything downstream branches on it.</summary>
@@ -379,6 +379,24 @@ public sealed class VirusRig
 
         JustPossessed = true;
         Shake = MathF.Min(1f, MathF.Max(Shake, 0.35f));
+    }
+
+    /// <summary>
+    /// Drives the visible state of a <em>remote</em> virus from a snapshot: which body it is
+    /// wearing and how far the husk has rotted. A client never simulates another player's virus —
+    /// it only draws it — so this sets the two fields the renderer branches on and nothing else,
+    /// the same client-drives-cosmetics arrangement the bosses use. It also spins up (or drops)
+    /// the <see cref="WornRig"/> when the host is a soldier, purely so the worn body has cables to
+    /// draw; that rig is never stepped on a client, its transform comes from the player snapshot.
+    /// </summary>
+    public void NetSet(VirusHost kind, float decay)
+    {
+        HostKind = kind;
+        Decay = Math.Clamp(decay, 0f, 1f);
+
+        bool wantRig = kind == VirusHost.Soldier;
+        if (wantRig && WornRig is null) WornRig = new SoldierRig();
+        else if (!wantRig && WornRig is not null) WornRig = null;
     }
 
     /// <summary>

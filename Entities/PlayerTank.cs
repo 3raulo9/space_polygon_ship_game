@@ -1,8 +1,8 @@
 using System.Numerics;
-using VoidTanks.Core;
-using VoidTanks.Input;
+using Unrendered.Core;
+using Unrendered.Input;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// The player's craft. Movement is heavy and a half-second behind intent
@@ -52,7 +52,7 @@ public sealed class PlayerTank
     /// VIRUS) run their own rigs instead. What it still gates: the shallow gun elevation and
     /// the arced cannon shell, both of which are the tank's alone.
     /// </summary>
-    public bool IsMachine => Soldier == null && Fish == null && Virus == null;
+    public bool IsMachine => Soldier == null && Fish == null && Virus == null && Flower == null;
 
     /// <summary>How far the eye — and the gun with it — can crane up or down. The TANK's
     /// gun is stopped short at <see cref="TurretElevation"/>; everything else looks the
@@ -133,6 +133,17 @@ public sealed class PlayerTank
     private const float JumpVel = 17f;      // initial upward kick — a taller leap still
     private const float Gravity = 18f;      // upward pull → the rise still slows crisply
     private const float FallGravity = 13f;  // gentler pull coming down → floats + hangs longer
+
+    /// <summary>
+    /// What the world underfoot does to the arc, against the standard this craft was tuned at.
+    /// KIRENE pulls at seven tenths and the dodge floats; ABYSSE pulls at thirteen and it is a
+    /// short mean hop you land out of before you meant to.
+    ///
+    /// An instance field rather than a global, so a headless test can stand two worlds up side
+    /// by side and neither one changes the other's physics. Set by the world when a seat opens
+    /// and carried across a chassis swap — a player who changes craft has not changed planet.
+    /// </summary>
+    public float GravityScale = 1f;
     private const float JumpForwardDrift = 4f; // small forward glide while airborne — carries you a bit further to the front
 
     /// <summary>
@@ -161,17 +172,62 @@ public sealed class PlayerTank
     public static float JumpApex => JumpVel * JumpVel / (2f * Gravity);
 
     // --- Combat state (Doc 03) ---
-    public float MaxShield = 100f;
+
+    /// <summary>
+    /// The shield stack, as a pool of damage it will still soak. It is spent in whole
+    /// <see cref="Loadout.ChargeStrength"/>-sized charges — the build buys a count of them
+    /// and the HUD counts them off — but it is stored as one number so a hit that is worth
+    /// two and a half charges spends two and a half of them instead of being rounded into
+    /// either a free hit or a stolen one.
+    /// </summary>
+    public float MaxShield = 50f;
     public float Shield;
+
+    /// <summary>How many charges this craft's build bought. The denominator on the HUD.</summary>
+    public int ShieldCharges = 5;
+
+    /// <summary>
+    /// The hull under the shield: what damage reaches once every charge is gone, and the
+    /// thing that actually ends a life. Nothing regenerates it and no battery touches it —
+    /// only a repair kit does.
+    /// </summary>
+    public float MaxHealth = 50f;
+    public float Health;
+
     public int Lives = 3;
     public int MaxAmmo = 50;
     public int Ammo = 40;
-    public bool Alive => Shield > 0f || Lives > 0;
+    public bool Alive => Health > 0f || Lives > 0;
+
+    /// <summary>
+    /// Comebacks left, which is one fewer than lives: a craft on its last life has none.
+    /// This is the number the host sets before a match and the number the HUD shows, and
+    /// keeping the conversion in one place is what stops the two drifting apart.
+    /// </summary>
+    public int RevivesLeft => Math.Max(0, Lives - 1);
+
+    /// <summary>
+    /// Out of comebacks and out of hull: the run is over for this player, but not for
+    /// the match. They keep a camera and watch whoever is left — see the spectator handling
+    /// in the loop. Solo, this is simply death, which is what it has always been.
+    /// </summary>
+    public bool Spectating => !Alive;
 
     /// <summary>Which chassis the hangar sent out. Drives which trigger does what —
     /// see <see cref="World.World.Update"/> — and nothing about the physics, which are
     /// the same heavy momentum whatever you are piloting.</summary>
-    public PlayerClass Class { get; private set; } = PlayerClass.Tank;
+    ///
+    /// Derived from <see cref="Build"/> rather than copied out of it, so the chassis the sim
+    /// reasons about and the chassis the renderer draws are the same fact and cannot drift
+    /// apart. They did: this was a stored copy taken at construction while <c>Build</c> was a
+    /// shared, still-mutable object, so every check in the game (and every test) agreed on a
+    /// class that was not the one on screen.
+    public PlayerClass Class => Build.Class;
+
+    /// <summary>The hangar build this craft was made from — its chassis and its paint. Read
+    /// only from the outside, to draw another player's craft in third person. Always this
+    /// craft's own copy; see the constructor.</summary>
+    public Loadout Build { get; private set; } = new();
 
     /// <summary>
     /// The SPIDER's emitter, or null on every other chassis. Held here rather than in
@@ -216,6 +272,15 @@ public sealed class PlayerTank
     public VirusRig? Virus { get; private set; }
 
     /// <summary>
+    /// The FLOWER's body, or null on every other chassis. It replaces the physics like the
+    /// three rigs above it, and replaces them with the smallest set in the game: this one does
+    /// not integrate a position at all. The root stays where it was put until a replant picks
+    /// it up, and the only thing that moves between those is the head, on the end of a stalk
+    /// that bends about two metres and springs back.
+    /// </summary>
+    public FlowerRig? Flower { get; private set; }
+
+    /// <summary>
     /// The cable rig currently driving this craft, whoever it belongs to: the SOLDIER's own,
     /// or the one a VIRUS is wearing off a stolen body.
     ///
@@ -240,7 +305,17 @@ public sealed class PlayerTank
     public float EyeHeight => Soldier != null ? SoldierRig.EyeHeight
                             : Fish != null ? FishRig.EyeHeight
                             : Virus != null ? Virus.EyeHeight
+                            : Flower != null ? FlowerRig.EyeHeight
                             : Config.CameraHeight;
+
+    /// <summary>
+    /// Where the craft's <em>gun</em> actually is on the plane, which is the root for every
+    /// chassis but one. The FLOWER's head hangs off the end of a stalk that bends, so a leaning
+    /// plant shoots, throws and is aimed at from a point up to a couple of metres away from the
+    /// thing it is standing on. Everything that fires or is fired at reads this; the root is
+    /// still <see cref="Position"/>, and still what occupies ground and takes a ram.
+    /// </summary>
+    public Vector2 Muzzle => Flower is { } stalk ? Torus.Wrap(Position + stalk.Lean) : Position;
 
     // --- Rockets: the SOLDIER's right trigger --------------------------------
     // Carried, not drawn from the magazine, and deliberately few: a rocket is the only
@@ -405,6 +480,21 @@ public sealed class PlayerTank
     /// </summary>
     private const float SoldierGasRegen = 11f;
 
+    /// <summary>
+    /// How fast the FLOWER's reserve comes back. Faster than everything else on the roster,
+    /// and it has to be: on every other chassis an empty bar costs a jump or a warp, and on
+    /// this one it costs the ability to be anywhere else. A replant every four seconds or so is
+    /// the pace this class travels at, and that is what this number is.
+    ///
+    /// Raised twice on 2026-08-06 alongside the transit itself. Shortening the wilt and the
+    /// sprout makes any one replant quicker; this is what makes the <em>next</em> one come round
+    /// quicker, and until both moved the class was still slow to cross a city however fast an
+    /// individual hop had become. It is now the fastest-refilling reserve in the game by some
+    /// way, which is correct for the one chassis where an empty bar means being stuck rather
+    /// than merely being without a trick.
+    /// </summary>
+    private const float SapRegen = 15f;
+
     // Collision radius on the plane, shared by shots and tank-tank checks.
     public const float Radius = 1.3f;
 
@@ -417,8 +507,21 @@ public sealed class PlayerTank
         // harness): fall back to the standard chassis on a straight 5/5/5, which is
         // exactly the craft this game shipped with before the hangar existed.
         loadout ??= new Loadout();
-        Class = loadout.Class;
+        // Kept so the craft can be drawn from the outside — in the hangar it was always
+        // the local player, whose chassis is never on screen, but a second player's is, and
+        // the renderer needs the class and the paint to know what to draw. See
+        // EntityRenderer's third-person pass.
+        //
+        // A COPY, emphatically. The loop keeps one long-lived Loadout for the player at this
+        // keyboard and goes on writing to it — the hangar paints it, and the multiplayer
+        // launch path assigns `Class` to it the moment the pod is used. Held by reference,
+        // seat 0 (which on a client is the HOST) was drawn from whatever that object last
+        // said, so every client rendered the host as its own chosen chassis. A craft's build
+        // is settled when the craft is built.
+        Build = loadout.Clone();
         MaxShield = loadout.MaxShield;
+        ShieldCharges = loadout.ShieldCharges;
+        MaxHealth = loadout.MaxHealth;
         MaxAmmo = loadout.MaxAmmo;
         _speedScale = loadout.SpeedScale;
         // Open on four fifths of the magazine, as the craft always has.
@@ -435,8 +538,10 @@ public sealed class PlayerTank
         }
         if (Class == PlayerClass.Fish) Fish = new FishRig();
         if (Class == PlayerClass.Virus) Virus = new VirusRig();
+        if (Class == PlayerClass.Flower) Flower = new FlowerRig();
 
         Shield = MaxShield;
+        Health = MaxHealth;
         Hyper = MaxHyper;
     }
 
@@ -453,6 +558,50 @@ public sealed class PlayerTank
     /// anything else while the boss has them.
     /// </summary>
     public bool Captured;
+
+    /// <summary>
+    /// The player driving this seat has dropped and not yet come back. Multiplayer only, and
+    /// only ever true on a craft that is not this machine's own: the host holds the seat and
+    /// its craft in place (frozen, unhurt, un-hunted) so that a reconnection from the same
+    /// Steam account can step straight back into it with its lives and position intact. The
+    /// renderer dims an away craft; the sim leaves it alone.
+    /// </summary>
+    public bool Away;
+
+    // --- Remote interpolation (client only; never the local seat, which predicts) ---
+    // A craft that is not this machine's own is a puppet the host describes twenty times a
+    // second. Snapping it to each new position was twenty discrete steps of visible stutter;
+    // instead the host's latest transform is stored here and the drawn craft is eased toward
+    // it every frame (see World.InterpolateRemotes), which is the difference between watching
+    // a team-mate glide and watching them strobe.
+    private NetGlide _glide;
+    public float NetHeight, NetHeading, NetPitch;
+
+    /// <summary>Where this craft is being eased toward — the host's last word on it, carried
+    /// forward between packets so a lost one coasts instead of stalling. See <see cref="NetGlide"/>.</summary>
+    public Vector2 NetPos => _glide.Target;
+    public bool HasNet => _glide.Has;
+
+    /// <summary>Records the host's latest transform for a remote craft. The first time, the
+    /// craft is snapped onto it — a craft first seen must appear where it is, not slide in from
+    /// wherever the placeholder opened — and eased toward it every time after.</summary>
+    public void NetTarget(Vector2 pos, float height, float heading, float pitch)
+    {
+        if (_glide.Report(pos)) { Position = pos; Height = height; Heading = heading; Pitch = pitch; }
+        NetHeight = height; NetHeading = heading; NetPitch = pitch;
+    }
+
+    /// <summary>Eases a remote craft one frame's worth toward its last host transform;
+    /// <paramref name="k"/> is the blend fraction. A no-op until the first target has landed.</summary>
+    public void EaseToNet(float k, float dt)
+    {
+        if (!_glide.Has) return;
+        _glide.Coast(dt);
+        Position = Torus.Wrap(Position + Torus.Delta(Position, _glide.Target) * k);
+        Height += (NetHeight - Height) * k;
+        Heading += MathF.IEEERemainder(NetHeading - Heading, MathF.Tau) * k;
+        Pitch += (NetPitch - Pitch) * k;
+    }
 
     /// <summary>
     /// Drops all carried momentum — forward speed, turn rate and vertical velocity.
@@ -479,9 +628,18 @@ public sealed class PlayerTank
         if (Fish is { } body) body.Velocity = Vector3.Zero;
         // ...and a virus, whose flight momentum lives in its own rig for the same reason.
         if (Virus is { } mote) mote.Velocity = Vector3.Zero;
+        // A flower carries no momentum worth clearing — but it carries a *lean*, and a set
+        // piece that has just put one back down must not hand it back a stalk bent halfway
+        // over from before it was picked up.
+        //
+        // The lean and nothing else, emphatically. This is also called on the tick a replant
+        // surfaces, and a full Restore here would put the whole ring back and stand the plant
+        // up mid-sprout — which quietly made the replant a free reload and skipped the fresh
+        // soil the arrival is supposed to pay out.
+        Flower?.ClearLean();
     }
 
-    public void Update(float dt)
+    public void Update(float dt, in InputFrame input = default)
     {
         // The cannon cools whatever else is happening to the craft — it is a property
         // of the weapon, not of who is driving. This has to sit *above* the capture
@@ -545,8 +703,20 @@ public sealed class PlayerTank
             return;
         }
 
-        UpdateDrive(dt);
-        UpdateJump(dt);
+        // The FLOWER owns the transform by refusing to change it. Its reserve — SAP on this
+        // chassis's panel — is the replant's fuel and nothing else's, and it refills faster
+        // than the tank's trickle for the obvious reason: on a craft that cannot walk, an
+        // empty reserve is not a missing panic button, it is being unable to leave.
+        if (Flower is { } stalk)
+        {
+            stalk.Step(dt, this);
+            if (Hyper < MaxHyper)
+                Hyper = MathF.Min(MaxHyper, Hyper + SapRegen * dt);
+            return;
+        }
+
+        UpdateDrive(dt, input);
+        UpdateJump(dt, input);
         UpdateSiege(dt);   // plant hold, lurch decay, discharger cooldown, shake ring-down
 
         // The Hyper reserve creeps back up when it isn't being spent.
@@ -656,19 +826,20 @@ public sealed class PlayerTank
     /// refused while planted, already lurching, or too drained. Returns true when it kicks,
     /// so the world can shove the hull and sound the thrust.
     /// </summary>
-    public bool TryLurch()
+    public bool TryLurch(in InputFrame input = default)
     {
         if (Class != PlayerClass.Tank || Planted || IsAirborne) return false;
         if (_lurchTime > 0f || Hyper < LurchHyperCost) return false;
 
-        // Direction off the live drive keys, in world space; default straight ahead.
+        // Direction off the live drive keys, in world space; default straight ahead — which
+        // is also what an empty frame gives, so a lurch nobody is steering still kicks.
         Vector2 fwd = Forward;
         var right = new Vector2(-fwd.Y, fwd.X);
         Vector2 dir = Vector2.Zero;
-        if (InputMap.Forward) dir += fwd;
-        if (InputMap.Back) dir -= fwd;
-        if (InputMap.TurnRight) dir += right;
-        if (InputMap.TurnLeft) dir -= right;
+        if (input.Forward) dir += fwd;
+        if (input.Back) dir -= fwd;
+        if (input.TurnRight) dir += right;
+        if (input.TurnLeft) dir -= right;
         if (dir.LengthSquared() < 1e-4f) dir = fwd;
         dir = Vector2.Normalize(dir);
 
@@ -858,13 +1029,48 @@ public sealed class PlayerTank
     private const float VirusFireInterval = 0.11f;
 
     /// <summary>
+    /// The FLOWER's ordinary trigger: a seed spat down the eye's line. Costs a magazine round
+    /// like every other primary in the game, so the AMMO track and the bullet salvage go on
+    /// meaning what they mean.
+    ///
+    /// <para>Its cadence is the slowest primary on the roster, and that is the class's
+    /// balance written into one number. A rooted thing gets a stable firing platform for
+    /// free — no lead-while-driving, no recovering from a swing, the crosshair simply sits
+    /// where it is put — and a chassis with that advantage firing at the soldier's six hundred
+    /// rounds a minute would be a turret with an aimbot bolted to the side of it. The seed is
+    /// deliberately chip damage on a slow clock; the petals are where this class's damage
+    /// lives, and there are six of them.</para>
+    ///
+    /// <para>The muzzle is the <em>head</em>, not the root, so a plant leaning out from behind
+    /// a wall genuinely shoots from where its head is.</para>
+    /// </summary>
+    public bool TryFireSeed(out Vector3 origin, out Vector3 direction)
+    {
+        origin = default;
+        direction = Forward3;
+        if (Flower is not { State: FlowerRig.Stance.Rooted }) return false;
+        if (_fireCooldown > 0f || Ammo <= 0) return false;
+
+        origin = Eye + direction * (Radius + 0.4f);
+        _fireCooldown = SeedInterval;
+        Ammo--;
+        return true;
+    }
+
+    private const float SeedInterval = 0.42f;
+
+    /// <summary>
     /// Panic-warp: drains the bulk of the Hyper reserve and flings the craft to a
     /// random spot within range. Blocked (returns false) when the reserve is too
     /// low. A grounded craft only — you can't warp mid-jump.
     /// </summary>
     public bool TryHyperspace()
     {
-        // A dug-in tank can't warp — you're anchored, not mobile. Unplant first.
+        // A dug-in tank can't warp — you're anchored, not mobile. Unplant first. Nor can a
+        // flower, which is anchored permanently and has the replant instead: giving it both
+        // would mean the chassis built around choosing its ground carefully also had a button
+        // that threw it at random ground for free.
+        if (Flower != null) return false;
         if (Hyper < HyperspaceCost || IsAirborne || Planted) return false;
 
         // Random bearing and distance — a genuine gamble, not a controlled blink.
@@ -879,12 +1085,25 @@ public sealed class PlayerTank
     }
 
     /// <summary>
-    /// Tops up the shield by a fraction of its maximum, capped at full — the
-    /// battery pickup's repair charge. A fraction of 0.3 restores 30 points on the
-    /// 100-point shield.
+    /// Puts shield charges back on the stack — one battery cell, one charge. Whole charges
+    /// rather than a percentage, because that is what the player is counting: a cell spent
+    /// at 2/5 leaves 3/5, every time, on every build. (A fractionally-drained top charge is
+    /// carried, not rounded away, so the number on the HUD always rises by exactly the
+    /// number of cells spent.)
     /// </summary>
-    public void RefillShield(float fraction)
-        => Shield = MathF.Min(MaxShield, Shield + MaxShield * fraction);
+    public void ChargeShield(int charges)
+    {
+        if (charges <= 0) return;
+        Shield = MathF.Min(MaxShield, Shield + Loadout.ChargeStrength * charges);
+    }
+
+    /// <summary>
+    /// Mends the hull — the repair kit, and the only thing that does. Deliberately a
+    /// fraction rather than a count: hull is a continuous pool, and a kit is worth the
+    /// same share of a tough craft as of a fragile one.
+    /// </summary>
+    public void RepairHull(float fraction)
+        => Health = MathF.Min(MaxHealth, Health + MaxHealth * fraction);
 
     /// <summary>
     /// Tops up the Hyper reserve by a fraction of its maximum, capped at full — the
@@ -900,20 +1119,98 @@ public sealed class PlayerTank
     public void RefillAmmo(float fraction)
         => Ammo = Math.Min(MaxAmmo, Ammo + (int)MathF.Ceiling(MaxAmmo * fraction));
 
-    /// <summary>Applies incoming damage; spends a life and resets shield at zero.</summary>
-    public void TakeDamage(float amount)
+    /// <summary>Applies incoming damage; spends a life and rebuilds the craft at zero hull.</summary>
+    public void TakeDamage(float amount) => TakeDamage(amount, null);
+
+    /// <summary>
+    /// Charges still standing, counted the way the HUD counts them: a charge is not broken
+    /// until it is empty, so a stack with a sliver left of its third charge still reads 3.
+    /// </summary>
+    public int ChargesLeft => Shield <= 0f
+        ? 0
+        : Math.Min(ShieldCharges, (int)MathF.Ceiling(Shield / Loadout.ChargeStrength));
+
+    /// <summary>How far into the topmost standing charge the next hit has to bite before it
+    /// breaks — 0..1. The HUD dims that one pip by this, so a charge about to go looks like
+    /// one about to go.</summary>
+    public float TopChargeFraction
     {
-        Shield -= amount;
-        if (Shield <= 0f)
+        get
         {
-            Shield = 0f;
-            if (Lives > 0)
-            {
-                Lives--;
-                if (Lives > 0) Shield = MaxShield; // respawn with a fresh shield
-            }
+            if (Shield <= 0f) return 0f;
+            float within = Shield % Loadout.ChargeStrength;
+            return within <= 0f ? 1f : within / Loadout.ChargeStrength;
         }
     }
+
+    /// <summary>
+    /// The same, told where the hit came from. Only the SOLDIER does anything with it —
+    /// a body flinches away from what struck it and a tank does not — but every chassis
+    /// records it, because which craft is being worn is not something a damage site should
+    /// have to know.
+    /// </summary>
+    public void TakeDamage(float amount, Vector2? from)
+    {
+        if (from is { } at)
+        {
+            Vector2 d = Torus.Delta(Position, at);
+            if (d.LengthSquared() > 1e-6f) FlinchAngle = MathF.Atan2(d.X, d.Y);
+        }
+        FlinchAmount = Math.Clamp(amount / 20f, 0.25f, 1f);
+        FlinchSeq++;
+
+        // A seed under the plate takes most of a hit off. Not all of it — a mortar dropped on
+        // the ground a flower has just gone into still finds it, and it must, or the replant
+        // becomes a dodge with no counter. What this buys is the transit itself: a player who
+        // commits to leaving does not simply die on the way for having committed.
+        if (Flower is { State: FlowerRig.Stance.Seeded }) amount *= FlowerRig.BuriedArmor;
+
+        // Shields first, and they spill: a hit worth more than the charges left breaks all
+        // of them and the remainder goes on into the hull, so nothing is ever soaked for
+        // free and nothing is ever wasted. A rocket that lands on a craft with one charge
+        // standing costs it that charge AND most of what is behind it.
+        if (Shield > 0f)
+        {
+            float soaked = MathF.Min(amount, Shield);
+            Shield -= soaked;
+            amount -= soaked;
+            if (Shield < 0f) Shield = 0f;
+        }
+        if (amount <= 0f) return;
+
+        Health -= amount;
+        if (Health > 0f) return;
+
+        Health = 0f;
+        // A flower that has been killed comes apart into the thing it was made of: the ring
+        // blows off. Raised before the life is spent so it happens on a final death too —
+        // the last thing a player sees of their own plant should be its petals leaving it.
+        Flower?.Shed();
+        if (Lives <= 0) return;
+        Lives--;
+        // A comeback rebuilds the craft whole: every charge back on the stack and the hull
+        // mended. Running out of hull is the only thing that spends a life now — the shield
+        // reaching zero used to, which would make a craft with charges to spare and a hull
+        // full of holes immortal.
+        // A comeback rebuilds the whole plant with the hull: every petal back in the ring and
+        // the stalk straight. A revived flower with five of its six petals still on the slow
+        // clock would spend the first half-minute of its new life unable to do the one thing
+        // the class is for.
+        if (Lives > 0) { Shield = MaxShield; Health = MaxHealth; Flower?.Restore(); }
+    }
+
+    /// <summary>
+    /// The last hit taken: which way it came from in world radians, how hard, and a counter
+    /// that ticks once per hit so a renderer at any frame rate acts on each exactly once.
+    ///
+    /// <see cref="FlinchAngle"/> and <see cref="FlinchSeq"/> both cross the wire — see
+    /// <c>Snapshot.WritePlayers</c> — because the flinch is the one damage reaction that is
+    /// worth nothing without a direction, and a team-mate whose body jerks away from the
+    /// thing that shot them tells you where that thing is.
+    /// </summary>
+    public float FlinchAngle;
+    public float FlinchAmount = 1f;
+    public int FlinchSeq;
 
     /// <summary>
     /// The two throttles: W/S along the heading, A/D across it. The heading itself is the
@@ -921,7 +1218,7 @@ public sealed class PlayerTank
     /// hull sideways instead. Both carry momentum, so the craft leans into a move and
     /// coasts out of it rather than snapping, which is the whole of how the class drives.
     /// </summary>
-    private void UpdateDrive(float dt)
+    private void UpdateDrive(float dt, in InputFrame input)
     {
         // Rooted (the spider winding its lance) and planted (the tank dug in) both refuse
         // the throttle — the craft coasts to a stop under the drag below and takes no drive.
@@ -929,8 +1226,8 @@ public sealed class PlayerTank
 
         // Forward / back.
         float fwd = 0f;
-        if (!locked && InputMap.Forward) fwd += 1f;
-        if (!locked && InputMap.Back) fwd -= 1f;
+        if (!locked && input.Forward) fwd += 1f;
+        if (!locked && input.Back) fwd -= 1f;
 
         if (fwd > 0f)
             _speed += Accel * DriveScale * dt;
@@ -947,8 +1244,8 @@ public sealed class PlayerTank
         // Left steps toward the craft's screen-right-negated side; the sign matches the
         // (-fwd.Y, fwd.X) right axis the integrator applies it along, so D is right.
         float lat = 0f;
-        if (!locked && InputMap.TurnRight) lat += 1f;
-        if (!locked && InputMap.TurnLeft) lat -= 1f;
+        if (!locked && input.TurnRight) lat += 1f;
+        if (!locked && input.TurnLeft) lat -= 1f;
 
         if (lat != 0f)
             _strafe += lat * Accel * DriveScale * dt;
@@ -969,24 +1266,26 @@ public sealed class PlayerTank
     /// </summary>
     public bool TryJump()
     {
-        if (Class == PlayerClass.Tank) return false;
+        // Two chassis have no answer to gravity, for opposite reasons: the tank is too heavy
+        // to leave the grid and the flower is attached to it.
+        if (Class is PlayerClass.Tank or PlayerClass.Flower) return false;
         if (Rooted || IsAirborne || Hyper < JumpHyperCost) return false;
         _verticalVel = JumpVel;
         Hyper -= JumpHyperCost;
         return true;
     }
 
-    private void UpdateJump(float dt)
+    private void UpdateJump(float dt, in InputFrame input)
     {
         // Jumping is a Hyper move: a quarter of the bar, and simply refused if the
         // reserve can't pay — or if the chassis is a TANK, which never can. See TryJump.
-        if (InputMap.JumpPressed) TryJump();
+        if (input.JumpPressed) TryJump();
 
         if (IsAirborne || _verticalVel > 0f)
         {
             // Ascend under a firm pull but fall under a gentler one, so the arc
             // hangs at its peak and drifts back down slowly rather than dropping.
-            float g = _verticalVel > 0f ? Gravity : FallGravity;
+            float g = (_verticalVel > 0f ? Gravity : FallGravity) * GravityScale;
             _verticalVel -= g * dt;
             Height += _verticalVel * dt;
 
@@ -1105,10 +1404,14 @@ public sealed class PlayerTank
         ? Math.Clamp(body.PlanarSpeed / TopSpeed, 0f, 1f)
         : Virus is { } mote
         ? Math.Clamp(mote.PlanarSpeed / TopSpeed, 0f, 1f)
+        // Always exactly zero, and the honest answer: this chassis does not travel, so the
+        // engine hum that keys off this never rises and never should.
+        : Flower != null ? 0f
         : Math.Abs(_speed) / TopSpeed;
 
     // --- 0..1 fractions for the HUD bars ---
     public float ShieldFraction => MaxShield > 0f ? Math.Clamp(Shield / MaxShield, 0f, 1f) : 0f;
+    public float HealthFraction => MaxHealth > 0f ? Math.Clamp(Health / MaxHealth, 0f, 1f) : 0f;
     public float AmmoFraction => MaxAmmo > 0 ? Math.Clamp((float)Ammo / MaxAmmo, 0f, 1f) : 0f;
     public float HyperFraction => MaxHyper > 0f ? Math.Clamp(Hyper / MaxHyper, 0f, 1f) : 0f;
 

@@ -1,8 +1,8 @@
-using VoidTanks.Core;
-using VoidTanks.Entities;
-using VoidTanks.Input;
+using Unrendered.Core;
+using Unrendered.Entities;
+using Unrendered.Input;
 
-namespace VoidTanks.UI;
+namespace Unrendered.UI;
 
 /// <summary>
 /// The hidden bestiary reached by the secret 'L' hatch on the menu. A turntable:
@@ -35,16 +35,16 @@ public sealed class TestScreen
 
     public TestScreen()
     {
-        // Capture harness: VOIDTANKS_TEST_INDEX picks which specimen to open on,
+        // Capture harness: UNRENDERED_TEST_INDEX picks which specimen to open on,
         // so each roster entry can be screenshotted without keypresses.
-        if (int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_TEST_INDEX"), out int i)
+        if (int.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_TEST_INDEX"), out int i)
             && i >= 0 && i < EnemyCatalog.All.Count)
             Selected = i;
 
-        // Capture harness: VOIDTANKS_TEST_PHASE opens the boss on a chosen phase
+        // Capture harness: UNRENDERED_TEST_PHASE opens the boss on a chosen phase
         // (0..5 — the four protocol phases plus the lance's charge and burn) so each
         // of its animations can be screenshotted without keypresses.
-        if (int.TryParse(Environment.GetEnvironmentVariable("VOIDTANKS_TEST_PHASE"), out int ph)
+        if (int.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_TEST_PHASE"), out int ph)
             && ph >= 0 && ph <= (int)Entities.CrabCore.State.Firing)
             CrabPhase = (Entities.CrabCore.State)ph;
     }

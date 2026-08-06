@@ -1,7 +1,7 @@
 using System.Numerics;
 using Raylib_cs;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// One flying piece of a destroyed enemy: either a chunky broken-off shard in the
@@ -30,6 +30,16 @@ public struct Shard
     /// <summary>1 at birth, 0 at death — drives the fade and shrink.</summary>
     public readonly float LifeFrac => MaxLife > 0f ? Life / MaxLife : 0f;
 }
+
+/// <summary>Which kind of particle burst the host raised, for replay on a client. The client
+/// runs no combat, so without replay a kill throws debris on the host's screen and nothing on
+/// anyone else's. Only the burst's kind, place and (for a hull burst) colour cross — the scatter
+/// is re-rolled locally, since two players never see each other's screens side by side and only
+/// the burst's place, size and colour read.</summary>
+public enum EffectKind : byte { Burst, EliteBurst, FootPuff, Smoke }
+
+/// <summary>One recorded burst, for the session to broadcast so every client sees it.</summary>
+public readonly record struct EffectCue(EffectKind Kind, Vector3 Origin, Color Color);
 
 /// <summary>
 /// The burst of debris an enemy throws off when it's destroyed: chunks of hull
@@ -67,6 +77,11 @@ public sealed class DebrisSystem
     /// <summary>The pool for the renderer to walk; skip entries where !Active.</summary>
     public Shard[] Shards => _shards;
 
+    /// <summary>When set (host-side only), every burst is logged here as it spawns, for the
+    /// session to broadcast so each client sees the same debris. Null on a client and in a solo
+    /// run, where the pieces are purely local and there is nobody to send them to.</summary>
+    public List<EffectCue>? CueSink;
+
     /// <summary>
     /// Blows an enemy apart at <paramref name="origin"/>: a handful of hull chunks
     /// in <paramref name="bodyColor"/> plus a spray of sparks. Elites throw a
@@ -74,6 +89,8 @@ public sealed class DebrisSystem
     /// </summary>
     public void Burst(Vector3 origin, Color bodyColor, bool elite)
     {
+        CueSink?.Add(new EffectCue(elite ? EffectKind.EliteBurst : EffectKind.Burst, origin, bodyColor));
+
         int chunks = elite ? 16 : 11;
         int sparks = elite ? 22 : 15;
 
@@ -90,6 +107,8 @@ public sealed class DebrisSystem
     /// </summary>
     public void FootPuff(Vector3 origin)
     {
+        CueSink?.Add(new EffectCue(EffectKind.FootPuff, origin, DustColor));
+
         var r = Random.Shared;
         int puffs = 3 + r.Next(2);
         for (int i = 0; i < puffs; i++)

@@ -1,9 +1,9 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.UI;
+using Unrendered.Core;
+using Unrendered.UI;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Draws the hangar flat over the low-res target, after the 3D pass has already put
@@ -26,7 +26,13 @@ internal static class ClassSelectRenderer
     private const int RightX = 214, RightW = 101;
     private const int PanelY = 30, PanelH = 104;
 
-    public static void Draw(ClassSelectScreen screen, float elapsed)
+    /// <param name="goLabel">What the confirm button says. LAUNCH in single player, where
+    /// confirming is what takes the craft out; READY at a lobby pod, where the same screen is
+    /// used to settle a build and the host is the only one who launches anything.</param>
+    /// <param name="note">One line under the briefing, or null. The room uses it to say who is
+    /// still deciding — the only thing the hangar cannot work out for itself.</param>
+    public static void Draw(ClassSelectScreen screen, float elapsed,
+        string goLabel = "LAUNCH", string? note = null)
     {
         if (screen.Customising) { DrawPaintBay(screen, elapsed); return; }
 
@@ -34,7 +40,13 @@ internal static class ClassSelectRenderer
         DrawRoster(screen);
         DrawBudget(screen);
         DrawBriefing(screen);
-        DrawActions(screen);
+        DrawActions(screen, goLabel);
+        // Under the buttons rather than over the briefing: the briefing is four lines of prose
+        // on some chassis and two on others, so the only band on this screen that is reliably
+        // empty is the one between the action row and the footer — and it is already dark,
+        // because the action row laid its backing over everything down to the bottom edge.
+        if (note is { Length: > 0 })
+            PixelFont.DrawCentered(note, W / 2, ActionY + 17, 1, Scale(Palette.Flag, 0.85f));
         DrawFooter(screen.Focus switch
         {
             ClassSelectScreen.Pane.Classes => "UP DN PICK - TAB PANE - ENTER GO - ESC BACK",
@@ -75,8 +87,11 @@ internal static class ClassSelectRenderer
 
     // --- Right: the point budget ----------------------------------------------
 
-    private const int StatTop = 46;
-    private const int StatStep = 22;
+    // Four tracks in the same panel as three used to be: the step tightens and the pips
+    // sit right under their label rather than a line below it. Nothing here can grow —
+    // the panel is bounded by the turntable on one side and the screen edge on the other.
+    private const int StatTop = 44;
+    private const int StatStep = 17;
     private const int PipW = 8, PipH = 4, PipGap = 1;
 
     private static void DrawBudget(ClassSelectScreen screen)
@@ -86,12 +101,16 @@ internal static class ClassSelectRenderer
         PixelFont.Draw("BUILD", RightX + 5, PanelY + 5, 1, Scale(Palette.GridNear, 0.9f));
 
         Loadout lo = screen.Loadout;
-        DrawStat(screen, focused, Loadout.Stat.Shield, "SHIELD", StatTop, Palette.HudChrome);
-        DrawStat(screen, focused, Loadout.Stat.Speed, "SPEED", StatTop + StatStep, Palette.GridNear);
-        DrawStat(screen, focused, Loadout.Stat.Ammo, "AMMO", StatTop + StatStep * 2, Palette.Flag);
+        // HULL first, and in the alarm's own chrome: it is the track that decides how long
+        // you last once the shields are gone, and the one a player reading this panel for
+        // the first time should meet before they meet anything else.
+        DrawStat(screen, focused, Loadout.Stat.Health, "HULL", StatTop, Palette.HudChrome);
+        DrawStat(screen, focused, Loadout.Stat.Shield, "SHIELD", StatTop + StatStep, Palette.BatteryCore);
+        DrawStat(screen, focused, Loadout.Stat.Speed, "SPEED", StatTop + StatStep * 2, Palette.GridNear);
+        DrawStat(screen, focused, Loadout.Stat.Ammo, "AMMO", StatTop + StatStep * 3, Palette.Flag);
 
         // What's left on the table. The whole rule of the budget is visible here: max
-        // one track and this number tells you, immediately, that the other two are
+        // one track and this number tells you, immediately, that the other three are
         // going to be poor.
         int left = lo.Remaining;
         Color c = left > 0 ? Palette.HudChrome : Scale(Palette.HudChrome, 0.4f);
@@ -153,7 +172,7 @@ internal static class ClassSelectRenderer
 
     private const int ActionY = 196;
 
-    private static void DrawActions(ClassSelectScreen screen)
+    private static void DrawActions(ClassSelectScreen screen, string goLabel)
     {
         bool focused = screen.Focus == ClassSelectScreen.Pane.Actions;
         // A dark band under the row and the hint below it. Without this the buttons sit
@@ -163,7 +182,7 @@ internal static class ClassSelectRenderer
         Raylib.DrawRectangle(0, ActionY - 8, W, H - ActionY + 8, new Color(5, 7, 10, 215));
         DrawAction(screen, focused, ClassSelectScreen.Act.Customise, "CUSTOMISE",
             W / 2 - 56, screen.CanCustomise);
-        DrawAction(screen, focused, ClassSelectScreen.Act.Launch, "LAUNCH",
+        DrawAction(screen, focused, ClassSelectScreen.Act.Launch, goLabel,
             W / 2 + 52, screen.CanLaunch);
     }
 

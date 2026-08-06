@@ -1,6 +1,6 @@
-using System.Numerics;
+﻿using System.Numerics;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// A bolt travelling across the grid. Pooled and reused (Doc 05: keep per-frame
@@ -12,7 +12,29 @@ public sealed class Projectile
     public Vector2 Position;
     public Vector2 Velocity;
     public float Life;          // seconds remaining before it fizzles
-    public bool FromPlayer;     // so a shot can't hit its own owner
+    /// <summary>
+    /// Which seat fired this, or <see cref="NoOwner"/> for anything the field threw. A
+    /// round has always known whether it came from a player — it needs to know *which*
+    /// player now, so a shot can miss its own craft without passing through everyone
+    /// else's, and so friendly fire can be a rule rather than an accident.
+    /// </summary>
+    public int Owner = NoOwner;
+
+    /// <summary>Fired by the world rather than by anyone in a seat — a hunter, a squad,
+    /// the boss. These are the rounds that hurt players.</summary>
+    public const int NoOwner = -1;
+
+    /// <summary>
+    /// Player-side, but fired by nobody in a seat: a soldier the virus turned, shooting for
+    /// the side that turned it. It counts as one of ours everywhere it matters — so it bites
+    /// hunters and passes through players — while belonging to no seat, which means friendly
+    /// fire can never attribute it and no revive can ever be charged to it.
+    /// </summary>
+    public const int AllyOwner = -2;
+
+    /// <summary>True for any player's round, whoever fired it. The several places that
+    /// only care "was this ours or theirs" still ask exactly this.</summary>
+    public bool FromPlayer => Owner != NoOwner;
     public bool Active;
 
     // Height above the grid. A grounded shot rides at barrel height; a shot fired
@@ -145,7 +167,7 @@ public sealed class Projectile
     /// carries a genuine climb, so a shot loosed at the sky rises and one aimed at the
     /// grid comes down and goes off where it was pointed.
     /// </summary>
-    public void Fire(Vector2 origin, Vector2 dir, bool fromPlayer, float launchHeight = BoltHeight,
+    public void Fire(Vector2 origin, Vector2 dir, int owner, float launchHeight = BoltHeight,
         bool laser = false, float pitch = 0f, bool piercing = false)
     {
         Vector2 d = Vector2.Normalize(dir);
@@ -153,7 +175,7 @@ public sealed class Projectile
         float speed = laser ? LaserSpeed : Speed;
         Position = origin;
         Velocity = d * speed * cp;
-        FromPlayer = fromPlayer;
+        Owner = owner;
         IsGrenade = false;
         IsLaser = laser;
         IsCrabBomb = false;   // pooled slots are reused — clear the thrown-core flag or a
@@ -185,7 +207,7 @@ public sealed class Projectile
         // shot rides its barrel height flat as ever; a laser is a straight line however it
         // is aimed; and an enemy round flies straight at the height it was elevated to, so
         // a hunter shooting up at a leaping player actually reaches them.
-        _gravity = (level || laser || !fromPlayer) ? 0f : CannonArcGravity;
+        _gravity = (level || laser || owner == NoOwner) ? 0f : CannonArcGravity;
         Active = true;
     }
 
@@ -197,12 +219,12 @@ public sealed class Projectile
     /// <c>UpdateProjectiles</c>). Aimed flat along the craft's heading — the loft is fixed, so
     /// where the nose points is where the shell comes down, an honest piece of indirect fire.
     /// </summary>
-    public void FireGrenade(Vector2 origin, Vector2 dir, bool fromPlayer)
+    public void FireGrenade(Vector2 origin, Vector2 dir, int owner)
     {
         Position = origin;
         Velocity = Vector2.Normalize(dir) * MortarSpeed;
         Life = MaxLife;
-        FromPlayer = fromPlayer;
+        Owner = owner;
         IsGrenade = true;
         IsCrabBomb = false;
         IsLaser = false;
@@ -229,12 +251,33 @@ public sealed class Projectile
     /// something). Always from the player — it's a crafted weapon, not enemy ordnance.
     /// A shorter life than a grenade so it goes off close, out in front of the craft.
     /// </summary>
-    public void FireCrabBomb(Vector2 origin, Vector2 dir)
+    /// <summary>
+    /// Takes on a round exactly as the host described it. Client-side only: a client does
+    /// not decide where anything is, it is told, and the pooled slot is simply repainted
+    /// with what arrived. The life is nominal — a client never expires a round itself,
+    /// it just stops being in the next packet.
+    /// </summary>
+    public void AdoptFromWire(Vector2 pos, float height, Vector2 velocity, int owner, byte flags)
+    {
+        Position = pos;
+        Height = height;
+        Velocity = velocity;
+        Owner = owner;
+        IsLaser = (flags & 1) != 0;
+        IsGrenade = (flags & 2) != 0;
+        IsRocket = (flags & 4) != 0;
+        IsTracer = (flags & 8) != 0;
+        IsCrabBomb = false;
+        Life = 1f;
+        Active = true;
+    }
+
+    public void FireCrabBomb(Vector2 origin, Vector2 dir, int owner)
     {
         Position = origin;
         Velocity = Vector2.Normalize(dir) * GrenadeSpeed;
         Life = 0.9f;            // detonates a short throw out in front
-        FromPlayer = true;
+        Owner = owner;
         IsGrenade = true;       // reuse the splash-style handling
         IsCrabBomb = true;
         IsLaser = false;
@@ -271,7 +314,7 @@ public sealed class Projectile
     /// way.
     /// </summary>
     public void FireDirected(Vector3 origin, Vector3 dir, float speed, bool rocket,
-        bool acid = false, bool fromPlayer = true, bool seeds = false, bool fromAlly = false)
+        bool acid = false, int owner = 0, bool seeds = false, bool fromAlly = false)
     {
         Vector3 d = Vector3.Normalize(dir);
 
@@ -282,7 +325,7 @@ public sealed class Projectile
         _climb = d.Y * speed;
         _gravity = 0f;   // the rifle and the rocket fly the line they were given, straight
 
-        FromPlayer = fromPlayer;
+        Owner = owner;
         IsRocket = rocket;
         IsAcid = acid;
         Seeds = seeds;

@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// A bank of screening smoke vented from a TANK's dischargers. The heavy chassis cannot dodge

@@ -1,7 +1,7 @@
 using System.Numerics;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Entities;
+namespace Unrendered.Entities;
 
 /// <summary>
 /// A hunter. Cold and impersonal — no personality, no sound of its own beyond
@@ -50,7 +50,23 @@ public sealed class EnemyTank
 
     private readonly float _moveSpeed;
     private readonly float _turnSpeed;
-    private readonly float _preferredRange;   // hangs at this distance, not point-blank
+    private float _preferredRange;   // hangs at this distance, not point-blank
+
+    /// <summary>
+    /// The range this hunter was built to hold — an elite's nerve, or an ordinary one's. Kept
+    /// so the world can squeeze the whole field in after dark (see <c>World.ApplyNightNerve</c>)
+    /// without flattening the difference between the two: the squeeze is a fraction of what
+    /// each hull already dared, not a number handed down to all of them alike.
+    /// </summary>
+    public float BaseRange { get; private set; }
+
+    /// <summary>How far off it is holding right now. Written by the world each tick on a world
+    /// with a night; left at <see cref="BaseRange"/> everywhere else.</summary>
+    public float PreferredRange
+    {
+        get => _preferredRange;
+        set => _preferredRange = MathF.Max(4f, value);
+    }
     private float _fireCooldown;
     private readonly float _fireInterval;
 
@@ -104,6 +120,7 @@ public sealed class EnemyTank
             _preferredRange = 40f;
             _fireInterval = 1.9f;
         }
+        BaseRange = _preferredRange;
         // Desync initial cooldowns so a group never fires in lockstep.
         _fireCooldown = _fireInterval * (0.4f + 0.6f * Random.Shared.NextSingle());
     }
@@ -188,6 +205,51 @@ public sealed class EnemyTank
     }
 
     public void TakeDamage(float amount) => Shield -= amount;
+
+    // --- Client interpolation ------------------------------------------------------
+    // A client is only ever shown hunters, never runs them, and used to be handed a wholly
+    // new list every field packet — which threw away any chance of smoothing, so a hunter
+    // stepped twenty times a second. Now the client keeps its hunters between packets, matched
+    // by the host's id, and eases each toward the position the host last reported. None of this
+    // is ever touched on the host, where the fields sit at their defaults.
+
+    /// <summary>The host's stable id for this hunter, so a client can match the same one across
+    /// packets and interpolate it rather than rebuilding the list. Assigned lazily host-side in
+    /// <c>Snapshot.WriteField</c>; on a client it is the key it was matched on.</summary>
+    public int NetId;
+
+    /// <summary>Scratch flag for the client's adopt sweep: set on every hunter the latest field
+    /// packet named, so the ones it did not name can be dropped.</summary>
+    public bool NetSeen;
+
+    /// <summary>The key this hunter goes by in the host's rewind history, so a laggy client's
+    /// shot can be tested against where it actually was on that client's screen. Assigned
+    /// lazily host-side; deliberately not <see cref="NetId"/>, which is a reused byte and
+    /// would have two hunters sharing a past.</summary>
+    public int HitId;
+
+    private NetGlide _glide;
+    private float _netHeading;
+
+    /// <summary>Client-side: records where the host last put this hunter. Snaps on first sight,
+    /// eases every time after.</summary>
+    public void NetTarget(Vector2 pos, float heading)
+    {
+        if (_glide.Report(pos)) { Position = pos; Heading = heading; }
+        _netHeading = heading;
+    }
+
+    /// <summary>Client-side: eases this hunter one frame toward its last reported transform,
+    /// which carries itself forward through a missed packet rather than standing still — see
+    /// <see cref="NetGlide"/>. A stalling hunter is the most visible thing on a client's screen:
+    /// there are dozens of them and they are all doing it at once.</summary>
+    public void EaseToNet(float k, float dt)
+    {
+        if (!_glide.Has) return;
+        _glide.Coast(dt);
+        Position = Torus.Wrap(Position + Torus.Delta(Position, _glide.Target) * k);
+        Heading += MathF.IEEERemainder(_netHeading - Heading, MathF.Tau) * k;
+    }
 
     // --- angle helpers ---
 

@@ -1,9 +1,9 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using VoidTanks.Core;
-using VoidTanks.World;
+using Unrendered.Core;
+using Unrendered.World;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Draws the skyline: the field's dead towers and the arcs slung between them, each at

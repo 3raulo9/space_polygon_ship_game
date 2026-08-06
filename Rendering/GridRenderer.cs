@@ -1,8 +1,8 @@
 using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
+using Unrendered.Core;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// The floor: a solid chess-board of filled cells receding into fog (Doc 02).
@@ -70,10 +70,13 @@ public static class GridRenderer
         Raylib.DrawTriangle3D(a, d, e, c);
     }
 
-    /// <summary>0 at the camera, 1 once fully dissolved into fog.</summary>
+    /// <summary>0 at the camera, 1 once fully dissolved into fog. The two distances come from
+    /// the <see cref="Atmosphere"/> rather than from <see cref="Config"/>, because they are now
+    /// a property of the world underfoot: THALOS swallows things at fifty units and SOLUNE at
+    /// night closes to a third of what it was at noon.</summary>
     public static float FogFactor(float dist)
     {
-        float t = (dist - Config.FogStart) / (Config.FogEnd - Config.FogStart);
+        float t = (dist - Atmosphere.FogStart) / (Atmosphere.FogEnd - Atmosphere.FogStart);
         return Math.Clamp(t, 0f, 1f);
     }
 

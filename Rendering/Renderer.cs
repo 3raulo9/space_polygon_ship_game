@@ -1,10 +1,10 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Raylib_cs;
-using VoidTanks.Core;
-using VoidTanks.Entities;
-using VoidTanks.UI;
+using Unrendered.Core;
+using Unrendered.Entities;
+using Unrendered.UI;
 
-namespace VoidTanks.Rendering;
+namespace Unrendered.Rendering;
 
 /// <summary>
 /// Owns the low-res render target and the nearest-neighbor upscale (Doc 05).
@@ -15,7 +15,7 @@ namespace VoidTanks.Rendering;
 public sealed class Renderer : IDisposable
 {
     private RenderTexture2D _target;
-    // A tiny buffer used only by the pause pixel-blur: the frozen frame is
+    // A tiny buffer used only by the screen-to-screen pixel fade: the frame is
     // downsampled into this at a fraction of the resolution, then blown back up
     // over the sharp frame. Sized to the low res so every blit is a full-texture
     // read — partial-rect reads of a flipped render texture misbehave.
@@ -37,6 +37,8 @@ public sealed class Renderer : IDisposable
     private readonly EntityRenderer _entities = new();
     // Renders the inventory's items as small rotating 3D models (see DrawInventory).
     private readonly ItemIconRenderer _itemIcons = new();
+    // The walkable multiplayer lobby's scene and panels.
+    private readonly LobbyRoomRenderer _lobbyRoom = new();
 
     public Renderer()
     {
@@ -75,18 +77,43 @@ public sealed class Renderer : IDisposable
     private const byte MurkAlpha = 172;
 
     /// <summary>Renders the world from the player's eye into the low-res target.</summary>
-    public void DrawWorld(World.World world)
+    public void DrawWorld(World.World world) => DrawWorld(world, null);
+
+    /// <param name="instruments">False to leave the dashboard off — the bars, the radar, the
+    /// equip row and the mode's own readouts. Only the end-of-run panel asks for this: the run
+    /// is finished, so the instruments are describing a craft that is not going anywhere, and
+    /// the DESCENT readout in particular prints its own ending banner in exactly the place the
+    /// panel puts its title.</param>
+    public void DrawWorld(World.World world, Net.NoticeFeed? notices, bool instruments = true)
     {
-        PlayerTank player = world.Player;
+        // Whose eyes this frame is drawn from. Normally this machine's own craft; once its
+        // revives are spent it is a living team-mate's instead (see World.ViewSeat), because
+        // the revive model sends a spent player to watch the survivors and nothing was
+        // pointing the camera at one — a dead client sat staring out of its own wreck while
+        // the match carried on without it. Everything below reads this rather than
+        // world.Player, so a spectator gets the whole camera — the chassis's own eye height,
+        // its bank, its field of view, the shake of whatever is happening to it.
+        // The air this frame is drawn through: the sky, fog and light of whichever of the five
+        // worlds the match is standing on, at whatever hour it is there. Installed before a
+        // single pixel is laid down, because the floor, every mesh and the sky band all read it.
+        Atmosphere.Adopt(world.Sky);
+
+        PlayerTank player = world.Eye;
 
         // First-person eye: sits at the chassis's own eye height above the craft,
         // looking down its heading. The jump lifts the eye with the craft. A soldier's
         // eye is barely half a tank's off the ground, which is most of why the same city
         // reads as something to be small inside rather than something to drive past.
+        //
+        // It sits over the craft's *muzzle* rather than its position, which is the same point
+        // on five of the six chassis and is not on the FLOWER: that one's head hangs off a
+        // stalk that bends a couple of metres, and the whole of its dodge is the eye moving
+        // while the roots do not. See PlayerTank.Muzzle.
+        Vector2 head = player.Muzzle;
         var eye = new Vector3(
-            player.Position.X,
+            head.X,
             player.EyeHeight + player.Height,
-            player.Position.Y);
+            head.Y);
 
         // The direction the eye looks down: the craft's own heading, which the mouse aims
         // on every chassis now.
@@ -126,6 +153,10 @@ public sealed class Renderer : IDisposable
         // Same band again — these are things happening to a body the player is only borrowing.
         if (player.Virus is { Shake: > 0f } corrupted)
             amp = MathF.Max(amp, 0.16f * corrupted.Shake);
+        // A flower's roots letting go, or one of its own petals going off close enough to
+        // feel. Same band as the three bodies above — a plant is a body.
+        if (player.Flower is { Shake: > 0f } shaken)
+            amp = MathF.Max(amp, 0.16f * shaken.Shake);
         // A TANK lurching off its tracks or slamming a hunter throws the hull the same way. The
         // Shake lives on the craft itself (only the tank ever raises it), so this reads it
         // straight — same band as the bodies above, since it is a jolt to a machine, not a set
@@ -211,6 +242,22 @@ public sealed class Renderer : IDisposable
             // the one cue that makes an impulse feel like an impulse.
             float fast = Math.Clamp((body.PlanarSpeed - FishFovSpeed) / 18f, 0f, 1f);
             fov *= 1f + 0.30f * fast * fast + 0.05f * body.Surge;
+        }
+
+        // The FLOWER's head is the camera, and the head is on the end of a stalk. Everything
+        // here is that one fact: the eye is at the *bent* position rather than over the root
+        // (see the eye placement above, which reads Muzzle), it tips with the bend, and it
+        // takes the seed's recoil.
+        //
+        // The bank is the interesting part. On the fish it is steering; here it is the plant
+        // being pushed — a stalk leaning left rolls the horizon slightly right, because the
+        // head is being carried rather than aiming itself — and it is deliberately about a
+        // quarter of what the fish gets. Any more and a dodge reads as a barrel roll.
+        if (player.Flower is { } stalk)
+        {
+            lift = MathF.Tan(Math.Clamp(player.Pitch + stalk.Recoil,
+                -PlayerTank.MaxPitch, PlayerTank.MaxPitch));
+            roll += stalk.Bank;
         }
 
         // The TANK and the SPIDER aim with the mouse now, so the eye looks straight down
@@ -332,11 +379,158 @@ public sealed class Renderer : IDisposable
         // without its own chassis, so it costs nothing to have here.
         VirusRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
 
+        // And the FLOWER's: the plate closing over the view through a replant, and the faint
+        // gold at the edges of a ripe head. Same bargain as the three above — it returns
+        // immediately without its own chassis, so it costs nothing to have here.
+        FlowerRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
+
         // Flat instrument panel over the scene: vital bars + radar along the top, plus
         // the R/T/Y/U equip slots showing their 3D item icons.
-        HudRenderer.Draw(world, _itemIcons);
+        if (instruments) HudRenderer.Draw(world, _itemIcons);
+
+        // The join/quit feed sits under the instruments, bottom-right. Only in a match.
+        if (notices != null) HudRenderer.DrawNotices(notices);
+
+        // Floating name + shield bar over each team-mate, so a twenty-player field reads.
+        DrawPlayerTags(world);
+
+        // ...and the places people have pointed at.
+        DrawMarkers(world);
+
+        // ...and the whole roster on demand. Only in a match: a solo run's scoreboard is one
+        // row about the only person in it.
+        if (notices != null && Input.InputMap.ScoreboardDown) HudRenderer.DrawScoreboard(world);
 
         Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// Draws each team-mate's nickname and a small shield bar floating over their craft, so a
+    /// crowded field can be read at a glance. Projected into the low-res target with
+    /// <see cref="Raylib.GetWorldToScreenEx"/> (the render-texture size, not the window), culled
+    /// behind the camera and past a sensible range, and drawn at each craft's nearest wrap image
+    /// so a team-mate just over the seam is tagged where they are actually drawn.
+    /// </summary>
+    /// <summary>
+    /// The marks players have put on the world: a bracket at the place, the name of whoever
+    /// pointed, and — when it is behind you — an arrow at the edge of the screen saying which
+    /// way to turn.
+    ///
+    /// <para>That last part is most of the value. A marker you can only see when you are
+    /// already looking at it tells you nothing you did not know; one that says "behind you,
+    /// left" is the whole of what a player without voice chat needs to say.</para>
+    /// </summary>
+    private void DrawMarkers(World.World world)
+    {
+        if (world.Markers.Count == 0) return;
+
+        var camXZ = new Vector2(_camera.Position.X, _camera.Position.Z);
+        Vector3 fwd = Vector3.Normalize(_camera.Target - _camera.Position);
+
+        foreach (var mark in world.Markers)
+        {
+            // Fades over its last two seconds rather than blinking out, so the field never
+            // seems to lose something while you are looking at it.
+            float a = Math.Clamp(mark.Remaining / 2f, 0f, 1f);
+            byte alpha = (byte)(a * 255);
+            Color col = new(Palette.Flag.R, Palette.Flag.G, Palette.Flag.B, alpha);
+
+            Vector2 near = Torus.NearestImage(mark.Position, camXZ);
+            var head = new Vector3(near.X, 3.2f, near.Y);
+            bool ahead = Vector3.Dot(fwd, head - _camera.Position) > 0.2f;
+
+            if (ahead)
+            {
+                Vector2 s = Raylib.GetWorldToScreenEx(head, _camera,
+                    Config.InternalWidth, Config.InternalHeight);
+                if (s.X > -30 && s.X < Config.InternalWidth + 30)
+                {
+                    // A diamond that breathes, so it reads as something somebody put there
+                    // rather than as another piece of the world's own furniture.
+                    float pulse = 3f + 1.4f * MathF.Sin(mark.Remaining * 6f);
+                    int x = (int)s.X, y = (int)s.Y;
+                    Raylib.DrawLine(x, (int)(y - pulse), (int)(x + pulse), y, col);
+                    Raylib.DrawLine((int)(x + pulse), y, x, (int)(y + pulse), col);
+                    Raylib.DrawLine(x, (int)(y + pulse), (int)(x - pulse), y, col);
+                    Raylib.DrawLine((int)(x - pulse), y, x, (int)(y - pulse), col);
+
+                    int range = (int)Torus.Distance(mark.Position, camXZ);
+                    PixelFont.DrawCentered($"{world.NameOrSeat(mark.Seat)} {range}m",
+                        x, y - 12, 1, col);
+                    continue;
+                }
+            }
+
+            // Off screen, or behind. A chevron pinned to the edge on the side it lies, at the
+            // height the eye would find it — the one thing that makes a mark useful to
+            // somebody who is not already facing it.
+            Vector2 to = Torus.Delta(camXZ, mark.Position);
+            Vector2 right = new(MathF.Cos(world.Eye.Heading), -MathF.Sin(world.Eye.Heading));
+            bool onRight = Vector2.Dot(to, right) >= 0f;
+            int ex = onRight ? Config.InternalWidth - 10 : 10;
+            int ey = Config.InternalHeight / 2;
+            int dir = onRight ? 1 : -1;
+            Raylib.DrawLine(ex, ey - 4, ex + 4 * dir, ey, col);
+            Raylib.DrawLine(ex + 4 * dir, ey, ex, ey + 4, col);
+        }
+    }
+
+    private void DrawPlayerTags(World.World world)
+    {
+        var camXZ = new Vector2(_camera.Position.X, _camera.Position.Z);
+        Vector3 fwd = Vector3.Normalize(_camera.Target - _camera.Position);
+
+        for (int seat = 0; seat < world.Players.Count; seat++)
+        {
+            // Never tag the craft the camera is inside — this machine's own, or, while
+            // spectating, whoever it is riding along with.
+            if (seat == world.LocalIndex || seat == world.ViewSeat) continue;
+            PlayerTank mate = world.Players[seat];
+            if (!mate.Alive) continue;
+            string name = world.NameOf(seat);
+            if (name.Length == 0) continue;
+
+            Vector2 near = Torus.NearestImage(mate.Position, camXZ);
+            var head = new Vector3(near.X, mate.EyeHeight + mate.Height + 2f, near.Y);
+            if (Vector3.Dot(fwd, head - _camera.Position) <= 0.2f) continue;   // behind the eye
+            if (Vector3.Distance(_camera.Position, head) > 140f) continue;      // too far to read
+
+            Vector2 s = Raylib.GetWorldToScreenEx(head, _camera,
+                Config.InternalWidth, Config.InternalHeight);
+            if (s.X < -20 || s.X > Config.InternalWidth + 20) continue;
+
+            PixelFont.DrawCentered(name, (int)s.X, (int)s.Y - 9, 1, Palette.HudChrome);
+
+            const int bw = 24, bh = 3;
+            int bx = (int)s.X - bw / 2, by = (int)s.Y;
+            Raylib.DrawRectangle(bx - 1, by - 1, bw + 2, bh + 2, new Color(5, 7, 10, 200));
+            // The bar is their HULL — the thing that decides whether they are about to need
+            // help. Their remaining shield charges ride above it as ticks, so a glance says
+            // both "how close are they" and "have they got anything left in front of it".
+            float f = Math.Clamp(mate.HealthFraction, 0f, 1f);
+            Raylib.DrawRectangle(bx, by, (int)(bw * f), bh,
+                f > 0.35f ? Palette.GridNear : Palette.Warning);
+
+            int charges = Math.Min(mate.ChargesLeft, 10);
+            for (int c = 0; c < charges; c++)
+                Raylib.DrawRectangle(bx + c * 2, by - 3, 1, 2, Palette.BatteryCore);
+
+            // And what they are carrying, under the shield bar. This is the whole social point
+            // of the fragments: a run's five drops are visible on the people who took them, from
+            // across the arena, for the rest of the session. A player carrying nothing has no
+            // tag at all — which is what makes having one worth anything.
+            if (world.Run is { } run && run.Carrying(seat))
+            {
+                string tag = run.TagFor(seat);
+                // Suns are the flag's jaundiced yellow and moons the HUD's cold chrome: the two
+                // colours the palette already keeps for "the warm one" and "the cold one", so a
+                // glance separates them at a range where the letters are illegible.
+                Color tint = run.MoonsOf(seat) == 0 ? Palette.Flag
+                    : run.SunsOf(seat) == 0 ? Palette.HudChrome
+                    : Palette.BatteryCore;   // carrying both
+                PixelFont.DrawCentered(tag, (int)s.X, by + bh + 3, 1, tint);
+            }
+        }
     }
 
     /// <summary>
@@ -385,6 +579,11 @@ public sealed class Renderer : IDisposable
     /// </summary>
     public void DrawMenu(UI.Menu menu, float elapsed)
     {
+        // No world behind the title, so the default sky — SOLUNE at noon. Reset explicitly
+        // rather than assumed: a player who backs out of a match leaves the atmosphere of
+        // wherever they were standing installed, and the menu would inherit ABYSSE's fog.
+        Atmosphere.Reset();
+
         var pos = IdleDrift(elapsed);
         float pan = MathF.Sin(elapsed * 0.05f) * 0.25f;
         var eye = new Vector3(pos.X, Config.CameraHeight + 1.5f, pos.Y);
@@ -434,6 +633,7 @@ public sealed class Renderer : IDisposable
         Raylib.EndTextureMode();
     }
 
+
     /// <summary>
     /// Renders the hangar: the chosen chassis turning slowly on the spot over the same
     /// drifting grid as the menu, with the roster / budget / paint panels laid flat on
@@ -441,7 +641,11 @@ public sealed class Renderer : IDisposable
     /// side panels rather than centred on the screen — the panels are what the player
     /// is reading, and the craft has to sit beside them, not behind them.
     /// </summary>
-    public void DrawClassSelect(UI.ClassSelectScreen screen, float elapsed)
+    /// <param name="goLabel">What the confirm button reads. The multiplayer pod passes READY,
+    /// because it is this same screen and only the host launches a match.</param>
+    /// <param name="note">A line the caller wants under the briefing, or null.</param>
+    public void DrawClassSelect(UI.ClassSelectScreen screen, float elapsed,
+        string goLabel = "LAUNCH", string? note = null)
     {
         var specimen = Vector2.Zero;
 
@@ -505,7 +709,7 @@ public sealed class Renderer : IDisposable
         _entities.DrawLoadoutShowcase(screen.Loadout, specimen, elapsed * 0.6f, eye, elapsed);
         Raylib.EndMode3D();
 
-        ClassSelectRenderer.Draw(screen, elapsed);
+        ClassSelectRenderer.Draw(screen, elapsed, goLabel, note);
 
         Raylib.EndTextureMode();
     }
@@ -515,6 +719,77 @@ public sealed class Renderer : IDisposable
     /// the spot over the grid, with the 2D stat overlay on top. The camera holds
     /// still and low, a few units back, so the turntable does all the moving.
     /// </summary>
+    /// <summary>The multiplayer front door — host/join, the code, the host's rules.</summary>
+    public void DrawLobby(UI.LobbyScreen screen, float elapsed)
+    {
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+        LobbyRenderer.Draw(screen, elapsed);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The walkable multiplayer lobby: a first-person eye at the local walker, looking into a
+    /// domed room over a planet, with everyone else drawn as their chosen craft.
+    /// </summary>
+    /// <summary>
+    /// The solo chart, between the hangar and the drop. Flat 2D into the same small target as
+    /// every other screen — no world behind it, because you are not standing anywhere yet.
+    /// </summary>
+    public void DrawStarMap(UI.StarMap chart, GameMode mode, float elapsed)
+    {
+        Atmosphere.Reset();
+
+        Raylib.BeginTextureMode(_target);
+        StarMapRenderer.Draw(chart, mode, elapsed, voting: false);
+        Raylib.EndTextureMode();
+    }
+
+    public void DrawLobbyRoom(World.LobbyRoom room, float elapsed)
+    {
+        // Standing in the pod IS the hangar, so it is drawn by the hangar — the same
+        // turntable, the same three panes, the same paint bay a solo player gets. Not a
+        // reimplementation of it in room chrome: the identical call, on the identical screen
+        // object, so the two can never drift into being two different benches.
+        if (room.Where == World.LobbyRoom.Focus.Pod)
+        {
+            // The two things the hangar cannot know for itself: that its confirm button
+            // readies you rather than launching anybody, and who else is still deciding.
+            int waiting = room.Avatars.Values.Count(a => !a.Ready);
+            DrawClassSelect(room.Hangar, elapsed, goLabel: "READY", note: waiting switch
+            {
+                0 => null,
+                1 => "1 PLAYER STILL CHOOSING",
+                _ => $"{waiting} PLAYERS STILL CHOOSING",
+            });
+            return;
+        }
+
+        var eye = new Vector3(room.Position.X, World.LobbyRoom.EyeHeight + room.Height, room.Position.Y);
+        float cp = MathF.Cos(room.Pitch), sp = MathF.Sin(room.Pitch);
+        var dir = new Vector3(MathF.Sin(room.Heading) * cp, sp, MathF.Cos(room.Heading) * cp);
+        _camera.FovY = Config.CameraFovY;
+        _camera.Position = eye;
+        _camera.Target = eye + dir;
+        _camera.Up = new Vector3(0f, 1f, 0f);
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+
+        // The sky beyond the dome: a flat starfield behind the 3D pass.
+        foreach (var (sx, sy, b) in _lobbyRoom.Stars)
+            Raylib.DrawPixel(sx, sy, new Color(b, b, (byte)Math.Min(255, b + 20), (byte)255));
+
+        Raylib.BeginMode3D(_camera);
+        _lobbyRoom.Draw3D(room, _entities, eye, elapsed);
+        Raylib.EndMode3D();
+
+        _lobbyRoom.Draw2D(room, _camera, elapsed);
+
+        Raylib.EndTextureMode();
+    }
+
+
     public void DrawTest(UI.TestScreen screen, float elapsed)
     {
         // Fixed low three-quarter view onto the specimen at the origin. The
@@ -604,23 +879,76 @@ public sealed class Renderer : IDisposable
     }
 
     /// <summary>
-    /// Draws a paused run: the frozen world with a pixel-blur closing over it and
-    /// the pause panel on top. <paramref name="t"/> (0..1) is how far the blur has
-    /// set in — 0 is the clean frame, 1 is the fully coarsened, dimmed hold. The
-    /// blur is a genuine downsample: the frame is squeezed to a fraction of its
-    /// size and blown back up nearest-neighbor, so it dissolves into fat blocks
-    /// rather than a soft smear — the same chunky logic as the world upscale.
+    /// Draws a paused run: the world dimmed under a cold wash with the pause panel over it.
+    /// <paramref name="t"/> (0..1) is how far the panel has come in.
+    ///
+    /// <para>This used to close a pixel-blur over the frame, which was a good effect and is
+    /// gone. It was affordable because the world underneath had stopped — the dissolve is two
+    /// full-target blits and it was redrawing a frame that could not change. Multiplayer does
+    /// not stop, and a panel you cannot see the fight through is a panel nobody dares open in
+    /// a match. Blurring one mode and not the other would have made them two different
+    /// screens, so both are a dim.</para>
     /// </summary>
     public void DrawPaused(World.World world, UI.PauseMenu menu, float elapsed, float t)
     {
-        // The sim is frozen, so this redraws the same held frame into _target.
         DrawWorld(world);
-        // Coarsen it, but only dim to a mid wash (not full void) so the world still
-        // reads behind the panel.
-        ApplyPixelDissolve(t, 150);
+        DimWorld(t);
 
         Raylib.BeginTextureMode(_target);
         MenuRenderer.DrawPause(menu, elapsed, t);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The end of a solo run, over the world it happened in. The world is still drawn and still
+    /// stepping behind the dim — the wreck sits where it fell, the smoke goes on drifting — so
+    /// the panel reads as something laid over the place rather than as a cut away from it.
+    /// Dimmed harder than the pause panel: nobody is coming back to this frame to read it.
+    /// </summary>
+    public void DrawRunOver(World.World world, UI.RunOverScreen screen, float elapsed, float t)
+    {
+        DrawWorld(world, null, instruments: false);
+        DimWorld(t);
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(5, 7, 10, (int)(90 * Math.Clamp(t, 0f, 1f))));
+        MenuRenderer.DrawRunOver(screen, elapsed, t);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The settings screen over a live run, reached from the pause panel. Same page, same
+    /// layout and same dim as the panel it replaced — settings opened mid-match are not a
+    /// different screen from settings opened off the title, they are just further in.
+    /// </summary>
+    public void DrawPausedSettings(World.World world, UI.SettingsScreen screen, float elapsed,
+        float t)
+    {
+        DrawWorld(world);
+        DimWorld(t);
+
+        Raylib.BeginTextureMode(_target);
+        // Darker than the pause panel asks for: this page is dense, and a firefight showing
+        // through a column of key names makes both unreadable.
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(5, 7, 10, (int)(110 * Math.Clamp(t, 0f, 1f))));
+        MenuRenderer.DrawSettings(screen, elapsed, (byte)(255 * Math.Clamp(t, 0f, 1f)));
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>Lays a cold wash over whatever is in the target, by <paramref name="amount"/>
+    /// (0 untouched … 1 fully dimmed). Stops short of the void so the world still reads —
+    /// in multiplayer it is still happening, and the player is entitled to watch it.</summary>
+    private void DimWorld(float amount)
+    {
+        amount = Math.Clamp(amount, 0f, 1f);
+        if (amount <= 0f) return;
+
+        float ease = amount * amount * (3f - 2f * amount);
+        Raylib.BeginTextureMode(_target);
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(5, 7, 10, (int)(165 * ease)));
         Raylib.EndTextureMode();
     }
 
