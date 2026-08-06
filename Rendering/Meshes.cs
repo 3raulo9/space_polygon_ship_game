@@ -739,6 +739,54 @@ public static class Meshes
         return m;
     }
 
+    /// <summary>
+    /// A piece of the moon: an irregular shard standing on one point, with a single flat pale
+    /// face where it broke away.
+    ///
+    /// <para>Every other pickup in this game is <em>symmetric</em> — a can, a coil, a brick, a
+    /// crystal, a case — because every other pickup was made or grew. This one is the exception
+    /// on purpose: it is deliberately lopsided, no two of its faces the same size, because the
+    /// one thing it has to say at eighteen pixels is that nobody shaped it. It came off
+    /// something much larger and it is the wrong shape for anything.</para>
+    ///
+    /// <para>The break face gets the paler tone and faces up and forward, so it catches the
+    /// directional light on almost every bearing while the weathered stone around it does not.
+    /// That contrast is what stops the shard reading as a grey lump of scrap.</para>
+    /// </summary>
+    public static PolyMesh MoonShard(Color stone, Color broken)
+    {
+        var m = new PolyMesh();
+
+        // A ragged waist ring at uneven radii and uneven heights, pinched to an apex above and
+        // a point below. The unevenness is hand-picked rather than random: it has to be the
+        // same shard every time so a player learns its silhouette.
+        var waist = new[]
+        {
+            new Vector3(0.46f, 0.40f, 0.06f),
+            new Vector3(0.20f, 0.32f, 0.42f),
+            new Vector3(-0.24f, 0.44f, 0.36f),
+            new Vector3(-0.44f, 0.36f, -0.10f),
+            new Vector3(-0.14f, 0.30f, -0.40f),
+            new Vector3(0.26f, 0.42f, -0.34f),
+        };
+        var apex = new Vector3(0.06f, 0.92f, 0.04f);
+        var foot = new Vector3(-0.04f, 0f, -0.02f);
+
+        for (int i = 0; i < waist.Length; i++)
+        {
+            Vector3 a = waist[i], b = waist[(i + 1) % waist.Length];
+            // One facet of the crown is the fresh break — the widest one, so it owns the
+            // silhouette from the front.
+            m.AddFace(i == 1 ? broken : stone, a, b, apex);
+            m.AddFace(stone, b, a, foot);
+        }
+
+        // A second break plane clipped across the shoulder, so the pale face is a genuine flat
+        // rather than one triangle of the cone in a different colour.
+        m.AddFace(broken, waist[1], waist[2], apex);
+        return m;
+    }
+
     /// <summary>A dull metal cube with a chamfered crown — lead, and nothing else about
     /// it worth drawing.</summary>
     public static PolyMesh MetalBlock(Color fill, Color crown)

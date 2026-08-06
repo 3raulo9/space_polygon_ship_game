@@ -1477,6 +1477,16 @@ public sealed partial class World : IAnchorField
             if (live && !who.Captured) UpdateMouseLook(input, who);
         }
 
+        // The FLOWER reads the same movement keys as the three bodies above and answers them
+        // with about two metres of stalk. It is the one chassis where the movement input is
+        // read even while the crafting panel is up and *means nothing has changed* — a bent
+        // stalk springing back under an overlay is exactly what a plant left alone does.
+        if (who.Flower is { } stalk)
+        {
+            stalk.MoveInput = (local ? ScriptedFlowerLean : null) ?? input.FlowerLean;
+            if (live && !who.Captured) UpdateMouseLook(input, who);
+        }
+
         // The machines — the TANK and the SPIDER — read the same mouse to turn the whole
         // craft, exactly as the two bodies above do.
         if (who.IsMachine && live && !who.Captured) UpdateMouseLook(input, who);
@@ -1500,6 +1510,8 @@ public sealed partial class World : IAnchorField
                 UpdateFishTriggers(swimmer, input, who);
             else if (who.Virus is { } virusRig)
                 UpdateVirusTriggers(virusRig, input, who);
+            else if (who.Flower is { } bloom)
+                UpdateFlowerTriggers(bloom, input, who);
             else
                 UpdateTankTriggers(input, who);   // the TANK's kit, and the plain machine default
 
@@ -1524,6 +1536,10 @@ public sealed partial class World : IAnchorField
             who.Rooted = false;
             // A tank reading the crafting panel is not dug in.
             who.Unplant();
+            // And a flower reading it is not still picking ground. Dropping the aim rather
+            // than committing it: the key going quiet behind an overlay is not a release, and
+            // treating it as one would replant players who opened their pack mid-choice.
+            _replantAiming.Remove(who);
         }
 
         // A soldier reading the crafting panel is not reeling, and a fish reading it is not
@@ -1598,7 +1614,12 @@ public sealed partial class World : IAnchorField
             if (!Authoritative && i != LocalIndex) continue;
             if (who.Rig is { } rig) UpdateSoldierEvents(who, rig, dt);
             if (who.Fish is { } body) UpdateFishEvents(who, body);
+            if (who.Flower is { } stalk) UpdateFlowerEvents(who, stalk, dt);
         }
+
+        // The rosettes age on every machine, host or client — a bloom is a picture, and a
+        // client that only opened its own would watch its team-mates' petals go off in silence.
+        UpdateBlooms(dt);
 
         // Where the ears are, and what kind of space they are in. Above the authority gate
         // on purpose: a client hears the world too, and hears it from its own seat.
@@ -3044,6 +3065,8 @@ public sealed partial class World : IAnchorField
             }
         }
 
+        UpdateMoonfall(dt);
+
         _bossTimer += dt;
         if (_bossTimer >= Cadence(BossSpawnInterval))
         {
@@ -3171,6 +3194,7 @@ public sealed partial class World : IAnchorField
         PickupKind.Lithium        => ItemKind.Lithium,
         PickupKind.CrabCore       => ItemKind.CrabCore,
         PickupKind.RepairKit      => ItemKind.RepairKit,
+        PickupKind.MoonFragment   => ItemKind.MoonFragment,
         _                         => ItemKind.Bullet,
     };
 
@@ -3190,6 +3214,7 @@ public sealed partial class World : IAnchorField
         ItemKind.Lead           => PickupKind.Lead,
         ItemKind.Zinc           => PickupKind.Zinc,
         ItemKind.Lithium        => PickupKind.Lithium,
+        ItemKind.MoonFragment   => PickupKind.MoonFragment,
         _                       => PickupKind.Ammo,
     };
 
@@ -3307,6 +3332,34 @@ public sealed partial class World : IAnchorField
                     return false;
                 }
                 player.RepairHull(RepairKitFraction * slot.Count);
+                slot = ItemStack.Empty;
+                if (local) Audio.PlayPickup(player.Position);
+                return true;
+            }
+
+            // The only item in the game that does more than one thing. Every charge back on the
+            // stack, the hull whole, the reserve full — a cell and a kit and a battery's worth
+            // of reserve, all at once, out of one slot.
+            //
+            // That is not a balance oversight, it is the item. A cell is a decision about the
+            // next thirty seconds; this is a decision about the run, and the tension it is meant
+            // to create is entirely about *when* — hold it and you may die holding it, spend it
+            // early and the thing it would have saved you from is still out there. Refused
+            // outright when nothing is missing, so it can never be wasted by a fat finger on a
+            // craft that is already whole.
+            case ItemKind.MoonFragment:
+            {
+                bool needed = player.Health < player.MaxHealth
+                           || player.Shield < player.MaxShield
+                           || player.Hyper < player.MaxHyper;
+                if (!needed)
+                {
+                    if (local) Audio.PlayFull();
+                    return false;
+                }
+                player.ChargeShield(player.ShieldCharges);
+                player.RepairHull(1f);
+                player.RefillHyper(1f);
                 slot = ItemStack.Empty;
                 if (local) Audio.PlayPickup(player.Position);
                 return true;
@@ -7365,6 +7418,77 @@ public sealed partial class World : IAnchorField
     /// host's and might as well not be there. Over the ceiling, the piece farthest from
     /// everybody is released — never the one just dropped, which is the one somebody earned.
     /// </summary>
+    // --- Moonfall ---------------------------------------------------------------------
+    //
+    // Where a moon fragment comes from, and the only place it does: it falls off the moon.
+    //
+    // Which means it can only happen on a world that <em>has</em> one, and only while that moon
+    // is actually up. Four of the five worlds have no cycle and never see one; on the fifth it
+    // is a thing that happens at night, out under an open sky, and a player who wants the
+    // rarest object in the game has to be somewhere specific at a particular time to get it.
+    // That is the whole design — this is not a rarer battery, it is a reason to be out at night
+    // on a world where the population is nearly twice as hostile after dark (see
+    // Planet.NightHostileBoost).
+
+    private float _moonTimer;
+
+    /// <summary>How often the sky is asked whether it has dropped anything.</summary>
+    private const float MoonfallInterval = 22f;
+
+    /// <summary>The odds on each of those asks, with the moon high overhead. Low: over a full
+    /// night this is roughly one fragment, and some nights it is none.</summary>
+    private const float MoonfallChance = 0.16f;
+
+    /// <summary>How high the moon has to be before anything comes off it. A moon on the horizon
+    /// is a long way away and mostly behind the city; this keeps the fall to the part of the
+    /// night when it is genuinely overhead.</summary>
+    private const float MoonfallAltitude = 0.35f;
+
+    /// <summary>
+    /// One night's worth of the sky occasionally letting go of something. Host-only, like every
+    /// other spawn — a client is told where salvage is, it does not decide.
+    /// </summary>
+    private void UpdateMoonfall(float dt)
+    {
+        if (!Authoritative) return;
+
+        SkyLook sky = Sky;
+        if (sky.MoonAltitude < MoonfallAltitude) { _moonTimer = 0f; return; }
+
+        _moonTimer += dt;
+        if (_moonTimer < MoonfallInterval) return;
+        _moonTimer = 0f;
+
+        // Scaled by how high it is, so the odds peak at the middle of the night rather than
+        // switching on at a threshold — the fall should feel like weather, not like a timer.
+        float overhead = Math.Clamp(
+            (sky.MoonAltitude - MoonfallAltitude) / (1f - MoonfallAltitude), 0f, 1f);
+        if (Random.Shared.NextSingle() > MoonfallChance * overhead) return;
+
+        // A full grid simply does not get one, and the fall is skipped outright rather than
+        // making room for itself.
+        //
+        // This matters more than it looks. Everything else that puts salvage down evicts the
+        // most distant piece when the field is at its ceiling, and in a match "most distant
+        // from seat zero" is very often "lying at the feet of the player on the other side of
+        // the city" — so a fragment falling would quietly delete somebody's hard-won parts to
+        // land itself. The world already refuses to do that for the ambient drip, for exactly
+        // this reason (see the note on IsAmbient), and a once-a-night event has even less claim
+        // on the room's salvage than a floating battery does.
+        if (Pickups.Count >= MaxFieldSalvage) return;
+
+        // It lands somewhere in the middle distance — far enough that finding it is a decision,
+        // near enough that the arrival is visible and audible from where the player is standing.
+        Vector2 at = RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange);
+        DropSalvage(at, PickupKind.MoonFragment);
+
+        // The impact. A piece of grid dust thrown up where it came down and the same distant
+        // roll a detonation across the map gets — because that is exactly what a player hears:
+        // something arrived, out there, hard, and they were not shot at.
+        Debris.Burst(new Vector3(at.X, 0.5f, at.Y), Palette.MoonStone, elite: false);
+        Emit(Cue.ExplosionAt, at);
+    }
+
     private void DropSalvage(Vector2 at, PickupKind kind)
     {
         while (Pickups.Count >= MaxFieldSalvage) RemoveFarthest(Pickups, pk => pk.Position);

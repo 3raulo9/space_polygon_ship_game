@@ -178,6 +178,9 @@ internal static class HudRenderer
         // dashboard has never had an instrument for: the radar says where things are on
         // the plane, and this chassis lives in the column. See FishHud.
         if (p.Fish is { } body) FishHud.DrawOverlay(world, body, p);
+        // And the FLOWER's, for the same reason: this chassis's state is six discrete objects
+        // and a crop clock, and neither of those is expressible as a bar in the strip.
+        if (p.Flower is { } stalk) FlowerHud.DrawOverlay(world, stalk, p);
 
         // And the VIRUS, whose additions are the two things no other chassis has to say:
         // how much of the worn host is left before it bursts, and — the state shout — whether

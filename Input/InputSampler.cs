@@ -60,6 +60,9 @@ public sealed class InputSampler
         if (b.Down(InputAction.Beat)) down |= Btn.Beat;
         if (b.Down(InputAction.Brake)) down |= Btn.Brake;
 
+        if (b.Down(InputAction.Harvest)) down |= Btn.Harvest;
+        if (b.Down(InputAction.Replant)) down |= Btn.Replant;
+
         if (b.Down(InputAction.Slot1)) down |= Btn.Slot1;
         if (b.Down(InputAction.Slot2)) down |= Btn.Slot2;
         if (b.Down(InputAction.Slot3)) down |= Btn.Slot3;

@@ -104,10 +104,16 @@ public sealed class Renderer : IDisposable
         // looking down its heading. The jump lifts the eye with the craft. A soldier's
         // eye is barely half a tank's off the ground, which is most of why the same city
         // reads as something to be small inside rather than something to drive past.
+        //
+        // It sits over the craft's *muzzle* rather than its position, which is the same point
+        // on five of the six chassis and is not on the FLOWER: that one's head hangs off a
+        // stalk that bends a couple of metres, and the whole of its dodge is the eye moving
+        // while the roots do not. See PlayerTank.Muzzle.
+        Vector2 head = player.Muzzle;
         var eye = new Vector3(
-            player.Position.X,
+            head.X,
             player.EyeHeight + player.Height,
-            player.Position.Y);
+            head.Y);
 
         // The direction the eye looks down: the craft's own heading, which the mouse aims
         // on every chassis now.
@@ -147,6 +153,10 @@ public sealed class Renderer : IDisposable
         // Same band again — these are things happening to a body the player is only borrowing.
         if (player.Virus is { Shake: > 0f } corrupted)
             amp = MathF.Max(amp, 0.16f * corrupted.Shake);
+        // A flower's roots letting go, or one of its own petals going off close enough to
+        // feel. Same band as the three bodies above — a plant is a body.
+        if (player.Flower is { Shake: > 0f } shaken)
+            amp = MathF.Max(amp, 0.16f * shaken.Shake);
         // A TANK lurching off its tracks or slamming a hunter throws the hull the same way. The
         // Shake lives on the craft itself (only the tank ever raises it), so this reads it
         // straight — same band as the bodies above, since it is a jolt to a machine, not a set
@@ -232,6 +242,22 @@ public sealed class Renderer : IDisposable
             // the one cue that makes an impulse feel like an impulse.
             float fast = Math.Clamp((body.PlanarSpeed - FishFovSpeed) / 18f, 0f, 1f);
             fov *= 1f + 0.30f * fast * fast + 0.05f * body.Surge;
+        }
+
+        // The FLOWER's head is the camera, and the head is on the end of a stalk. Everything
+        // here is that one fact: the eye is at the *bent* position rather than over the root
+        // (see the eye placement above, which reads Muzzle), it tips with the bend, and it
+        // takes the seed's recoil.
+        //
+        // The bank is the interesting part. On the fish it is steering; here it is the plant
+        // being pushed — a stalk leaning left rolls the horizon slightly right, because the
+        // head is being carried rather than aiming itself — and it is deliberately about a
+        // quarter of what the fish gets. Any more and a dodge reads as a barrel roll.
+        if (player.Flower is { } stalk)
+        {
+            lift = MathF.Tan(Math.Clamp(player.Pitch + stalk.Recoil,
+                -PlayerTank.MaxPitch, PlayerTank.MaxPitch));
+            roll += stalk.Bank;
         }
 
         // The TANK and the SPIDER aim with the mouse now, so the eye looks straight down
@@ -352,6 +378,11 @@ public sealed class Renderer : IDisposable
         // pulse and static of being a naked mote. Like the two above, it returns immediately
         // without its own chassis, so it costs nothing to have here.
         VirusRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
+
+        // And the FLOWER's: the plate closing over the view through a replant, and the faint
+        // gold at the edges of a ripe head. Same bargain as the three above — it returns
+        // immediately without its own chassis, so it costs nothing to have here.
+        FlowerRenderer.DrawScreenEffects(world, (float)Raylib.GetTime());
 
         // Flat instrument panel over the scene: vital bars + radar along the top, plus
         // the R/T/Y/U equip slots showing their 3D item icons.

@@ -62,6 +62,7 @@ public static partial class SelfTest
         failures += Check("the ending screen tells the truth about the run", RunOverReadsTheRun);
         failures += Check("shields break one charge at a time, then the hull bleeds", ShieldChargesThenHull);
         failures += Check("a battery buys a charge and a kit buys hull", CellsAndKitsMendDifferentLayers);
+        failures += Check("a moon fragment buys all three, or nothing", MoonFragmentRestoresEverything);
         failures += Check("a whole build survives the wire", ABuildSurvivesTheWire);
         failures += Check("the spider's lance costs rounds and burns a line", SpiderLanceKills);
         failures += Check("charging the spider's lance roots the craft", SpiderChargeRootsTheCraft);
@@ -286,6 +287,10 @@ public static partial class SelfTest
         // DESCENT: the run director, the rolled bosses and the seam that keeps the mode from
         // quietly becoming SANDBOX with a bar over it. Its own block so the output reads as one.
         failures += RunDescentChecks();
+
+        // The FLOWER: a chassis made almost entirely of refusals, none of which a screenshot
+        // can tell apart from a broken one. Its own block, same reasoning as above.
+        failures += RunFlowerChecks();
 
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
@@ -704,6 +709,51 @@ public static partial class SelfTest
         inv.Slots[3] = new ItemStack(ItemKind.RepairKit, 1);
         if (world.ChargeFromSlot(p, inv, 2)) return "a full craft still swallowed a cell";
         if (world.ChargeFromSlot(p, inv, 3)) return "an unhurt hull still swallowed a kit";
+        return null;
+    }
+
+    /// <summary>
+    /// The moon fragment is the one item that does all three at once — every charge, the whole
+    /// hull, the full reserve — and, exactly like the cell and the kit, refuses to be spent on a
+    /// craft that needs none of it.
+    ///
+    /// <para>The refusal is the half worth checking. This is the rarest object in the game and
+    /// the only one a player might carry across a whole run waiting for the right moment; an
+    /// item that strong being silently swallowed by a full craft on a mis-click is not a
+    /// balance problem, it is the run.</para>
+    /// </summary>
+    private static string? MoonFragmentRestoresEverything()
+    {
+        var world = new World.World(new Loadout(), new MatchSettings { Revives = 3 });
+        PlayerTank p = world.Player;
+
+        // A craft in genuine trouble on all three counts at once, which nothing else in the
+        // game can answer in one action.
+        p.TakeDamage(p.MaxShield + 18f);
+        p.Hyper = 5f;
+        if (p.ChargesLeft != 0) return "the setup left the shield standing";
+        if (p.Health >= p.MaxHealth) return "the setup failed to wound the hull";
+
+        var inv = world.Inventory;
+        inv.Slots[0] = new ItemStack(ItemKind.MoonFragment, 1);
+        if (!world.ChargeFromSlot(p, inv, 0)) return "a fragment refused a craft that needed it";
+
+        if (p.ChargesLeft != p.ShieldCharges)
+            return $"the shield came back to {p.ChargesLeft} of {p.ShieldCharges} charges";
+        if (p.Health < p.MaxHealth) return "the hull was not made whole";
+        if (p.Hyper < p.MaxHyper) return "the reserve was not filled";
+        if (!inv.Slots[0].IsEmpty) return "the fragment was not spent";
+
+        // And it is refused outright by a craft with nothing missing.
+        inv.Slots[1] = new ItemStack(ItemKind.MoonFragment, 1);
+        if (world.ChargeFromSlot(p, inv, 1)) return "a whole craft still swallowed a fragment";
+        if (inv.Slots[1].IsEmpty) return "a refused fragment was spent anyway";
+
+        // It round-trips through the grid like everything else a pack can hold: thrown out and
+        // picked back up, it is still a moon fragment and not a handful of rounds.
+        if (World.World.SalvageOf(ItemKind.MoonFragment) != PickupKind.MoonFragment
+            || World.World.ItemOf(PickupKind.MoonFragment) != ItemKind.MoonFragment)
+            return "a fragment did not survive being thrown on the grid";
         return null;
     }
 

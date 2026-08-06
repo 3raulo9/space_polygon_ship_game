@@ -821,6 +821,72 @@ public static class Audio
         if (force > 0.5f) Synth(Cue.FishBeach, SfxSynth.MawWail(_sfxRng, force), at, force * 0.55f);
     }
 
+    // --- The FLOWER ----------------------------------------------------------------
+
+    /// <summary>
+    /// A petal leaving the ring: the one hymn in this bank. Three pure sines stacked into a
+    /// chord — root, fifth, octave — with no crush on any of them, over a small breath of the
+    /// throw itself so it is still a physical thing being thrown and not merely an organ note
+    /// appearing somewhere.
+    ///
+    /// The whoosh is deliberately quiet and deliberately underneath. Loud enough that the ear
+    /// places the chord on an object; quiet enough that what carries across the city is the
+    /// singing, which is the entire point of the cue.
+    /// </summary>
+    public static void PlayPetalThrow(Vector2 at)
+    {
+        Synth(Cue.FlowerPetalThrow, SfxSynth.PetalHymn(_sfxRng), at);
+        Synth(Cue.FlowerPetalThrow, SfxSynth.PetalFifth(_sfxRng), at, 0.8f);
+        Synth(Cue.FlowerPetalThrow, SfxSynth.PetalGleam(_sfxRng), at, 0.7f);
+
+        var air = SfxSynth.ThrowWhoosh(_sfxRng);
+        air.Length *= 0.45f;
+        air.Attack = 0.01f;
+        Synth(Cue.FlowerPetalThrow, air, at, 0.22f);
+    }
+
+    /// <summary>One re-seating in its gap. The hymn's last note, alone.</summary>
+    public static void PlayPetalCatch(Vector2 at)
+        => Synth(Cue.FlowerPetalCatch, SfxSynth.PetalSeat(_sfxRng), at, 0.75f);
+
+    /// <summary>A petal going off in something: the soft burst with the weapon's own note
+    /// ringing under it, so a kill sounds like the thing that made it.</summary>
+    public static void PlayFlowerBloom(Vector2 at)
+    {
+        Synth(Cue.FlowerBloom, SfxSynth.BloomBurst(_sfxRng), at);
+        Synth(Cue.FlowerBloom, SfxSynth.BloomRing(_sfxRng), at, 0.7f);
+    }
+
+    /// <summary>A ripe head setting seed — three things hitting the grid, so the burst is
+    /// followed by the same collect chime the salvage itself uses, one step up.</summary>
+    public static void PlayFlowerHarvest(Vector2 at)
+    {
+        Synth(Cue.FlowerHarvest, SfxSynth.SeedBurst(_sfxRng), at, 0.9f);
+        Synth(Cue.FlowerHarvest, SfxSynth.PetalSeat(_sfxRng), at, 0.4f);
+    }
+
+    /// <summary>Roots letting go of the plate.</summary>
+    public static void PlayFlowerWilt(Vector2 at)
+        => Synth(Cue.FlowerWilt, SfxSynth.RootTear(_sfxRng, leaving: true), at);
+
+    /// <summary>The plant gone, and the hole where it stood. The tear plus a low thud, which
+    /// is the only part of a replant anybody standing nearby actually gets to react to.</summary>
+    public static void PlayFlowerUproot(Vector2 at)
+    {
+        Synth(Cue.FlowerUproot, SfxSynth.RootTear(_sfxRng, leaving: true), at, 0.8f);
+        var thud = SfxSynth.LandThud(_sfxRng);
+        thud.Length *= 0.7f;
+        Synth(Cue.FlowerUproot, thud, at, 0.55f);
+    }
+
+    /// <summary>Six petals unfurling on new ground: the growth swell, and the chord's own
+    /// fifth over the top of it — the plant tuning up before it can sing again.</summary>
+    public static void PlayFlowerOpen(Vector2 at)
+    {
+        Synth(Cue.FlowerBloomOpen, SfxSynth.RootTear(_sfxRng, leaving: false), at, 0.8f);
+        Synth(Cue.FlowerBloomOpen, SfxSynth.PetalFifth(_sfxRng), at, 0.45f);
+    }
+
     // --- Things that happen to you rather than somewhere ---------------------------
 
     /// <summary>

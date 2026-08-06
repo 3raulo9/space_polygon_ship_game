@@ -27,6 +27,18 @@ public enum ItemKind
     /// <summary>Mends the hull, and is the only thing that does. A battery puts shield
     /// charges back on the stack; nothing puts hull back but this.</summary>
     RepairKit,
+
+    /// <summary>
+    /// A piece of the moon. It falls, on the one world that has a moon to fall off, and it is
+    /// the rarest thing anybody can be holding.
+    ///
+    /// <para>Spent, it does all three things at once — every shield charge, the hull whole, the
+    /// reserve full. Nothing else in the game does more than one, and that is the point of it:
+    /// a cell is a decision about the next thirty seconds and this is a decision about the run.
+    /// It cannot be crafted and it cannot be taken apart. You do not open a piece of the
+    /// moon.</para>
+    /// </summary>
+    MoonFragment,
 }
 
 /// <summary>What each item is called when the panel has room to say so — the hover label,
@@ -48,6 +60,7 @@ public static class ItemNames
         ItemKind.Zinc           => "ZINC",
         ItemKind.Lithium        => "LITHIUM",
         ItemKind.RepairKit      => "REPAIR KIT",
+        ItemKind.MoonFragment   => "MOON FRAGMENT",
         _                       => "SALVAGE",
     };
 }
@@ -168,6 +181,10 @@ public sealed class Inventory
     {
         ItemKind.Battery      => 4,
         ItemKind.RepairKit    => 2,
+        // One. Not because two would be unbalanced — it would, but that is what rarity is for —
+        // because a slot holding "MOON FRAGMENT x3" makes it a supply, and the whole of what
+        // this item is worth is that having one is an event.
+        ItemKind.MoonFragment => 1,
         ItemKind.Bullet       => 20,
         ItemKind.CrabFragment => 9,
         ItemKind.CrabCore     => 1,

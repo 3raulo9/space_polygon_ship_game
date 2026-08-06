@@ -79,6 +79,12 @@ public sealed class Bindings
             InputAction.Beat => K(KeyboardKey.W, KeyboardKey.Space),
             InputAction.Brake => One(KeyboardKey.S),
 
+            // Q and E, which is where this game has always put a chassis's two odd verbs —
+            // the tank's lurch and smoke, the soldier's two hooks. Nothing clashes: never
+            // more than one chassis is being read at a time. See Clashes.
+            InputAction.Harvest => One(KeyboardKey.Q),
+            InputAction.Replant => One(KeyboardKey.E),
+
             InputAction.Slot1 => One(KeyboardKey.R),
             InputAction.Slot2 => One(KeyboardKey.T),
             InputAction.Slot3 => One(KeyboardKey.Y),

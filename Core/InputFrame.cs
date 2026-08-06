@@ -64,6 +64,18 @@ public enum Btn : uint
     /// <summary>Held to cut a DESCENT salvage window short. Read only during an
     /// intermission — everywhere else in the game this bit is set and ignored.</summary>
     Ready      = 1u << 22,
+
+    // --- The FLOWER --------------------------------------------------------------------
+    // Its petal and its seed ride FIRE and SECONDARY like every other chassis's two hands.
+    // These are the two things it has that nothing else does.
+
+    /// <summary>Set seed: spend a ripe head for three things on the grid.</summary>
+    Harvest    = 1u << 23,
+
+    /// <summary>Held to pick ground, released to grow there. A hold rather than a press
+    /// because the whole ability is <em>choosing</em>, and a press would make the most
+    /// committing decision in the class the least deliberate input in it.</summary>
+    Replant    = 1u << 24,
 }
 
 /// <summary>
@@ -206,6 +218,7 @@ public readonly struct InputFrame
         const Btn combat = Btn.Fire | Btn.Secondary | Btn.Hyperspace
                          | Btn.TankLurch | Btn.TankSmoke | Btn.TankSlug | Btn.SpiderPounce
                          | Btn.LeftHook | Btn.RightHook
+                         | Btn.Harvest | Btn.Replant
                          | Btn.Slot1 | Btn.Slot2 | Btn.Slot3 | Btn.Slot4;
         return new(Down & ~combat, Pressed & ~combat, LookX, LookY, AimYaw, AimPitch, HasAim);
     }
@@ -264,6 +277,18 @@ public readonly struct InputFrame
     public Vector2 VirusMove => SoldierMove;
     public bool VirusFireDown => this[Btn.Fire];
     public bool VirusOverloadPressed => Hit(Btn.Secondary);
+
+    // The FLOWER: the soldier's movement keys pointed at a stalk instead of a pair of legs,
+    // and the two buttons that are its own.
+    /// <summary>Which way the stalk is being bent, as (strafe, forward). The same vector every
+    /// other body reads — a player who has rebound their movement has rebound this too.</summary>
+    public Vector2 FlowerLean => SoldierMove;
+    public bool SeedDown => this[Btn.Fire];
+    public bool PetalPressed => Hit(Btn.Secondary);
+    public bool HarvestPressed => Hit(Btn.Harvest);
+    /// <summary>Held while choosing ground. The grow happens on the release — see
+    /// <see cref="ReplantDown"/>'s use in the world's flower triggers.</summary>
+    public bool ReplantDown => this[Btn.Replant];
 
     /// <summary>The four equip slots. Which one was just pressed, or -1.</summary>
     public int WeaponSlotPressed()

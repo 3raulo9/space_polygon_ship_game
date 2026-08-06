@@ -45,6 +45,11 @@ public enum PickupKind
     /// <summary>A repair kit — the only thing on the grid that mends hull. Scarcer than a
     /// cell, and worth crossing a street for.</summary>
     RepairKit,
+
+    /// <summary>A piece of the moon, lying where it came down. The rarest thing on any grid,
+    /// and the only salvage in the game that arrives from <em>above</em> rather than being left
+    /// by something that died.</summary>
+    MoonFragment,
 }
 
 /// <summary>

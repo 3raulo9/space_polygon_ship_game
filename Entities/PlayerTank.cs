@@ -52,7 +52,7 @@ public sealed class PlayerTank
     /// VIRUS) run their own rigs instead. What it still gates: the shallow gun elevation and
     /// the arced cannon shell, both of which are the tank's alone.
     /// </summary>
-    public bool IsMachine => Soldier == null && Fish == null && Virus == null;
+    public bool IsMachine => Soldier == null && Fish == null && Virus == null && Flower == null;
 
     /// <summary>How far the eye — and the gun with it — can crane up or down. The TANK's
     /// gun is stopped short at <see cref="TurretElevation"/>; everything else looks the
@@ -272,6 +272,15 @@ public sealed class PlayerTank
     public VirusRig? Virus { get; private set; }
 
     /// <summary>
+    /// The FLOWER's body, or null on every other chassis. It replaces the physics like the
+    /// three rigs above it, and replaces them with the smallest set in the game: this one does
+    /// not integrate a position at all. The root stays where it was put until a replant picks
+    /// it up, and the only thing that moves between those is the head, on the end of a stalk
+    /// that bends about two metres and springs back.
+    /// </summary>
+    public FlowerRig? Flower { get; private set; }
+
+    /// <summary>
     /// The cable rig currently driving this craft, whoever it belongs to: the SOLDIER's own,
     /// or the one a VIRUS is wearing off a stolen body.
     ///
@@ -296,7 +305,17 @@ public sealed class PlayerTank
     public float EyeHeight => Soldier != null ? SoldierRig.EyeHeight
                             : Fish != null ? FishRig.EyeHeight
                             : Virus != null ? Virus.EyeHeight
+                            : Flower != null ? FlowerRig.EyeHeight
                             : Config.CameraHeight;
+
+    /// <summary>
+    /// Where the craft's <em>gun</em> actually is on the plane, which is the root for every
+    /// chassis but one. The FLOWER's head hangs off the end of a stalk that bends, so a leaning
+    /// plant shoots, throws and is aimed at from a point up to a couple of metres away from the
+    /// thing it is standing on. Everything that fires or is fired at reads this; the root is
+    /// still <see cref="Position"/>, and still what occupies ground and takes a ram.
+    /// </summary>
+    public Vector2 Muzzle => Flower is { } stalk ? Torus.Wrap(Position + stalk.Lean) : Position;
 
     // --- Rockets: the SOLDIER's right trigger --------------------------------
     // Carried, not drawn from the magazine, and deliberately few: a rocket is the only
@@ -461,6 +480,21 @@ public sealed class PlayerTank
     /// </summary>
     private const float SoldierGasRegen = 11f;
 
+    /// <summary>
+    /// How fast the FLOWER's reserve comes back. Faster than everything else on the roster,
+    /// and it has to be: on every other chassis an empty bar costs a jump or a warp, and on
+    /// this one it costs the ability to be anywhere else. A replant every four seconds or so is
+    /// the pace this class travels at, and that is what this number is.
+    ///
+    /// Raised twice on 2026-08-06 alongside the transit itself. Shortening the wilt and the
+    /// sprout makes any one replant quicker; this is what makes the <em>next</em> one come round
+    /// quicker, and until both moved the class was still slow to cross a city however fast an
+    /// individual hop had become. It is now the fastest-refilling reserve in the game by some
+    /// way, which is correct for the one chassis where an empty bar means being stuck rather
+    /// than merely being without a trick.
+    /// </summary>
+    private const float SapRegen = 15f;
+
     // Collision radius on the plane, shared by shots and tank-tank checks.
     public const float Radius = 1.3f;
 
@@ -504,6 +538,7 @@ public sealed class PlayerTank
         }
         if (Class == PlayerClass.Fish) Fish = new FishRig();
         if (Class == PlayerClass.Virus) Virus = new VirusRig();
+        if (Class == PlayerClass.Flower) Flower = new FlowerRig();
 
         Shield = MaxShield;
         Health = MaxHealth;
@@ -593,6 +628,15 @@ public sealed class PlayerTank
         if (Fish is { } body) body.Velocity = Vector3.Zero;
         // ...and a virus, whose flight momentum lives in its own rig for the same reason.
         if (Virus is { } mote) mote.Velocity = Vector3.Zero;
+        // A flower carries no momentum worth clearing — but it carries a *lean*, and a set
+        // piece that has just put one back down must not hand it back a stalk bent halfway
+        // over from before it was picked up.
+        //
+        // The lean and nothing else, emphatically. This is also called on the tick a replant
+        // surfaces, and a full Restore here would put the whole ring back and stand the plant
+        // up mid-sprout — which quietly made the replant a free reload and skipped the fresh
+        // soil the arrival is supposed to pay out.
+        Flower?.ClearLean();
     }
 
     public void Update(float dt, in InputFrame input = default)
@@ -656,6 +700,18 @@ public sealed class PlayerTank
             // seconds of taking it. Same trickle the chassis that owns a rig lives on.
             if (mote.WornRig != null && Hyper < MaxHyper)
                 Hyper = MathF.Min(MaxHyper, Hyper + SoldierGasRegen * dt);
+            return;
+        }
+
+        // The FLOWER owns the transform by refusing to change it. Its reserve — SAP on this
+        // chassis's panel — is the replant's fuel and nothing else's, and it refills faster
+        // than the tank's trickle for the obvious reason: on a craft that cannot walk, an
+        // empty reserve is not a missing panic button, it is being unable to leave.
+        if (Flower is { } stalk)
+        {
+            stalk.Step(dt, this);
+            if (Hyper < MaxHyper)
+                Hyper = MathF.Min(MaxHyper, Hyper + SapRegen * dt);
             return;
         }
 
@@ -973,13 +1029,48 @@ public sealed class PlayerTank
     private const float VirusFireInterval = 0.11f;
 
     /// <summary>
+    /// The FLOWER's ordinary trigger: a seed spat down the eye's line. Costs a magazine round
+    /// like every other primary in the game, so the AMMO track and the bullet salvage go on
+    /// meaning what they mean.
+    ///
+    /// <para>Its cadence is the slowest primary on the roster, and that is the class's
+    /// balance written into one number. A rooted thing gets a stable firing platform for
+    /// free — no lead-while-driving, no recovering from a swing, the crosshair simply sits
+    /// where it is put — and a chassis with that advantage firing at the soldier's six hundred
+    /// rounds a minute would be a turret with an aimbot bolted to the side of it. The seed is
+    /// deliberately chip damage on a slow clock; the petals are where this class's damage
+    /// lives, and there are six of them.</para>
+    ///
+    /// <para>The muzzle is the <em>head</em>, not the root, so a plant leaning out from behind
+    /// a wall genuinely shoots from where its head is.</para>
+    /// </summary>
+    public bool TryFireSeed(out Vector3 origin, out Vector3 direction)
+    {
+        origin = default;
+        direction = Forward3;
+        if (Flower is not { State: FlowerRig.Stance.Rooted }) return false;
+        if (_fireCooldown > 0f || Ammo <= 0) return false;
+
+        origin = Eye + direction * (Radius + 0.4f);
+        _fireCooldown = SeedInterval;
+        Ammo--;
+        return true;
+    }
+
+    private const float SeedInterval = 0.42f;
+
+    /// <summary>
     /// Panic-warp: drains the bulk of the Hyper reserve and flings the craft to a
     /// random spot within range. Blocked (returns false) when the reserve is too
     /// low. A grounded craft only — you can't warp mid-jump.
     /// </summary>
     public bool TryHyperspace()
     {
-        // A dug-in tank can't warp — you're anchored, not mobile. Unplant first.
+        // A dug-in tank can't warp — you're anchored, not mobile. Unplant first. Nor can a
+        // flower, which is anchored permanently and has the replant instead: giving it both
+        // would mean the chassis built around choosing its ground carefully also had a button
+        // that threw it at random ground for free.
+        if (Flower != null) return false;
         if (Hyper < HyperspaceCost || IsAirborne || Planted) return false;
 
         // Random bearing and distance — a genuine gamble, not a controlled blink.
@@ -1068,6 +1159,12 @@ public sealed class PlayerTank
         FlinchAmount = Math.Clamp(amount / 20f, 0.25f, 1f);
         FlinchSeq++;
 
+        // A seed under the plate takes most of a hit off. Not all of it — a mortar dropped on
+        // the ground a flower has just gone into still finds it, and it must, or the replant
+        // becomes a dodge with no counter. What this buys is the transit itself: a player who
+        // commits to leaving does not simply die on the way for having committed.
+        if (Flower is { State: FlowerRig.Stance.Seeded }) amount *= FlowerRig.BuriedArmor;
+
         // Shields first, and they spill: a hit worth more than the charges left breaks all
         // of them and the remainder goes on into the hull, so nothing is ever soaked for
         // free and nothing is ever wasted. A rocket that lands on a craft with one charge
@@ -1085,13 +1182,21 @@ public sealed class PlayerTank
         if (Health > 0f) return;
 
         Health = 0f;
+        // A flower that has been killed comes apart into the thing it was made of: the ring
+        // blows off. Raised before the life is spent so it happens on a final death too —
+        // the last thing a player sees of their own plant should be its petals leaving it.
+        Flower?.Shed();
         if (Lives <= 0) return;
         Lives--;
         // A comeback rebuilds the craft whole: every charge back on the stack and the hull
         // mended. Running out of hull is the only thing that spends a life now — the shield
         // reaching zero used to, which would make a craft with charges to spare and a hull
         // full of holes immortal.
-        if (Lives > 0) { Shield = MaxShield; Health = MaxHealth; }
+        // A comeback rebuilds the whole plant with the hull: every petal back in the ring and
+        // the stalk straight. A revived flower with five of its six petals still on the slow
+        // clock would spend the first half-minute of its new life unable to do the one thing
+        // the class is for.
+        if (Lives > 0) { Shield = MaxShield; Health = MaxHealth; Flower?.Restore(); }
     }
 
     /// <summary>
@@ -1161,7 +1266,9 @@ public sealed class PlayerTank
     /// </summary>
     public bool TryJump()
     {
-        if (Class == PlayerClass.Tank) return false;
+        // Two chassis have no answer to gravity, for opposite reasons: the tank is too heavy
+        // to leave the grid and the flower is attached to it.
+        if (Class is PlayerClass.Tank or PlayerClass.Flower) return false;
         if (Rooted || IsAirborne || Hyper < JumpHyperCost) return false;
         _verticalVel = JumpVel;
         Hyper -= JumpHyperCost;
@@ -1297,6 +1404,9 @@ public sealed class PlayerTank
         ? Math.Clamp(body.PlanarSpeed / TopSpeed, 0f, 1f)
         : Virus is { } mote
         ? Math.Clamp(mote.PlanarSpeed / TopSpeed, 0f, 1f)
+        // Always exactly zero, and the honest answer: this chassis does not travel, so the
+        // engine hum that keys off this never rises and never should.
+        : Flower != null ? 0f
         : Math.Abs(_speed) / TopSpeed;
 
     // --- 0..1 fractions for the HUD bars ---

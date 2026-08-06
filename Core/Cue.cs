@@ -97,6 +97,20 @@ public enum Cue : byte
     /// <summary>Somebody dropped a mark on the world. Placed at the mark, not at the player
     /// who dropped it, so a team-mate facing the other way still hears <em>where</em>.</summary>
     Marker,
+
+    // --- The FLOWER ---------------------------------------------------------------------
+    // One of these is not like the others. Everything in this bank grinds, crushes or tears;
+    // the petal throw is *sung*, and it is meant to sit wrong in the mix on purpose — the same
+    // trick the Crab-Core's beam plays, turned around and handed to the player. See
+    // SfxSynth.PetalHymn.
+
+    FlowerPetalThrow,  // a petal leaving the ring — the holy one
+    FlowerPetalCatch,  // one re-seating in its gap
+    FlowerBloom,       // a petal going off in somebody: the rosette
+    FlowerHarvest,     // a ripe head setting seed
+    FlowerWilt,        // roots tearing out of the plate
+    FlowerUproot,      // the plant gone, a hole where it was
+    FlowerBloomOpen,   // the ring unfurling on new ground
 }
 
 /// <summary>
@@ -307,6 +321,27 @@ public static class CueBank
         t.Set((int)Cue.Wind, "Wind", SoundSpec.Flat with { Bus = Bus.Player, Gain = 0.55f, MaxInstances = 1, Priority = 240 });
         t.Set((int)Cue.CableStrain, "CableStrain", SoundSpec.Flat with { Bus = Bus.Player, Gain = 0.3f, MaxInstances = 1, Priority = 240 });
 
+        // --- The FLOWER --------------------------------------------------------------
+        // The throw carries further than anything else a player owns and is barely absorbed
+        // by air, which is deliberate: a sung chord going up somewhere across the city is
+        // information — it says a flower has committed a petal, and that petal is now coming
+        // back through whatever is between you and it. It is the one player noise in the game
+        // that is meant to be heard by people it is not aimed at.
+        t.Set((int)Cue.FlowerPetalThrow, "FlowerPetalThrow",
+            S(Bus.Player, 0.85f, 210f, 0.8f, 200, 3, reverb: 0.55f, air: 0.3f, jitter: 0f, min: 12f));
+        t.Set((int)Cue.FlowerPetalCatch, "FlowerPetalCatch",
+            S(Bus.Player, 0.5f, 70f, 1.8f, 70, 4, reverb: 0.2f, air: 0.85f, jitter: 0.05f));
+        // The rosette lands on somebody, so it goes with the ordnance rather than with the
+        // plant — a player turning the explosions down is asking for less of exactly this.
+        t.Set((int)Cue.FlowerBloom, "FlowerBloom",
+            S(Bus.Explosions, 0.95f, 170f, 1.15f, 175, 4, reverb: 0.5f, air: 0.55f));
+        // The three that are the plant's own body. Short reach: a harvest is a private event
+        // and nobody across a street needs to know how anybody's crop is doing.
+        t.Set((int)Cue.FlowerHarvest, "FlowerHarvest", S(Bus.Player, 0.6f, 75f, 1.7f, 90, 2, reverb: 0.3f, air: 0.85f));
+        t.Set((int)Cue.FlowerWilt, "FlowerWilt", S(Bus.Player, 0.7f, 90f, 1.6f, 130, 2, reverb: 0.35f, air: 0.8f));
+        t.Set((int)Cue.FlowerUproot, "FlowerUproot", S(Bus.Player, 0.8f, 110f, 1.5f, 140, 2, reverb: 0.4f, air: 0.7f));
+        t.Set((int)Cue.FlowerBloomOpen, "FlowerBloomOpen", S(Bus.Player, 0.7f, 100f, 1.6f, 135, 2, reverb: 0.45f, air: 0.75f));
+
         return t;
     }
 
@@ -400,6 +435,14 @@ public static class CueBank
             case Cue.StructureGroan: Audio.PlayStructureGroan(at); break;
             case Cue.StructureCrack: Audio.PlayStructureCrack(at); break;
             case Cue.Marker: Audio.PlayMarker(at); break;
+
+            case Cue.FlowerPetalThrow: Audio.PlayPetalThrow(at); break;
+            case Cue.FlowerPetalCatch: Audio.PlayPetalCatch(at); break;
+            case Cue.FlowerBloom: Audio.PlayFlowerBloom(at); break;
+            case Cue.FlowerHarvest: Audio.PlayFlowerHarvest(at); break;
+            case Cue.FlowerWilt: Audio.PlayFlowerWilt(at); break;
+            case Cue.FlowerUproot: Audio.PlayFlowerUproot(at); break;
+            case Cue.FlowerBloomOpen: Audio.PlayFlowerOpen(at); break;
         }
     }
 }
