@@ -248,6 +248,11 @@ public sealed partial class World
     private const float BloomRadius = 5.5f;
     private const float BloomDamage = 2f;
 
+    /// <summary>And what the same rosette costs a craft caught at the edge of one. Small on
+    /// purpose: the petal itself carries the kill (see <see cref="PetalPlayerDamage"/>), and
+    /// this is only what standing next to whoever caught it is worth.</summary>
+    private const float BloomPlayerDamage = 6f;
+
     /// <summary>How long a petal will not re-bite the same thing after biting it. Long enough
     /// that crossing a hull over several ticks scores once; short enough that the return leg
     /// through the same hunter scores again, which is the whole reason it is a boomerang.</summary>
@@ -532,6 +537,7 @@ public sealed partial class World
             DamageEnemy(e, BloomDamage, seat);
         }
         DamageSoldiersInBlast(at, height, BloomRadius, BloomDamage);
+        HarmPlayersInBlast(at, height, BloomRadius, BloomPlayerDamage, seat);
     }
 
     /// <summary>Ages the rosettes and sweeps the spent ones. Runs on every machine — a bloom is

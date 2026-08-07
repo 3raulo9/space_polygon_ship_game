@@ -292,6 +292,11 @@ public static partial class SelfTest
         // can tell apart from a broken one. Its own block, same reasoning as above.
         failures += RunFlowerChecks();
 
+        // And whether the six chassis can fight each other at all, which is the one thing a
+        // solo run can never show and a room shows immediately. Its own block, last, because
+        // it stands up a fresh two-seat world per attack and is the slowest thing in the file.
+        failures += RunDuelChecks();
+
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
             : $"SELFTEST: {failures} check(s) FAILED");
@@ -7582,9 +7587,10 @@ public static partial class SelfTest
 
     /// <summary>Two seats, and the world stepped without any input. Seat 0 is the local one,
     /// as it is on a host.</summary>
-    private static World.World TwoSeatWorld()
+    private static World.World TwoSeatWorld(bool friendlyFire = false)
     {
-        var world = new World.World(null, new MatchSettings { MaxPlayers = 4 })
+        var world = new World.World(null,
+            new MatchSettings { MaxPlayers = 4, FriendlyFire = friendlyFire })
         { DynamicSpawning = false };
         world.Enemies.Clear();
         world.AddPlayer(new Loadout { Class = PlayerClass.Tank });
@@ -7719,20 +7725,38 @@ public static partial class SelfTest
         return null;
     }
 
+    /// <summary>
+    /// A splash round reaches every seat standing in it — the bug this originally caught was a
+    /// burst that only ever asked about seat 0, so a team-mate stood in the fireball unharmed —
+    /// and it now also has to obey the two rules a burst was quietly ignoring: the host's
+    /// friendly-fire toggle decides whether it reaches anybody else at all, and the craft that
+    /// lobbed it always wears its own burst whatever the toggle says.
+    /// </summary>
     private static string? SplashBitesEverySeat()
     {
-        World.World world = TwoSeatWorld();
-        PlayerTank mate = world.Players[1];
-        // Stand the two craft together, then lob a mortar onto them. Both should feel it;
-        // measured against seat 0 alone, the mate stood in the fireball unharmed.
-        world.Players[0].Position = Torus.Wrap(new Vector2(0f, 0f));
-        mate.Position = Torus.Wrap(new Vector2(1.5f, 0f));
+        // Both craft standing on the same spot, and seat 0 drops a mortar on their own feet.
+        static (float Mate, float Thrower) LobOnBothHeads(bool friendlyFire)
+        {
+            World.World world = TwoSeatWorld(friendlyFire);
+            PlayerTank thrower = world.Players[0];
+            PlayerTank mate = world.Players[1];
+            thrower.Position = Torus.Wrap(new Vector2(0f, 0f));
+            mate.Position = Torus.Wrap(new Vector2(1.5f, 0f));
 
-        float mateBefore = mate.Shield;
-        world.DetonateMortarForTest(mate.Position);
+            float mateBefore = mate.Shield, throwerBefore = thrower.Shield;
+            world.DetonateMortarForTest(mate.Position, by: 0);
+            return (mateBefore - mate.Shield, throwerBefore - thrower.Shield);
+        }
 
-        if (mate.Shield >= mateBefore)
-            return "a mortar burst on a player's head and they did not feel it";
+        var on = LobOnBothHeads(friendlyFire: true);
+        if (on.Mate <= 0.001f) return "a mortar burst on a player's head and they did not feel it";
+        if (on.Thrower <= 0.001f) return "a player dropped a mortar on their own feet for free";
+
+        var off = LobOnBothHeads(friendlyFire: false);
+        if (off.Mate > 0.001f)
+            return $"friendly fire was off and a mortar still cost a team-mate {off.Mate:0.0} shield";
+        if (off.Thrower <= 0.001f)
+            return "friendly fire off spared a player from their own burst, which is not what it is for";
         return null;
     }
 

@@ -309,6 +309,28 @@ public sealed class PlayerTank
                             : Config.CameraHeight;
 
     /// <summary>
+    /// The middle of this craft's body up its own column — where a shot has to arrive to hit
+    /// it, measured in world height so it already carries whatever the craft is standing on.
+    ///
+    /// <para>Player-versus-player fire used to score against a <em>hunter's</em> dimensions: a
+    /// fixed band 1.4m up, 1.6m either side, borrowed from the machine the whole damage pass
+    /// was originally written against. That is roughly right for a TANK and wrong for most of
+    /// the roster — a FLOWER is three and a half metres of stalk whose head sits above the top
+    /// of that band, so a round placed squarely on the thing the shooter is looking at sailed
+    /// through it, and a VIRUS wearing a Crab-Core was a nine-metre monster with a tank's
+    /// hitbox at its ankles. Six chassis of wildly different size need six columns, and the one
+    /// number every chassis already states about its own height is where its eye sits.</para>
+    /// </summary>
+    public float HitCentre => Height + EyeHeight * 0.5f;
+
+    /// <summary>Half the band's height: the body from foot to eye, plus enough slack to forgive
+    /// a bolt's per-tick step and the fact that a chassis is a little taller than the point it
+    /// sees from.</summary>
+    public float HitHalfHeight => EyeHeight * 0.5f + HitVerticalSlack;
+
+    private const float HitVerticalSlack = 0.9f;
+
+    /// <summary>
     /// Where the craft's <em>gun</em> actually is on the plane, which is the root for every
     /// chassis but one. The FLOWER's head hangs off the end of a stalk that bends, so a leaning
     /// plant shoots, throws and is aimed at from a point up to a couple of metres away from the
