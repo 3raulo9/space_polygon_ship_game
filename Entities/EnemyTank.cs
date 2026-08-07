@@ -48,6 +48,12 @@ public sealed class EnemyTank
     /// there.</summary>
     public Vector3 Toss;
 
+    /// <summary>Which seat hurled this body, or <see cref="Projectile.NoOwner"/> for one that
+    /// nobody threw. Carried because the landing is that player's attack and has to be billed
+    /// to them: a hostage dropped on somebody is the whole point of the throw, and friendly
+    /// fire cannot rule on damage it cannot attribute.</summary>
+    public int FlungBy = Projectile.NoOwner;
+
     private readonly float _moveSpeed;
     private readonly float _turnSpeed;
     private float _preferredRange;   // hangs at this distance, not point-blank

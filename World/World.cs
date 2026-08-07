@@ -286,6 +286,112 @@ public sealed partial class World : IAnchorField
     /// climbing or dropping a couple of metres through the shot's flight slips it.</summary>
     private const float EnemyHitVertical = 1.6f;
 
+    // --- What a player's kit costs another player -------------------------------------
+    //
+    // Every damage number above this line is on the *field's* scale, where a hunter carries
+    // three to five points and a cannon bolt is worth one of them. A craft carries a hundred
+    // across its shield and its hull, so billing a player the field's number is the
+    // difference between being shot and being politely tapped: a hundred rounds to drop
+    // somebody, and a two-second charged lance worth eight of them. Every attack in this game
+    // therefore needs a second number, and this is where they live.
+    //
+    // The anchor is the one that was already tuned against a craft: a hunter's round costs a
+    // player twelve (EnemyShotDamage). A player's own bolt at ten is a fair fight of about ten
+    // hits, and everything else is priced off what it costs to land — a rooted lance is half a
+    // life, a committed strike a third of one, a stray splash rather less.
+    //
+    // <see cref="PetalPlayerDamage"/> in WorldFlower predates all of these and set the naming;
+    // it stays where it is, beside the rest of the FLOWER's numbers.
+
+    /// <summary>What an ordinary player round — the TANK's cannon, the SPIDER's laser, the
+    /// SOLDIER's rifle, the FISH's spit, the VIRUS's corruption bolt and the worn maw's acid —
+    /// costs the craft it lands on.</summary>
+    private const float ShotPlayerDamage = 10f;
+
+    /// <summary>The AP slug, which pierces craft the way it pierces a line of hunters: three
+    /// bolts' worth in one round, for five of the magazine and a long reload.</summary>
+    private const float SlugPlayerDamage = 28f;
+
+    /// <summary>A mortar or a thrown grenade bursting on somebody. Indirect fire, so it is
+    /// worth rather less than a shot placed by hand — what it buys is that it does not have to
+    /// be placed by hand.</summary>
+    private const float MortarPlayerDamage = 22f;
+
+    /// <summary>A rocket going off on somebody: the heaviest single round anybody carries, and
+    /// the one that also takes the building they were standing on.</summary>
+    private const float RocketPlayerDamage = 34f;
+
+    /// <summary>The SPIDER's charged lance at a full meter, scaled down by however much of the
+    /// meter was actually wound. Half a life for two seconds rooted in the open with an exposed
+    /// core facing the field — the most expensive shot on the roster, priced like it.</summary>
+    private const float LancePlayerDamage = 50f;
+
+    /// <summary>One shaft of the VIRUS's broken lance. A pull throws three to five of these on
+    /// axes nobody chose, so the price is per shaft and lands somewhere between one and all of
+    /// them — which is the whole character of a weapon that came apart in the theft.</summary>
+    private const float ShaftPlayerDamage = 14f;
+
+    /// <summary>The FISH's strike. A committed dive onto something at arm's length, off a
+    /// reserve that has to be rebuilt — a third of a craft.</summary>
+    private const float StrikePlayerDamage = 32f;
+
+    /// <summary>Base cost of being rammed by a TANK, scaled by how hard the hull was moving
+    /// exactly as <see cref="RamDamage"/> is. A cruising bump rocks a craft; a lurch-speed slam
+    /// is a third of one.</summary>
+    private const float RamPlayerDamage = 16f;
+
+    /// <summary>What a hunter hurled out of a SPIDER's claw costs whoever it comes down on.
+    /// Worth more than the throw costs the hunter, because the hostage was going to die anyway
+    /// and the point of throwing it is what it lands on.</summary>
+    private const float FlungBodyPlayerDamage = 26f;
+
+    /// <summary>What one tick of a CRAB CORE's lance ring costs a craft standing in it. It
+    /// ticks every <see cref="CrabBlastTickInterval"/> for three seconds, so standing in the
+    /// whole burn is most of a life and running out of it is most of the point.</summary>
+    private const float BlastPlayerDamage = 9f;
+
+    /// <summary>
+    /// Whether one craft's attack may land on another, and whether there is anybody home to
+    /// land it on: the host's friendly-fire toggle (which also refuses a craft its own attack)
+    /// plus the three states that put a craft outside the fight. Every player-versus-player
+    /// pass in the game opens with this, so there is exactly one answer to the question.
+    ///
+    /// <para>And only on the machine entitled to answer it. A client runs its own craft's
+    /// triggers for an instant, responsive feel, so without this a player firing a lance would
+    /// bill a team-mate <em>locally</em> — a number the next snapshot would take straight back
+    /// off them, and, far worse, a local death: <see cref="DamagePlayer"/> counts the fall and
+    /// announces it, so a mispredicted kill would put "SOMEBODY WENT DOWN" on one screen for a
+    /// player who never died. What another craft is worth is the host's to say.</para>
+    /// </summary>
+    private bool Harmable(PlayerTank shooter, PlayerTank mark)
+        => Authoritative && CanHarm(shooter, mark)
+           && mark.Alive && !mark.Away && !mark.Captured;
+
+    /// <summary>
+    /// Bills every craft standing in a blast, on the player scale — the sibling of
+    /// <see cref="DamageSoldiersInBlast"/> and height-gated the same way, so a burst on the
+    /// grid does not reach somebody at the top of an arc and one against a wall halfway up a
+    /// tower very much does.
+    ///
+    /// <paramref name="by"/> is the seat that caused it. A blast nobody can be billed for
+    /// (<see cref="Projectile.NoOwner"/>, or a seat that has since been vacated) simply bills
+    /// nobody — an unattributable explosion is one no friendly-fire rule can reason about.
+    /// </summary>
+    private void HarmPlayersInBlast(Vector2 at, float height, float radius, float amount, int by)
+    {
+        if ((uint)by >= (uint)Players.Count) return;
+        PlayerTank source = Players[by];
+
+        for (int seat = 0; seat < Players.Count; seat++)
+        {
+            PlayerTank mark = Players[seat];
+            if (!Harmable(source, mark)) continue;
+            if (!WithinHit(at, mark.Position, radius + PlayerTank.Radius)) continue;
+            if (MathF.Abs(height - mark.HitCentre) > radius + mark.HitHalfHeight) continue;
+            DamagePlayer(amount, mark, at);
+        }
+    }
+
     // Hull fraction at which the low-health alarm sounds. Crossing *down* through this
     // line fires warning.wav once — not once per frame below it.
     //
@@ -2477,7 +2583,7 @@ public sealed partial class World : IAnchorField
                 // lances it throws is perfectly capable of bringing the wall down.
                 if (p.IsCrabBomb)
                 {
-                    StageCrabBlast(p.Position);
+                    StageCrabBlast(p.Position, p.Owner);
                 }
                 else if (p.IsRocket)
                 {
@@ -2933,10 +3039,10 @@ public sealed partial class World : IAnchorField
 
     /// <summary>Test hatch: bursts a mortar shell at a named spot, so the splash can be
     /// asked who it actually bills without flying a round there first.</summary>
-    public void DetonateMortarForTest(Vector2 at)
+    public void DetonateMortarForTest(Vector2 at, int by = Projectile.NoOwner)
     {
         var shell = new Projectile();
-        shell.FireGrenade(Torus.Wrap(at), new Vector2(0f, 1f), Projectile.NoOwner);
+        shell.FireGrenade(Torus.Wrap(at), new Vector2(0f, 1f), by);
         shell.Position = Torus.Wrap(at);
         DetonateMortar(shell);
     }
@@ -3433,7 +3539,8 @@ public sealed partial class World : IAnchorField
 
     /// <summary>Test hatch: stages a CRAB CORE blast a fixed distance ahead of the
     /// player, so the capture harness can photograph the cinematic without timing a throw.</summary>
-    public void StageCrabBlastAheadForTest() => StageCrabBlast(Player.Position + Player.Forward * 20f);
+    public void StageCrabBlastAheadForTest()
+        => StageCrabBlast(Player.Position + Player.Forward * 20f, LocalIndex);
 
     /// <summary>
     /// A random fog-ring point around <em>somebody</em> — a living seat picked at random each
@@ -3789,6 +3896,29 @@ public sealed partial class World : IAnchorField
             who.Jolt(0.2f);
             Emit(Cue.Detonation, who.Position, owner: seat);
         }
+
+        // And another craft, which a hull travelling this fast has no reason to treat any
+        // differently from a hunter's. The shove is the same one for the same reason: a rammed
+        // craft is knocked clear in one tick, so a slam bills once rather than every frame the
+        // two hulls are overlapping.
+        float craftReach = PlayerTank.Radius * 2f;
+        for (int i = 0; i < Players.Count; i++)
+        {
+            PlayerTank mark = Players[i];
+            if (!Harmable(who, mark)) continue;
+            if (MathF.Abs(who.Height - mark.Height) > EnemyTank.BodyHeight) continue;
+            if (!WithinHit(who.Position, mark.Position, craftReach)) continue;
+
+            DamagePlayer(RamPlayerDamage * (0.6f + over), mark, who.Position);
+
+            Vector2 shove = Torus.Delta(who.Position, mark.Position);
+            shove = shove.LengthSquared() > 1e-4f ? Vector2.Normalize(shove) : who.Forward;
+            mark.Position = Torus.Wrap(mark.Position + shove * RamShove);
+
+            who.Jolt(0.35f);
+            mark.Jolt(0.5f);
+            Emit(Cue.Detonation, who.Position, owner: seat);
+        }
     }
 
     /// <summary>
@@ -3900,11 +4030,19 @@ public sealed partial class World : IAnchorField
         // owns the field — felt nothing when a rocket went off beside them. It now rides the
         // cue instead (see ShakeFromBlast), so every machine shakes for every blast it can
         // actually hear, and the one code path serves the host, the client and the spectator.
-        foreach (var mark in Players)
+        //
+        // Two prices, and the split is the whole point. Whoever lobbed it always wears their
+        // own burst at the field's number — a mistake tax, not a weapon, and one the host's
+        // toggle has no business switching off. Everybody else pays the player-scale number,
+        // and only when the toggle says they can: a splash that ignored friendly fire made
+        // "FRIENDLY FIRE: OFF" a lie about half the ordnance in the game.
+        HarmPlayersInBlast(p.Position, at.Y, p.SplashRadius, MortarPlayerDamage, p.Owner);
+        if ((uint)p.Owner < (uint)Players.Count)
         {
-            if (mark.Away || !mark.Alive) continue;
-            if (Torus.Distance(p.Position, mark.Position) < p.SplashRadius + PlayerTank.Radius)
-                DamagePlayer(GrenadeDamage, mark);
+            PlayerTank thrower = Players[p.Owner];
+            if (!thrower.Away && thrower.Alive
+                && Torus.Distance(p.Position, thrower.Position) < p.SplashRadius + PlayerTank.Radius)
+                DamagePlayer(GrenadeDamage, thrower, p.Position);
         }
     }
 
@@ -4065,7 +4203,10 @@ public sealed partial class World : IAnchorField
         // Down <paramref name="who"/>'s look line. This read the local craft's heading, so on
         // the host a remote player's throw flew off along whatever direction the host happened
         // to be facing — a hostage hurled at nothing, from the thrower's point of view.
-        if (claw.Throw(who.Forward3) is null) return;
+        if (claw.Throw(who.Forward3) is not { } thrown) return;
+        // Stamped at the launch, not read off the claw at the landing: by the time the hull
+        // comes down the spider may have let go of everything, died, or thrown a second one.
+        thrown.FlungBy = Seat(who);
         Emit(Cue.ThrowWhoosh, who.Position, owner: Seat(who));
         who.Jolt(0.2f);
     }
@@ -4122,6 +4263,11 @@ public sealed partial class World : IAnchorField
         }
 
         DamageSoldiersInBlast(at, 0f, SpiderClaw.ImpactRadius, SpiderClaw.ThrownBodyDamage);
+
+        // And whoever was standing where it came down. This is what a throw is *for* — the
+        // hostage was going to die in the hand anyway — and against a craft it did nothing at
+        // all until now, which made the SPIDER's whole left limb a hunter-only weapon.
+        HarmPlayersInBlast(at, 0f, SpiderClaw.ImpactRadius, FlungBodyPlayerDamage, body.FlungBy);
 
         Debris.Collapse(new Vector3(at.X, 0.6f, at.Y), Vector2.UnitX, 2f,
             body.IsElite ? Palette.EliteFill : Palette.EnemyFill, 1f);
@@ -4309,15 +4455,23 @@ public sealed partial class World : IAnchorField
     /// </summary>
     private void BurnSpiderLance(SpiderWeapon spider, float damage, int by = Projectile.NoOwner)
         => BurnBeamAlong(spider.BeamOrigin, spider.BeamDirection,
-            spider.BeamLength, spider.BeamRadius, damage, by);
+            spider.BeamLength, spider.BeamRadius, damage, by,
+            // Scaled off the shot's own field damage rather than off the meter, because by the
+            // time this runs the meter has been spent and the charge it was wound to is gone.
+            LancePlayerDamage * damage / SpiderWeapon.MaxDamage);
 
     /// <summary>
     /// Applies one fired beam of any owner's making to the world — the SPIDER's charged
     /// lance and each shaft of the worn crab's broken one both come through here, so what a
     /// beam can do is decided in exactly one place.
+    ///
+    /// <paramref name="playerDamage"/> is what the same beam costs another craft, which is a
+    /// separate number for the reason every player-scale number is (see
+    /// <see cref="ShotPlayerDamage"/>). Zero means the beam does not touch craft at all, which
+    /// is what a beam nobody in a seat fired should do.
     /// </summary>
     private void BurnBeamAlong(Vector3 origin, Vector3 direction, float length, float radius,
-        float damage, int by = Projectile.NoOwner)
+        float damage, int by = Projectile.NoOwner, float playerDamage = 0f)
     {
         var originXZ = new Vector2(origin.X, origin.Z);
 
@@ -4376,6 +4530,33 @@ public sealed partial class World : IAnchorField
             if (MathF.Abs(beamY - body) > radius + EnemySoldier.BodyHeight * 0.5f) continue;
 
             DamageSoldier(s, damage, new Vector2(origin.X, origin.Z));
+        }
+
+        // And the other craft, which is the one thing on this list a lance used to pass
+        // straight through. Both weapons that come through here are their chassis's most
+        // expensive shot — two seconds rooted with an exposed core facing the field, or a
+        // slice of the body the emitter is running on — and in a room they were a very bright
+        // way of doing nothing at all. Same axis test the two loops above use, measured
+        // against the craft's own bulk.
+        if (playerDamage > 0f && (uint)by < (uint)Players.Count)
+        {
+            PlayerTank source = Players[by];
+            for (int seat = 0; seat < Players.Count; seat++)
+            {
+                PlayerTank mark = Players[seat];
+                if (!Harmable(source, mark)) continue;
+
+                Vector2 near = Torus.NearestImage(mark.Position, originXZ);
+                float along = Math.Clamp(Vector2.Dot(near - originXZ, dirXZ), 0f, length);
+                if (Vector2.Distance(near, originXZ + dirXZ * along)
+                    > radius + PlayerTank.Radius) continue;
+
+                float beamY = origin.Y + slope * along;
+                if (MathF.Abs(beamY - mark.HitCentre) > radius + mark.HitHalfHeight) continue;
+
+                DamagePlayer(playerDamage, mark, originXZ);
+                mark.Jolt(0.5f);
+            }
         }
 
         // Step down the shaft looking for the two crystals. A one-unit stride is well
@@ -5787,7 +5968,7 @@ public sealed partial class World : IAnchorField
                 continue;
             }
 
-            if (p.IsCrabBomb) StageCrabBlast(p.Position);
+            if (p.IsCrabBomb) StageCrabBlast(p.Position, p.Owner);
             else if (p.IsRocket) DetonateRocket(p);
             else if (p.IsGrenade) DetonateMortar(p);
             else
@@ -6252,6 +6433,24 @@ public sealed partial class World : IAnchorField
             return;
         }
 
+        // Another craft, and it belongs here for the same reason the squads do: in a room the
+        // thing swimming past at arm's length is far more likely to be a player than anything
+        // the field put there. Tested as a volume, like the soldiers — a strike is a body
+        // arriving somewhere, not a bolt on a plane.
+        for (int i = 0; i < Players.Count; i++)
+        {
+            PlayerTank mark = Players[i];
+            if (!Harmable(who, mark)) continue;
+            if (!WithinHit(who.Position, mark.Position, reach + PlayerTank.Radius)) continue;
+            if (MathF.Abs(who.HitCentre - mark.HitCentre)
+                > reach + mark.HitHalfHeight) continue;
+            if (!body.ConsumeStrike()) return;
+            DamagePlayer(StrikePlayerDamage, mark, who.Position);
+            mark.Jolt(0.4f);
+            LandStrike(who, seat, at, Palette.PlayerFill);
+            return;
+        }
+
         // Hunters sit on the grid, so a strike only reaches one if the dive has genuinely
         // come down to them — a fish cruising at thirty metres cannot spear something on
         // the floor by pointing at it, and the whole cost of the attack is committing to
@@ -6510,7 +6709,7 @@ public sealed partial class World : IAnchorField
                 : 0.18f + 0.45f * Random.Shared.NextSingle());
             mote.AddShaft(who.Eye + dir * 8f, dir);
             BurnBeamAlong(who.Eye + dir * 0.8f, dir, VirusRig.LanceLength,
-                VirusRig.LanceRadius, VirusRig.LanceDamage, Seat(who));
+                VirusRig.LanceRadius, VirusRig.LanceDamage, Seat(who), ShaftPlayerDamage);
         }
 
         // Unconditional: Emit already decides who hears it, and gating it on "is this our own
@@ -6747,7 +6946,7 @@ public sealed partial class World : IAnchorField
     {
         if (overload)
         {
-            StageCrabBlast(who.Position);
+            StageCrabBlast(who.Position, Seat(who));
             return;
         }
 
@@ -6856,10 +7055,19 @@ public sealed partial class World : IAnchorField
             // The kick is a camera effect and belongs to the eye behind it.
             if (mark.Rig is { } rig && ReferenceEquals(mark, Eye))
                 rig.Jolt(0.35f + 0.65f * (1f - range / RocketShakeRange));
-            // And it stings if they are genuinely inside the blast, which a contact fuse on
-            // a fast approach makes entirely possible.
-            if (range < Projectile.RocketSplash + PlayerTank.Radius)
-                DamagePlayer(GrenadeDamage * 3f, mark);
+        }
+
+        // And what it costs. Split exactly as the mortar's is: the soldier who fired it always
+        // wears their own blast — a contact fuse on a fast approach makes that entirely
+        // possible and it is their own problem — while everybody else pays the heaviest
+        // player-scale number any single round carries, and only when the host allowed it.
+        HarmPlayersInBlast(p.Position, at.Y, Projectile.RocketSplash, RocketPlayerDamage, p.Owner);
+        if ((uint)p.Owner < (uint)Players.Count)
+        {
+            PlayerTank firer = Players[p.Owner];
+            if (!firer.Away && firer.Alive
+                && Torus.Distance(p.Position, firer.Position) < Projectile.RocketSplash + PlayerTank.Radius)
+                DamagePlayer(GrenadeDamage * 3f, firer, p.Position);
         }
     }
 
@@ -6939,7 +7147,7 @@ public sealed partial class World : IAnchorField
             // A thrown CRAB CORE that reached the end of its short lob without striking
             // anything goes off where it landed — the ring of lances erupts there.
             if (p.JustExpired && p.IsCrabBomb)
-                StageCrabBlast(p.Position);
+                StageCrabBlast(p.Position, p.Owner);
 
             // A rocket has a contact fuse and nothing else: it goes off wherever it
             // stops, which includes the grid it flew into and the empty air at the end
@@ -7079,7 +7287,7 @@ public sealed partial class World : IAnchorField
                     }
 
                     if (p.IsCrabBomb)
-                        StageCrabBlast(p.Position); // erupts into the lance ring here
+                        StageCrabBlast(p.Position, p.Owner); // erupts into the lance ring here
                     else if (p.IsRocket)
                         DetonateRocket(p);
                     else if (p.IsGrenade)
@@ -7144,40 +7352,7 @@ public sealed partial class World : IAnchorField
                     // the shooter without needing to be carried on the round.
                     float bite = p.IsTracer ? SoldierShotDamage : EnemyShotDamage;
 
-                    // The SPIDER holding a machine out in front of its core: the round
-                    // meets the hostage instead. This is the counterplay to having the
-                    // weak point on the front of the craft, and it is why the claw is a
-                    // defensive tool before it is an offensive one — the field ends up
-                    // shooting its own, and the player is standing behind it.
-                    if (mark.Claw is { } claw
-                        && claw.ShieldsFrom(p.Velocity, mark.Forward)
-                        && claw.Victim is { } shieldBody)
-                    {
-                        DamageEnemy(shieldBody, claw.Soak());
-                        mark.Jolt(0.15f);
-                        Emit(Cue.Hit, mark.Position, owner: Seat(mark));
-                        p.Active = false;
-                        break;
-                    }
-
-                    DamagePlayer(bite * mark.ArmorMultiplierFromShot(p.Velocity), mark, p.Position);
-
-                    // And a round that found the core while the lance was winding takes
-                    // the wind with it. The charge is gone, the emitter is dead for a
-                    // beat, and the two seconds of standing still that bought it were
-                    // spent for nothing — which is exactly the risk the brace is the
-                    // reward for. See SpiderWeapon.Break.
-                    if (mark.StruckInTheCore(p.Velocity)
-                        && mark.Spider is { } emitter && emitter.Break())
-                    {
-                        mark.Rooted = false;
-                        mark.Jolt(0.5f);
-                        if (ReferenceEquals(mark, Player))
-                        {
-                            Audio.SetLanceCharge(false, 0f);
-                            Audio.PlayWarning(mark.Position);
-                        }
-                    }
+                    BiteCraft(mark, bite, p.Velocity, p.Position);
 
                     p.Active = false;
                     break;
@@ -7185,6 +7360,61 @@ public sealed partial class World : IAnchorField
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// One directed round arriving at one craft, whoever fired it: what the craft is carrying,
+    /// what its plating does about the angle, and what the hit costs whatever it was in the
+    /// middle of doing.
+    ///
+    /// <para>All three of these used to live inside the <em>enemy</em> round's branch and
+    /// nowhere else, which quietly meant the SPIDER's two defining bargains did not exist
+    /// between players at all: a hostage carried out in front of the core stopped a hunter's
+    /// bolt and not a team-mate's, and a round into that core broke a winding lance only if the
+    /// field had fired it. The plate a shot meets, the cover it meets and the charge it spoils
+    /// are facts about the craft being shot, not about who is shooting — so they are one
+    /// method now, and the two branches cannot drift apart again.</para>
+    /// </summary>
+    /// <returns>True if the hostage in the claw ate it, in which case the craft itself took
+    /// nothing and the caller should skip whatever shake it was about to add.</returns>
+    private bool BiteCraft(PlayerTank mark, float amount, Vector2 shotVelocity, Vector2 at)
+    {
+        // The SPIDER holding a machine out in front of its core: the round meets the hostage
+        // instead. This is the counterplay to having the weak point on the front of the craft,
+        // and it is why the claw is a defensive tool before it is an offensive one — the
+        // field ends up shooting its own, and the player is standing behind it.
+        if (mark.Claw is { } claw
+            && claw.ShieldsFrom(shotVelocity, mark.Forward)
+            && claw.Victim is { } shieldBody)
+        {
+            DamageEnemy(shieldBody, claw.Soak());
+            mark.Jolt(0.15f);
+            Emit(Cue.Hit, mark.Position, owner: Seat(mark));
+            return true;
+        }
+
+        // Directional armour: on the TANK the blow is turned by the sloped front, taken square
+        // on the flanks and taken worse from behind, and planting turns the front harder still;
+        // on the SPIDER that rule inverted around the exposed core. Facing is a machine's
+        // defence. Returns 1 for the three bodies, which have no plating.
+        DamagePlayer(amount * mark.ArmorMultiplierFromShot(shotVelocity), mark, at);
+
+        // And a round that found the core while the lance was winding takes the wind with it.
+        // The charge is gone, the emitter is dead for a beat, and the two seconds of standing
+        // still that bought it were spent for nothing — which is exactly the risk the brace
+        // is the reward for. See SpiderWeapon.Break.
+        if (mark.StruckInTheCore(shotVelocity)
+            && mark.Spider is { } emitter && emitter.Break())
+        {
+            mark.Rooted = false;
+            mark.Jolt(0.5f);
+            if (ReferenceEquals(mark, Player))
+            {
+                Audio.SetLanceCharge(false, 0f);
+                Audio.PlayWarning(mark.Position);
+            }
+        }
+        return false;
     }
 
     /// <summary>
@@ -7202,6 +7432,13 @@ public sealed partial class World : IAnchorField
     ///
     /// The shooter is read back off the round rather than passed in, because by the time a
     /// bolt lands the craft that fired it may be somewhere else entirely, or dead.
+    ///
+    /// What arriving costs is decided by what arrived, exactly as it is for a hunter or a
+    /// soldier: a splash round goes off against the craft (and its blast bills everybody
+    /// standing there, the shooter included) rather than plinking it for a bolt's worth, and
+    /// the AP slug bulls on through. This used to be one line billing every round in the game
+    /// the same single point, which meant a rocket to the chest was a tap and a hundred
+    /// cannon shells were a life.
     /// </summary>
     private void StrikePlayers(Projectile p)
     {
@@ -7213,20 +7450,36 @@ public sealed partial class World : IAnchorField
         for (int seat = 0; seat < Players.Count; seat++)
         {
             PlayerTank mark = Players[seat];
-            if (!mark.Alive || mark.Captured || mark.Away) continue;
-            if (!CanHarm(shooter, mark)) continue;
+            if (!Harmable(shooter, mark)) continue;
 
-            float aimH = mark.Height + EnemyTank.AimHeight;
             // Where the shooter saw them, so a duel between two clients is decided by what
             // each of them could see rather than by which of them has the better ping.
             if (!WithinHit(p.Position, RewoundSeat(seat, p.Owner, mark.Position),
                     PlayerTank.Radius)) continue;
-            if (MathF.Abs(p.Height - aimH) >= EnemyHitVertical) continue;
+            // Up the craft's own column, not a hunter's — see PlayerTank.HitCentre.
+            if (MathF.Abs(p.Height - mark.HitCentre) >= mark.HitHalfHeight) continue;
 
-            // Billed as a player's round, because it is one — the same damage a hunter
-            // would have taken from it, turned by the victim's own plating.
-            DamagePlayer(PlayerShotDamage * mark.ArmorMultiplierFromShot(p.Velocity), mark, p.Position);
-            mark.Jolt(0.2f);
+            if (p.IsPiercing)
+            {
+                // The slug rakes a line of craft the way it rakes a line of hunters, and for
+                // the same reason it needs a memory: at ninety a second it crosses a hull over
+                // several ticks and would otherwise bill it on every one of them.
+                uint bit = 1u << (seat & 31);
+                if ((p.PierceSeats & bit) == 0u)
+                {
+                    p.PierceSeats |= bit;
+                    if (!BiteCraft(mark, SlugPlayerDamage, p.Velocity, p.Position))
+                        mark.Jolt(0.4f);
+                }
+                continue;
+            }
+
+            if (p.IsCrabBomb) StageCrabBlast(p.Position, p.Owner);
+            else if (p.IsRocket) DetonateRocket(p);
+            else if (p.IsGrenade) DetonateMortar(p);
+            else if (!BiteCraft(mark, ShotPlayerDamage, p.Velocity, p.Position))
+                mark.Jolt(0.2f);
+
             p.Active = false;
             return;
         }
@@ -7733,9 +7986,9 @@ public sealed partial class World : IAnchorField
     /// sounds its creepier, layered echo of the boss's beam, and throws a hot neon
     /// burst of debris at the centre.
     /// </summary>
-    private void StageCrabBlast(Vector2 at)
+    private void StageCrabBlast(Vector2 at, int by = Projectile.NoOwner)
     {
-        Blasts.Add(new CrabCoreBlast(at));
+        Blasts.Add(new CrabCoreBlast(at, by));
         Emit(Cue.CrabCoreBlast, at);
         Debris.Burst(new Vector3(at.X, CrabCoreBlast.CoreHeight, at.Y), Palette.NeonRed, elite: true);
         Debris.Burst(new Vector3(at.X, 0.4f, at.Y), Palette.CrabChassis, elite: false);
@@ -7792,6 +8045,12 @@ public sealed partial class World : IAnchorField
                 if (Torus.DistanceSquared(e.Position, blast.Position) <= reachSq)
                     DamageEnemy(e, CrabBlastDamage);
             }
+
+            // And the craft standing in it, on their own scale. The sphere reaches a player in
+            // the air above it exactly as far as it reaches a hunter beside it, so the height
+            // band is the field's own radius rather than a hull's.
+            HarmPlayersInBlast(blast.Position, CrabCoreBlast.CoreHeight, field,
+                BlastPlayerDamage, blast.Owner);
 
             // The big monsters are fair game too — a thrown core is powerful enough to
             // bite the Crab-Core's own gem and the Maw-Core's crystal. Both are only

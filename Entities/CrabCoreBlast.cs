@@ -17,6 +17,11 @@ public sealed class CrabCoreBlast
     public readonly Vector2 Position;   // where it landed, on the grid plane (X, Z)
     public float Age;
 
+    /// <summary>Which seat's core this was — a thrown CRAB CORE or a spent VIRUS host — or
+    /// <see cref="Projectile.NoOwner"/> for one nobody can be billed for. The field bites
+    /// craft as readily as it bites hunters, and friendly fire has to know whose it is.</summary>
+    public readonly int Owner;
+
     /// <summary>The full cinematic runs this long.</summary>
     public const float Life = 3f;
 
@@ -39,9 +44,10 @@ public sealed class CrabCoreBlast
     // time-varying rotation so the whole burst churns rather than sitting rigid.
     private readonly Vector3[] _base;
 
-    public CrabCoreBlast(Vector2 position)
+    public CrabCoreBlast(Vector2 position, int owner = Projectile.NoOwner)
     {
         Position = position;
+        Owner = owner;
         _base = new Vector3[BeamCount];
 
         // Fibonacci sphere: walk evenly down the y axis and spin by the golden angle,
