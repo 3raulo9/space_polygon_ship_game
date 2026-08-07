@@ -91,6 +91,19 @@ public sealed class Projectile
     /// of ticks scores it exactly once. Null on every round that isn't piercing.</summary>
     public EnemyTank? PierceLast;
 
+    /// <summary>
+    /// The same memory for craft: one bit per seat, set as the slug crosses each of them.
+    ///
+    /// <para>A set rather than <see cref="PierceLast"/>'s single "the one I am crossing", for
+    /// two reasons. Seats fit — there are twenty of them (<c>MatchSettings.MaxSeats</c>) and
+    /// thirty-two bits here — and a slug that raked two craft standing side by side would
+    /// otherwise remember only the second and bill the first again on the very next tick, which
+    /// at a slug's price is most of a life for standing next to somebody. It is a seat and not
+    /// a reference because a seat outlives the object in it: a craft rebuilt at the hangar
+    /// bench is a different <see cref="PlayerTank"/> in the same chair.</para>
+    /// </summary>
+    public uint PierceSeats;
+
     private const float Speed = 90f;
 
     /// <summary>
@@ -185,6 +198,7 @@ public sealed class Projectile
         IsAcid = false;
         IsPiercing = piercing;
         PierceLast = null;
+        PierceSeats = 0u;
         Seeds = false;
         FromAlly = false;
         _climb = MathF.Sin(pitch) * speed;
@@ -233,6 +247,7 @@ public sealed class Projectile
         IsAcid = false;
         IsPiercing = false;
         PierceLast = null;
+        PierceSeats = 0u;
         Seeds = false;
         FromAlly = false;
         SplashRadius = GrenadeSplash;
@@ -286,6 +301,7 @@ public sealed class Projectile
         IsAcid = false;
         IsPiercing = false;
         PierceLast = null;
+        PierceSeats = 0u;
         Seeds = false;
         FromAlly = false;
         SplashRadius = 0f;      // the beams carry the damage, not a splash sphere
@@ -336,6 +352,7 @@ public sealed class Projectile
         IsLaser = false;
         IsPiercing = false;
         PierceLast = null;
+        PierceSeats = 0u;
         IsAirShot = false;
         SplashRadius = rocket ? RocketSplash : 0f;
         Life = rocket ? MaxLife : 1.6f;

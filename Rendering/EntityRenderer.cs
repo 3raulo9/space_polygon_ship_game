@@ -39,6 +39,7 @@ public sealed class EntityRenderer
     private readonly PolyMesh _lithium = Meshes.Rod(Palette.HudChrome, Palette.LithiumRose);
     private readonly PolyMesh _core = Meshes.CrabCoreGem(Palette.NeonMagenta);
     private readonly PolyMesh _kit = Meshes.RepairKit(Palette.RepairShell, Palette.RepairMark);
+    private readonly PolyMesh _moon = Meshes.MoonShard(Palette.MoonStone, Palette.MoonBreak);
 
     // The DESCENT bosses. One renderer for all five lineages and every roll: unlike the crab
     // and the mouth, whose bodies are typed out, these are built from a genome at the moment
@@ -112,15 +113,26 @@ public sealed class EntityRenderer
     // the player sees is the infection over the frame rather than a craft in front of them.
     private readonly VirusModel _virusModel = new();
 
+    // The FLOWER: the only chassis on the roster that is drawn the same whether it is on the
+    // turntable or out in the run, because it does exactly the same thing in both places.
+    private readonly FlowerModel _flowerModel = new();
+
     /// <summary>The parts of the fish's own body that hang in the player's view — the
     /// snout, the pectorals and the lantern. Drawn in the camera's frame rather than the
     /// world's, so they stay welded to the eye through a forty-degree carve.</summary>
     private readonly FishRenderer _fish = new();
 
+    /// <summary>The FLOWER's petals in flight, the rosettes they open and the reticle of a
+    /// player picking ground. Takes the plant's own model so a thrown petal is literally the
+    /// geometry missing from the ring.</summary>
+    private readonly FlowerRenderer _flower;
+
     // The SPIDER is the boss's rig at a person's size, so it gets its own CrabRenderer
     // rather than borrowing the one above — that one is carrying the live boss's scale
     // and gunmetal, and neither belongs on the player's craft.
     private readonly CrabRenderer _spiderRig = new() { Scale = CrabRig.PlayerScale };
+
+    public EntityRenderer() => _flower = new FlowerRenderer(_flowerModel);
 
     /// <summary>
     /// Draws the skyline on its own, without a world. The title and settings screens
@@ -284,6 +296,15 @@ public sealed class EntityRenderer
                     _kit.Draw(at, pk.Spin, pk.BobHeight, cameraPos, 1.1f);
                     break;
 
+                // The moon fragment turns slowly and rides high — the only piece of salvage in
+                // the game drawn bigger than it is. It is the rarest object anybody will ever
+                // find on a grid, and a player who is going to cross a whole city for one has
+                // to be able to tell it from a lump of scrap at the range they first see it,
+                // which at 320 pixels across means silhouette and size and nothing else.
+                case PickupKind.MoonFragment:
+                    _moon.Draw(at, pk.Spin * 0.4f, pk.BobHeight + 0.3f, cameraPos, 1.7f);
+                    break;
+
                 default: _bullet.Draw(at, pk.Spin, pk.BobHeight, cameraPos); break;
             }
         }
@@ -378,6 +399,12 @@ public sealed class EntityRenderer
         // And the FISH's own body, for the same reason and in the same slot: it sits
         // centimetres from the eye and has to be over everything the run put behind it.
         _fish.Draw(world, cameraPos, (float)Raylib.GetTime());
+
+        // The FLOWER's petals, the rosettes they open and the ground a player is picking.
+        // Late for the same reason the two viewmodels are: a petal on the way home passes
+        // within a metre of the eye, and one drawn under the city would spend the last third
+        // of its return leg inside a wall it is nowhere near.
+        _flower.Draw(world, cameraPos, (float)Raylib.GetTime());
 
         // A TANK's screening smoke: a soft bank of murk drawn as a small clutch of translucent
         // spheres, swelling and fading with the cloud's own density. Drawn late so it hangs in
@@ -957,6 +984,25 @@ public sealed class EntityRenderer
             return;
         }
 
+        // The flower is the second chassis the turntable draw is wrong for, and for the
+        // opposite reason to the soldier's: not because it moves in ways an idle cannot
+        // express, but because the two things it *does* — bending, and going into the ground —
+        // are the whole of what the player next to it has to be able to read. A flower drawn
+        // idling would stand perfectly straight through a dodge and stay standing through a
+        // replant, which is the two most important frames of the class rendered as a lie.
+        if (craft.Class == PlayerClass.Flower && craft.Flower is { } stalk)
+        {
+            float fs = WorldScale(PlayerClass.Flower);
+            Rlgl.PushMatrix();
+            Rlgl.Translatef(pos.X, craft.Height, pos.Y);
+            Rlgl.Scalef(fs, fs, fs);
+            Rlgl.Translatef(-pos.X, 0f, -pos.Y);
+            _flowerModel.DrawPosed(craft.Build, pos, craft.Heading, 0f, cameraPos,
+                FlowerModel.From(stalk, craft.Heading, elapsed));
+            Rlgl.PopMatrix();
+            return;
+        }
+
         // The hangar turntable draws every chassis at a scale tuned for a close camera, which
         // in the world sits it far too small beside the enemies — a player tank a third the
         // size of the hunters it fights. So the whole craft is scaled about its own base to
@@ -1075,6 +1121,11 @@ public sealed class EntityRenderer
                                       // big fast, so this stays well under the Crab-Core
         PlayerClass.Fish => 2.4f,
         PlayerClass.Virus => 2.4f,
+        // Modest. This model is already three metres tall in its own frame — the only chassis
+        // built at anything like world scale to begin with, because a plant that had to be
+        // enlarged four times to read would have been drawn as a weed. Just enough to put its
+        // head comfortably above a hunter's turret, which is where it wants to be.
+        PlayerClass.Flower => 1.35f,
         _ => 1f,
     };
 
@@ -1127,6 +1178,13 @@ public sealed class EntityRenderer
                 // its veins cast about for a body, and the husk of the last thing it wore
                 // tumbles around it. The turntable heading turns the whole cloud slowly.
                 _virusModel.Draw(loadout, pos, heading, cameraPos, elapsed);
+                break;
+
+            case PlayerClass.Flower:
+                // Standing on the plate and swaying, which is also everything it will ever do
+                // out in the run. The one specimen in the hangar that is showing the player the
+                // literal truth rather than an idle: this is the pose.
+                _flowerModel.Draw(loadout, pos, heading, cameraPos, elapsed);
                 break;
         }
     }

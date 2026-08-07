@@ -192,4 +192,22 @@ public static class Palette
     // #E8E2D0 — the cross on the lid, in the Maw's own bone white. The palest thing in the
     // palette, and the only mark on any pickup that is meant to be read rather than felt.
     public static readonly Color RepairMark = new(232, 226, 208, 255);
+
+    // --- The moon fragment ---------------------------------------------------
+    // The one thing in this world that fell out of the sky rather than being built, killed or
+    // dug up, and the palette is the whole of how it says so: it is the only object down here
+    // wearing the colour of something *up there*. Both tones are lifted straight off the moon
+    // disc the sky already draws (SkyRenderer.MoonColor, #B0BEC6) rather than invented, so a
+    // player who looks up and then looks down is looking at the same grey twice.
+    //
+    // Cold, not bright. Nothing about this is a neon — it does not glow, it is simply the
+    // palest, flattest, most *lit* thing on a grid where everything else is grim.
+
+    // #B0BEC6 — the stone: the moon's own face, unchanged.
+    public static readonly Color MoonStone = new(176, 190, 198, 255);
+
+    // #DCE6EC — the fresh break. A shard that came off something has one face that has never
+    // weathered, and at eighteen pixels that single paler facet is the entire read: it is what
+    // makes the silhouette a *fragment* rather than a rock.
+    public static readonly Color MoonBreak = new(220, 230, 236, 255);
 }

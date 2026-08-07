@@ -55,6 +55,11 @@ public enum InputAction : byte
     Beat,
     Brake,
 
+    // --- FLOWER ----------------------------------------------------------------------
+    // The seed and the petal ride FIRE and SECONDARY; these two are the class's own.
+    Harvest,
+    Replant,
+
     // --- VIRUS -----------------------------------------------------------------------
     Slot1,
     Slot2,
@@ -82,6 +87,7 @@ public enum InputSection : byte
     Spider,
     Soldier,
     Fish,
+    Flower,
     Virus,
     Spectating,
     Lobby,
@@ -101,6 +107,7 @@ public static class InputActions
         <= InputAction.SpiderPounce => InputSection.Spider,
         <= InputAction.HighJump => InputSection.Soldier,
         <= InputAction.Brake => InputSection.Fish,
+        <= InputAction.Replant => InputSection.Flower,
         <= InputAction.Slot4 => InputSection.Virus,
         <= InputAction.SpectateNext => InputSection.Spectating,
         _ => InputSection.Lobby,
@@ -113,6 +120,7 @@ public static class InputActions
         InputSection.Spider => "SPIDER",
         InputSection.Soldier => "SOLDIER",
         InputSection.Fish => "FISH",
+        InputSection.Flower => "FLOWER",
         InputSection.Virus => "VIRUS",
         InputSection.Spectating => "SPECTATING",
         _ => "LOBBY",
@@ -133,6 +141,7 @@ public static class InputActions
         InputSection.Spider => "CLAW/EMITTER = FIRE/SEC",
         InputSection.Soldier => "RIFLE/ROCKET = FIRE/SEC",
         InputSection.Fish => "ROLL=TURN SPIT/STRIKE=FIRE/SEC",
+        InputSection.Flower => "LEAN=MOVE PETAL=SEC",
         InputSection.Virus => "FIRE/OVERLOAD = FIRE/SEC",
         _ => null,
     };
@@ -164,6 +173,9 @@ public static class InputActions
 
         InputAction.Beat => "TAIL BEAT",
         InputAction.Brake => "BRAKE",
+
+        InputAction.Harvest => "SET SEED",
+        InputAction.Replant => "REPLANT (HOLD)",
 
         InputAction.Slot1 => "SLOT 1",
         InputAction.Slot2 => "SLOT 2",
