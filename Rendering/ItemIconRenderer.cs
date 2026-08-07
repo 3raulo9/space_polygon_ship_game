@@ -49,7 +49,9 @@ public sealed class ItemIconRenderer : IDisposable
         _mesh[ItemKind.Zinc] = Meshes.Crystal(Palette.ZincPale);
         _mesh[ItemKind.Lithium] = Meshes.Rod(Palette.HudChrome, Palette.LithiumRose);
         _mesh[ItemKind.RepairKit] = Meshes.RepairKit(Palette.RepairShell, Palette.RepairMark);
-        _mesh[ItemKind.MoonFragment] = Meshes.MoonShard(Palette.MoonStone, Palette.MoonBreak);
+        _mesh[ItemKind.Moonstone] = Meshes.MoonShard(Palette.MoonStone, Palette.MoonBreak);
+        _mesh[ItemKind.SunFragment] = Meshes.Fragment(Palette.SunStone, Palette.SunBreak, hollow: false);
+        _mesh[ItemKind.MoonFragment] = Meshes.Fragment(Palette.MoonStone, Palette.MoonBreak, hollow: true);
 
         // Per-kind scale (to frame each silhouette at a similar size) and the model-space
         // Y centre to spin about (these meshes sit base-at-origin, so most are lifted).
@@ -66,7 +68,13 @@ public sealed class ItemIconRenderer : IDisposable
         _scale[ItemKind.Zinc] = 1.30f;           _centerY[ItemKind.Zinc] = 0.58f;
         _scale[ItemKind.Lithium] = 1.20f;        _centerY[ItemKind.Lithium] = 0.60f;
         _scale[ItemKind.RepairKit] = 1.25f;      _centerY[ItemKind.RepairKit] = 0.31f;
-        _scale[ItemKind.MoonFragment] = 1.40f;   _centerY[ItemKind.MoonFragment] = 0.44f;
+        _scale[ItemKind.Moonstone] = 1.40f;      _centerY[ItemKind.Moonstone] = 0.44f;
+        // The two keys sit on the same scale and the same centre as each other, deliberately:
+        // in a pack the ONLY difference between the sun and the moon slot should be full hub
+        // versus cut ring, and any drift in size or framing would give the player a second,
+        // weaker cue to read instead of the one that actually works.
+        _scale[ItemKind.SunFragment] = 1.30f;    _centerY[ItemKind.SunFragment] = 0.56f;
+        _scale[ItemKind.MoonFragment] = 1.30f;   _centerY[ItemKind.MoonFragment] = 0.56f;
 
         foreach (var kind in _mesh.Keys)
         {

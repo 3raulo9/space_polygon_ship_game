@@ -40,9 +40,15 @@ internal static class HudRenderer
     private const float RadarWorldRange = 90f;       // world units mapped to the radar edge
 
     /// <summary>
-    /// The join/quit feed: a few short yellow lines stacked at the bottom-right, under the
-    /// instruments, each fading out as it ages. Multiplayer only — single player never has a
-    /// feed to draw. Drawn last, over everything, so a notice is never lost behind the world.
+    /// The feed: a few short lines stacked at the bottom-right, under the instruments, each
+    /// fading out as it ages. Drawn last, over everything, so nothing is lost behind the world.
+    ///
+    /// <para>It carries two different things now and colours them apart. The game talking about
+    /// itself — joins, leaves, kills — stays in the flag's jaundiced yellow it has always used.
+    /// A person talking is drawn in the HUD's cold chrome, and the answer to a command in the
+    /// charged teal every other "this worked, this is yours" in the game uses. At nine pixels
+    /// the colour is doing more work than the words: it is what lets a player tell "somebody
+    /// said something" from "something died" without reading either.</para>
     /// </summary>
     public static void DrawNotices(Net.NoticeFeed feed)
     {
@@ -58,11 +64,17 @@ internal static class HudRenderer
             // Fade over the last second and a half of a line's life.
             float a = Math.Clamp(e.Remaining / 1.5f, 0f, 1f);
             byte alpha = (byte)(a * 255);
+            Color hue = e.Type switch
+            {
+                Net.NoticeFeed.Kind.Chat => Palette.HudChrome,
+                Net.NoticeFeed.Kind.Console => Palette.BatteryCore,
+                _ => Palette.Flag,
+            };
             Vector2 m = Raylib.MeasureTextEx(font, e.Text, size, 1);
             float x = W - pad - m.X;
             float y = H - pad - size - i * (size + 3);
-            var col = new Color(Palette.Flag.R, Palette.Flag.G, Palette.Flag.B, alpha);
-            Raylib.DrawTextEx(font, e.Text, new Vector2(x, y), size, 1, col);
+            Raylib.DrawTextEx(font, e.Text, new Vector2(x, y), size, 1,
+                new Color(hue.R, hue.G, hue.B, alpha));
         }
     }
 
@@ -570,6 +582,10 @@ internal static class HudRenderer
         // same dot.
         foreach (var pk in world.Pickups)
         {
+            // Fragments are held back for their own pass below, so nothing drawn afterwards
+            // can land on top of the one blip on this panel that a run depends on.
+            if (World.World.IsFragment(pk)) continue;
+
             Vector2 rel = Torus.Delta(p.Position, pk.Position);
             float rx = rel.X * c - rel.Y * s;
             float ry = rel.X * s + rel.Y * c;
@@ -580,6 +596,64 @@ internal static class HudRenderer
             py = Math.Clamp(py, y0 + 1, y0 + RadarSize - 2);
 
             Raylib.DrawRectangle((int)px, (int)py, 1, 1, World.World.SalvageColour(pk.Kind));
+        }
+
+        // The arch's keys, last and loudest.
+        //
+        // A fragment cannot be a one-pixel dot like the salvage it is technically a kind of.
+        // There are five on a planet, they are the only way off it, and this display is a
+        // 52-pixel square with as many as forty pieces of salvage already in it — a dot would
+        // be indistinguishable from a battery at exactly the moment a room is trying to work
+        // out where the last one fell. So they are drawn as a pulsing cross, at three pixels,
+        // over the top of everything else.
+        foreach (var pk in world.Pickups)
+        {
+            if (!World.World.IsFragment(pk)) continue;
+
+            Vector2 rel = Torus.Delta(p.Position, pk.Position);
+            float rx = rel.X * c - rel.Y * s;
+            float ry = rel.X * s + rel.Y * c;
+
+            int px = (int)Math.Clamp(cx - rx * scale, x0 + 1, x0 + RadarSize - 2);
+            int py = (int)Math.Clamp(cy - ry * scale, y0 + 1, y0 + RadarSize - 2);
+
+            // The pulse is the whole reason it is legible against a busy panel: nothing else
+            // on this display moves except by being somewhere else, so a blip that breathes
+            // is the only one the eye finds without being told to look.
+            float beat = 0.55f + 0.45f * MathF.Sin((float)Raylib.GetTime() * 4.2f);
+            Color col = Scale(World.World.SalvageColour(pk.Kind), beat);
+
+            Raylib.DrawRectangle(px - 1, py, 3, 1, col);
+            Raylib.DrawRectangle(px, py - 1, 1, 3, col);
+        }
+
+        // The gates, over the top of everything including the fragments — once these are lit
+        // they are the only thing left on the planet worth steering toward.
+        //
+        // Drawn as a hollow box rather than a cross or a dot: at three pixels an outline is the
+        // one shape on this panel that nothing else uses, so a player never has to work out
+        // whether the thing at the rim is an arch or a battery. Distance is not printed —
+        // there is nowhere to print it in a 52-pixel square — and it does not need to be,
+        // because the column of light in the world answers "how far" far better than a number.
+        foreach (var gate in world.Gates)
+        {
+            if (gate.State == World.Arch.Phase.Dark) continue;
+
+            Vector2 rel = Torus.Delta(p.Position, gate.Position);
+            float rx = rel.X * c - rel.Y * s;
+            float ry = rel.X * s + rel.Y * c;
+
+            int px = (int)Math.Clamp(cx - rx * scale, x0 + 2, x0 + RadarSize - 3);
+            int py = (int)Math.Clamp(cy - ry * scale, y0 + 2, y0 + RadarSize - 3);
+
+            // The claimed one holds steady; unclaimed candidates pulse, exactly as their
+            // panels do out in the world. Same language in both places.
+            float beat = gate.State == World.Arch.Phase.Lit
+                ? 0.5f + 0.5f * MathF.Sin((float)Raylib.GetTime() * 3.1f)
+                : 1f;
+            Color col = Scale(Lerp(Palette.PortalMoon, Palette.PortalSun, gate.Warmth), beat);
+
+            Raylib.DrawRectangleLines(px - 2, py - 2, 5, 5, col);
         }
 
         // Player: a small chrome triangle fixed at centre, always pointing up.

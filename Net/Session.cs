@@ -136,6 +136,63 @@ public enum Msg : byte
     /// because a build is state, not an event.</para>
     /// </summary>
     Build = 25,
+
+    /// <summary>
+    /// The run: which phase a DESCENT is in, how far through its wave it is, and — the part
+    /// that matters most — the seed and the leg of the crossing it is on.
+    ///
+    /// <para><b>The seed is the packet.</b> Everything about a planet that a client needs is
+    /// derived from it and not streamed: the five bosses, their bodies and their names, and
+    /// which three of the city's ten arcs are the way off it. Every machine already generates
+    /// the identical building layout, so "gate" is a function of (layout, seed) and costs four
+    /// bytes rather than a description of three structures. A client that hears this stands its
+    /// own run up and arrives at the same three arches.</para>
+    ///
+    /// <para>Host → all, reliable. Rare — a handful per planet, on phase changes — because
+    /// everything continuous about a wave is already implied by what the field packet carries.</para>
+    /// </summary>
+    Run = 26,
+
+    /// <summary>
+    /// A gate. One id in both directions with a kind byte, exactly like <see cref="Mark"/> and
+    /// <see cref="Vote"/>: a client sends CLAIM ("let me open that one"), CAST ("I am for
+    /// KIRENE") and FEED ("take the fragment in my slot 4"); the host sends TALLY and STATE.
+    ///
+    /// <para>Reliable, all of it. A gate is the one object in the game where a lost packet
+    /// cannot be corrected by the next one: which arch the room is using, and how many of the
+    /// five are in, are facts twenty people navigate by — and the whole exchange is perhaps
+    /// fifteen packets across a planet.</para>
+    /// </summary>
+    Arch = 27,
+
+    /// <summary>
+    /// The rolled bosses near a client — the modular ones a DESCENT raises, as opposed to the
+    /// two hand-built monsters <see cref="Bosses"/> has always carried.
+    ///
+    /// <para>Its own id because a rolled boss is a fundamentally different thing to describe: a
+    /// Crab-Core is a singleton whose shape every machine knows, and one of these is a body
+    /// built from a genome. The genome rides the seed in <see cref="Run"/> and this packet
+    /// carries only what moves — where it is, what it is doing, and how much of it is left.</para>
+    ///
+    /// <para>Keep-last like the field, at the snapshot rate.</para>
+    /// </summary>
+    Rolled = 28,
+
+    /// <summary>
+    /// Somebody talking. One id in both directions with a kind byte, like <see cref="Mark"/>
+    /// and <see cref="Arch"/>: a client sends SAY ("this is what I typed") and the host sends
+    /// SAID ("seat N said this") to everyone, or TOLD to exactly one person — which is what a
+    /// command's answer and a "you were given 100 bullets" are.
+    ///
+    /// <para>Reliable. A line of chat happens seconds apart at worst, it is a person trying to
+    /// reach nineteen other people, and there is no next packet that would fix a lost one — the
+    /// same reasoning as the mark, and for the same reason.</para>
+    ///
+    /// <para><b>The command is never sent.</b> A client types <c>{skip wave}</c> and what
+    /// crosses the wire is the text; the host parses it, decides whether that seat is allowed,
+    /// and acts. Nothing about a command's meaning is decided on the machine that typed it.</para>
+    /// </summary>
+    Chat = 29,
 }
 
 /// <summary>
@@ -165,6 +222,11 @@ public sealed class Session
     private readonly byte[] _field = new byte[Snapshot.MaxSize + 8];
     private readonly byte[] _sound = new byte[1200];
     private readonly byte[] _bosses = new byte[512];
+
+    /// <summary>The rolled bosses' buffer. Bigger than the hand-built pair's, because this one
+    /// is a list — a TWINNED Colossus ends its fight as two bodies, and the capture harness can
+    /// stand several on a field.</summary>
+    private readonly byte[] _rolled = new byte[512];
     private readonly byte[] _effect = new byte[1200];
     private readonly byte[] _structures = new byte[Snapshot.MaxStructureSize + 8];
     private readonly byte[] _rigs = new byte[Snapshot.MaxRigSize + 8];
@@ -493,6 +555,328 @@ public sealed class Session
         _net.Send(0, p.Slice(0, at), reliable: false);
     }
 
+    // --- The run and its gates ------------------------------------------------------------
+
+    private const byte ArchClaimKind = 0;   // client → host: let me open that one / host → all: it is claimed
+    private const byte ArchCastKind = 1;    // client → host: my ballot
+    private const byte ArchTallyKind = 2;   // host → all: the clock and every ballot
+    private const byte ArchFeedKind = 3;    // client → host: take the fragment in my slot N
+    private const byte ArchStateKind = 4;   // host → all: the whole gate
+
+    /// <summary>
+    /// Host → all: the run's seed, its leg of the crossing, and where it has got to.
+    ///
+    /// <para>Sent whenever any of it changes and to every late joiner, which is a handful of
+    /// packets per planet. The seed is the expensive-looking part and is the reason the rest of
+    /// it is cheap: a client hearing a seed it does not already have builds its own director and
+    /// its own gate list off it, so twenty-five bosses and fifteen arches cost four bytes.</para>
+    /// </summary>
+    public void BroadcastRun()
+    {
+        if (!IsHost || World is not { Run: { } run }) return;
+
+        Span<byte> p = stackalloc byte[16];
+        int at = 0;
+        p[at++] = (byte)Msg.Run;
+        BitConverter.TryWriteBytes(p.Slice(at, 4), run.Seed); at += 4;
+        p[at++] = (byte)Math.Clamp(run.Hop, 0, 255);
+        p[at++] = (byte)run.Destination;
+        p[at++] = (byte)World.VisitedMask;
+        p[at++] = (byte)run.Phase;
+        p[at++] = (byte)Math.Clamp(run.Wave, 0, 255);
+        BitConverter.TryWriteBytes(p.Slice(at, 2), (ushort)Math.Clamp(run.Killed, 0, 65535)); at += 2;
+        BitConverter.TryWriteBytes(p.Slice(at, 2), (ushort)Math.Clamp(run.WaveTotal, 0, 65535)); at += 2;
+        // Tenths of a second. The salvage clock is drawn to the second and nothing else reads it.
+        p[at++] = (byte)Math.Clamp((int)MathF.Round(run.Clock * 4f), 0, 255);
+        p[at++] = (byte)(World.GatesLit ? 1 : 0);
+
+        _net.Broadcast(p.Slice(0, at), reliable: true);
+        _runFingerprint = RunFingerprint();
+    }
+
+    /// <summary>A cheap digest of everything <see cref="BroadcastRun"/> carries, so the host can
+    /// send it only when it actually changed rather than every tick. The same approach the
+    /// inventory mirror already takes.</summary>
+    private int RunFingerprint()
+    {
+        if (World is not { Run: { } run }) return 0;
+        int h = 17;
+        h = h * 31 + run.Seed;
+        h = h * 31 + run.Hop;
+        h = h * 31 + (int)run.Phase;
+        h = h * 31 + run.Wave;
+        h = h * 31 + run.Killed;
+        h = h * 31 + run.WaveTotal;
+        h = h * 31 + (int)(run.Clock * 4f);
+        h = h * 31 + (World.GatesLit ? 1 : 0);
+        h = h * 31 + World.VisitedMask;
+        return h;
+    }
+
+    private int _runFingerprint;
+    private int _gateFingerprint;
+
+    /// <summary>
+    /// Host → all: the claimed gate, whole. Which arch, where it points, what is in each of the
+    /// five recesses, what is on the rail, how far the charge has run, who is through, and how
+    /// long the stragglers have left.
+    ///
+    /// <para>Sent whole rather than as a delta for the same reason the destination tally is: it
+    /// is about twenty bytes, it changes perhaps thirty times across a planet, and a gate that
+    /// could disagree with itself after one lost packet would strand a room.</para>
+    /// </summary>
+    public void BroadcastGate()
+    {
+        if (!IsHost || World?.ClaimedGate is not { } g) return;
+
+        Span<byte> p = stackalloc byte[24];
+        int at = 0;
+        p[at++] = (byte)Msg.Arch;
+        p[at++] = ArchStateKind;
+        BitConverter.TryWriteBytes(p.Slice(at, 2), (ushort)g.StructureIndex); at += 2;
+        p[at++] = (byte)g.State;
+        // 255 is "not decided yet", which is a real state a gate sits in for a whole vote.
+        p[at++] = g.Destination is { } d ? (byte)d : (byte)255;
+        for (int i = 0; i < Unrendered.World.Arch.SocketCount; i++) p[at++] = (byte)g.SocketAt(i);
+        p[at++] = (byte)g.Carrying;
+        p[at++] = (byte)(g.CarryingTo < 0 ? 255 : g.CarryingTo);
+        p[at++] = (byte)Math.Clamp((int)(g.CarryT * 255f), 0, 255);
+        p[at++] = (byte)Math.Clamp((int)(g.Charge * 255f), 0, 255);
+        BitConverter.TryWriteBytes(p.Slice(at, 4), g.Entered); at += 4;
+        p[at++] = (byte)Math.Clamp((int)MathF.Round(g.Grace), 0, 255);
+
+        _net.Broadcast(p.Slice(0, at), reliable: true);
+        _gateFingerprint = GateFingerprint();
+    }
+
+    private int GateFingerprint()
+    {
+        if (World?.ClaimedGate is not { } g) return 0;
+        int h = 17;
+        h = h * 31 + g.StructureIndex;
+        h = h * 31 + (int)g.State;
+        h = h * 31 + (g.Destination is { } d ? (int)d + 1 : 0);
+        for (int i = 0; i < Unrendered.World.Arch.SocketCount; i++) h = h * 31 + (int)g.SocketAt(i);
+        h = h * 31 + (int)g.Carrying;
+        h = h * 31 + g.CarryingTo;
+        // The rail's progress and the charge are quantised into the digest at the same
+        // resolution the packet carries them, so a haul streams smoothly without a packet per
+        // frame: it changes the digest about twenty times over its two seconds.
+        h = h * 31 + (int)(g.CarryT * 20f);
+        h = h * 31 + (int)(g.Charge * 20f);
+        h = h * 31 + g.Entered;
+        h = h * 31 + (int)g.Grace;
+        return h;
+    }
+
+    /// <summary>Host-side, once a tick: puts the run and the gate on the wire if either
+    /// actually moved. Cheap enough to ask every tick and quiet the rest of the time.</summary>
+    private void PushRunState()
+    {
+        if (!IsHost || World is not { IsDescent: true }) return;
+        if (RunFingerprint() != _runFingerprint) BroadcastRun();
+        if (GateFingerprint() != _gateFingerprint) BroadcastGate();
+    }
+
+    /// <summary>Client → host: let me open the arch on structure <paramref name="index"/>.</summary>
+    public void RequestArchClaim(int index)
+    {
+        Span<byte> p = stackalloc byte[4];
+        p[0] = (byte)Msg.Arch;
+        p[1] = ArchClaimKind;
+        BitConverter.TryWriteBytes(p.Slice(2, 2), (ushort)index);
+        _net.Send(0, p, reliable: true);
+    }
+
+    /// <summary>Host → all: that one is claimed and the rest are dark.</summary>
+    public void BroadcastArchClaim(int index)
+    {
+        if (!IsHost) return;
+        Span<byte> p = stackalloc byte[4];
+        p[0] = (byte)Msg.Arch;
+        p[1] = ArchClaimKind;
+        BitConverter.TryWriteBytes(p.Slice(2, 2), (ushort)index);
+        _net.Broadcast(p, reliable: true);
+    }
+
+    /// <summary>Client → host: take the fragment in my grid slot <paramref name="slot"/>.</summary>
+    public void RequestArchFeed(int slot)
+    {
+        Span<byte> p = stackalloc byte[3];
+        p[0] = (byte)Msg.Arch;
+        p[1] = ArchFeedKind;
+        p[2] = (byte)Math.Clamp(slot, 0, 255);
+        _net.Send(0, p, reliable: true);
+    }
+
+    /// <summary>Client → host: my ballot at the arch's chart.</summary>
+    public void SendArchVote(UI.StarMap chart)
+    {
+        if (IsHost) return;
+        Span<byte> p = stackalloc byte[3];
+        p[0] = (byte)Msg.Arch;
+        p[1] = ArchCastKind;
+        p[2] = (byte)chart.Cursor;
+        _net.Send(0, p, reliable: true);
+    }
+
+    /// <summary>Host → all: the arch's clock and every ballot in it. Same shape as the lobby
+    /// table's tally, because it is the same vote held somewhere else.</summary>
+    public void BroadcastArchVote(UI.StarMap chart)
+    {
+        if (!IsHost) return;
+        Span<byte> p = stackalloc byte[5 + MatchSettings.MaxSeats * 2];
+        int at = 0;
+        p[at++] = (byte)Msg.Arch;
+        p[at++] = ArchTallyKind;
+        p[at++] = (byte)(chart.VoteOpen ? 1 : 0);
+        p[at++] = (byte)Math.Clamp((int)MathF.Round(chart.SecondsLeft * 10f), 0, 255);
+
+        int countAt = at++;
+        int written = 0;
+        foreach (var (seat, choice) in chart.Votes)
+        {
+            if (written >= MatchSettings.MaxSeats) break;
+            if ((uint)seat >= MatchSettings.MaxSeats) continue;
+            p[at++] = (byte)seat;
+            p[at++] = (byte)choice;
+            written++;
+        }
+        p[countAt] = (byte)written;
+
+        _net.Broadcast(p.Slice(0, at), reliable: true);
+    }
+
+    /// <summary>The arch panel this machine has open, so a TALLY off the wire lands in the chart
+    /// the player is actually looking at. Set by the game loop when it opens one.</summary>
+    public UI.ArchPanel? ArchPanel { get; set; }
+
+    // --- Chat -------------------------------------------------------------------------------
+
+    private const byte ChatSay = 0;    // client → host: this is what I typed
+    private const byte ChatSaid = 1;   // host → all: seat N said this
+    private const byte ChatTold = 2;   // host → one: something only you should read
+
+    /// <summary>
+    /// Says something. On the host this is settled here and now; on a client it is a request,
+    /// and the host's echo is what actually reaches the room — including this player's own
+    /// screen, so a message everybody else lost is a message you can see you did not send.
+    /// </summary>
+    public void Say(string text)
+    {
+        if (IsHost) { Said(LocalSeat, text); return; }
+
+        Span<byte> p = stackalloc byte[3 + 256];
+        byte[] body = EncodeLine(text);
+        p[0] = (byte)Msg.Chat;
+        p[1] = ChatSay;
+        p[2] = (byte)body.Length;
+        body.CopyTo(p.Slice(3, body.Length));
+        _net.Send(0, p.Slice(0, 3 + body.Length), reliable: true);
+    }
+
+    /// <summary>Host-side: puts a line in front of the whole room, this machine included.</summary>
+    private void Said(int seat, string text)
+    {
+        string line = Core.ChatCommand.Spoken(NameOfSeat(seat), text);
+        Notices.Push(line, NoticeFeed.Kind.Chat);
+
+        Span<byte> p = stackalloc byte[3 + 256];
+        byte[] body = EncodeLine(line);
+        p[0] = (byte)Msg.Chat;
+        p[1] = ChatSaid;
+        p[2] = (byte)body.Length;
+        body.CopyTo(p.Slice(3, body.Length));
+        _net.Broadcast(p.Slice(0, 3 + body.Length), reliable: true);
+    }
+
+    /// <summary>
+    /// Host-side: something only one seat should read — the answer to a command they typed, or
+    /// the news that somebody just filled their pack.
+    ///
+    /// <para>Sent to that seat's peer alone rather than broadcast with a "for you" byte, so a
+    /// refusal is genuinely private: the point of telling somebody their command was refused
+    /// rather than announcing it is that a typo should not become a callout.</para>
+    /// </summary>
+    public void Tell(int seat, string text)
+    {
+        if (seat == LocalSeat) { Notices.Push(text, NoticeFeed.Kind.Console); return; }
+        if (!IsHost) return;
+
+        foreach (var (peer, s) in _seatOfPeer)
+        {
+            if (s != seat) continue;
+            Span<byte> p = stackalloc byte[3 + 256];
+            byte[] body = EncodeLine(text);
+            p[0] = (byte)Msg.Chat;
+            p[1] = ChatTold;
+            p[2] = (byte)body.Length;
+            body.CopyTo(p.Slice(3, body.Length));
+            _net.Send(peer, p.Slice(0, 3 + body.Length), reliable: true);
+            return;
+        }
+    }
+
+    /// <summary>
+    /// The whole of what a typed line does, once the host has it. One method for a line typed
+    /// here and a line that arrived off the wire, deliberately: the host must treat its own
+    /// commands exactly as it treats everybody else's, or the two paths drift and the rules
+    /// only really hold for other people.
+    /// </summary>
+    public void HandleTyped(string text, int seat)
+    {
+        var cmd = Core.ChatCommand.Parse(text);
+
+        switch (cmd.Verb)
+        {
+            case Core.ChatVerb.Say:
+                Said(seat, cmd.Text);
+                break;
+
+            case Core.ChatVerb.Unknown:
+                // Never said out loud. A mistyped command becoming a message the whole room
+                // reads is the single most embarrassing thing an in-game console can do.
+                Tell(seat, cmd.Complaint ?? "THAT IS NOT A COMMAND");
+                break;
+
+            default:
+                // Commands reach into the run's phase and into other people's packs, so in a
+                // room they belong to whoever is hosting it. Refused privately — the person who
+                // tried is told and nobody else is, because a typo should not become a callout.
+                //
+                // A solo player passes this trivially: they are the host of a room of one,
+                // which is exactly what makes the same code path serve as the single-player
+                // console rather than needing a second one.
+                if (cmd.NeedsAuthority && seat != LocalSeat)
+                {
+                    Tell(seat, "THAT IS THE HOST'S TO GIVE");
+                    break;
+                }
+                if (World is null) { Tell(seat, "NOT IN A RUN"); break; }
+                Tell(seat, World.RunCommand(cmd, seat));
+                break;
+        }
+    }
+
+    /// <summary>Every nickname in the room, for the chat's completion. Seat order, which is
+    /// join order, so the list a player walks with Up is stable across a session.</summary>
+    public IReadOnlyList<string> Nicknames
+    {
+        get
+        {
+            var names = new List<string>();
+            for (int seat = 0; seat < MatchSettings.MaxSeats; seat++)
+            {
+                string n = NameOfSeat(seat);
+                if (n.Length > 0) names.Add(n);
+            }
+            return names;
+        }
+    }
+
+    private string NameOfSeat(int seat)
+        => _nameOfSeat.TryGetValue(seat, out var n) ? n : "";
+
     // --- The destination vote -----------------------------------------------------------
 
     private const byte VoteCast = 0;
@@ -538,7 +922,7 @@ public sealed class Session
         _net.Broadcast(p.Slice(0, at), reliable: true);
     }
 
-    private void BroadcastRules(MatchSettings m)
+    public void BroadcastRules(MatchSettings m)
     {
         Span<byte> p = stackalloc byte[1 + MatchSettings.Size];
         p[0] = (byte)Msg.Rules;
@@ -644,6 +1028,40 @@ public sealed class Session
         // client, so a kill announced on the host is a kill everybody reads — no new packet
         // and no second formatting of the same sentence.
         World.Announce = Announce;
+        // And the private channel: a command's answer, or the news that somebody just filled
+        // your pack, goes to one seat rather than to the room.
+        World.Tell = Tell;
+    }
+
+    /// <summary>
+    /// Swaps the world under a running session — the crossing.
+    ///
+    /// <para>A planet is a whole world object: its own city, its own director, its own seats.
+    /// Going through an arch means throwing one away and building the next, and the session
+    /// has to be handed the new one without any of the rest of it — the peers, the seat map,
+    /// the names, the rewind buffer — being disturbed, because the room is exactly the same
+    /// twenty people it was a second ago. That is the only difference between this and
+    /// <see cref="HostMatch"/>, which also seats and renames.</para>
+    ///
+    /// <para>The seat roster and every name are re-applied, because the new world's roster was
+    /// built from scratch and knows nobody.</para>
+    /// </summary>
+    public void ReplaceWorld(World.World world)
+    {
+        World = world;
+        World.LocalIndex = Math.Max(0, LocalSeat);
+        World.CollectSoundCues = IsHost;
+        World.Announce = Announce;
+        // And the private channel: a command's answer, or the news that somebody just filled
+        // your pack, goes to one seat rather than to the room.
+        World.Tell = Tell;
+        foreach (var (seat, name) in _nameOfSeat) World.SeatNames[seat] = name;
+
+        // The fingerprints describe a planet that no longer exists, so clearing them is what
+        // forces the first push on the new one to actually go out rather than being mistaken
+        // for "nothing changed".
+        _runFingerprint = 0;
+        _gateFingerprint = 0;
     }
 
     /// <summary>Every seat's name the host knows, for the loop to copy onto the world at launch
@@ -733,6 +1151,21 @@ public sealed class Session
 
     private static string DecodeName(ReadOnlySpan<byte> src)
         => System.Text.Encoding.UTF8.GetString(src).Trim();
+
+    /// <summary>
+    /// A line of chat on the wire. Its own encoder because <see cref="Encode"/> is the name
+    /// encoder and clips at thirty-one bytes — which is right for a nickname and would cut a
+    /// sentence off mid-word.
+    ///
+    /// <para>The ceiling is a byte, since that is what the length field is. A message is capped
+    /// at <see cref="Core.ChatCommand.MaxLength"/> before it ever gets here and the speaker's
+    /// name is bounded too, so the clip is a guard rather than a thing that happens.</para>
+    /// </summary>
+    private static byte[] EncodeLine(string text)
+    {
+        byte[] all = System.Text.Encoding.UTF8.GetBytes(text);
+        return all.Length <= 200 ? all : all[..200];
+    }
 
     /// <summary>
     /// Host-side: records one seat's display name and tells everybody — the room, the world
@@ -1060,6 +1493,13 @@ public sealed class Session
     private void Broadcast()
     {
         BroadcastScores();
+
+        // The run and its gate, when either actually moved. Reliable and change-driven rather
+        // than rate-driven — a planet's whole DESCENT is a few dozen of these, against the
+        // twenty-a-second everything below runs at, because nothing in it is continuous except
+        // the rail and the charge and both of those are quantised into the digest.
+        PushRunState();
+
         _snapshotSeq++;
 
         // Not everything in here needs describing twenty times a second, and until now
@@ -1114,6 +1554,20 @@ public sealed class Session
             bool anyBoss = Snapshot.BossesCarryAnything(_bosses.AsSpan(1, nb));
             if (anyBoss ? scenery : _snapshotSeq % 10 == 0)
                 _net.Send(peer, _bosses.AsSpan(0, nb + 1), reliable: false);
+
+            // And the rolled ones a DESCENT raises. Its own packet rather than a third flag on
+            // the one above, because these are a list rather than two singletons — a TWINNED
+            // roll ends its fight as two bodies — and because a rolled boss is described
+            // entirely differently: its shape comes off the run's seed, which every machine
+            // already has, so only what moves is here.
+            //
+            // Sent on the same empty-packet rule for the same reason: it is also how a client
+            // is told to drop the body when one dies.
+            _rolled[0] = (byte)Msg.Rolled;
+            int nr = Snapshot.WriteRolled(World!, seat, _tick, _rolled.AsSpan(1));
+            bool anyRolled = Snapshot.RolledCarryAnything(_rolled.AsSpan(1, nr));
+            if (anyRolled ? scenery : _snapshotSeq % 10 == 0)
+                _net.Send(peer, _rolled.AsSpan(0, nr + 1), reliable: false);
 
             // The sounds raised near this client since the last snapshot, so it hears the
             // fights around it. Its own cues rode local for the instant feel and are skipped on
@@ -1476,6 +1930,10 @@ public sealed class Session
                 Snapshot.ApplyBosses(World, payload.AsSpan(1));
                 break;
 
+            case Msg.Rolled when !IsHost:
+                Snapshot.ApplyRolled(World, payload.AsSpan(1));
+                break;
+
             case Msg.Structures when !IsHost:
                 Snapshot.ApplyStructures(World, payload.AsSpan(1));
                 break;
@@ -1631,6 +2089,167 @@ public sealed class Session
                     var pick = (PlanetId)payload[6 + i * 2];
                     if (Enum.IsDefined(pick)) r.Chart.Cast(payload[5 + i * 2], pick);
                 }
+                break;
+            }
+
+            case Msg.Run when !IsHost:
+            {
+                if (payload.Length < 15 || World is null) break;
+                int seed = BitConverter.ToInt32(payload, 1);
+                int hop = payload[5];
+                var dest = (PlanetId)payload[6];
+                if (!Enum.IsDefined(dest)) break;      // a malformed byte is not a world
+                int visited = payload[7];
+                var phase = (DescentPhase)payload[8];
+                if (!Enum.IsDefined(phase)) break;
+
+                // Builds the run and picks the gates on the first packet carrying a new seed,
+                // and does nothing at all on the dozens that carry the same one.
+                World.NetOpenRun(seed, hop, dest, visited);
+                World.NetAdoptRun(phase, payload[9],
+                    BitConverter.ToUInt16(payload, 10), BitConverter.ToUInt16(payload, 12),
+                    payload[14] / 4f, gatesLit: payload.Length > 15 && payload[15] != 0);
+                break;
+            }
+
+            case Msg.Arch when IsHost:
+            {
+                if (payload.Length < 2 || World is null) break;
+                if (!_seatOfPeer.TryGetValue(from, out int seat)) break;
+
+                switch (payload[1])
+                {
+                    case ArchClaimKind:
+                    {
+                        // The race, arbitrated. Twenty people can be reaching for three panels
+                        // and the host is the only machine entitled to say who got there — a
+                        // client that claimed locally would have to be contradicted, and
+                        // "which arch" is the one fact the whole room navigates by.
+                        if (payload.Length < 4 || World.ClaimedGate is not null) break;
+                        int index = BitConverter.ToUInt16(payload, 2);
+                        foreach (var g in World.Gates)
+                        {
+                            if (g.StructureIndex != index) continue;
+                            if (World.ClaimGate(g, seat)) BroadcastArchClaim(index);
+                            break;
+                        }
+                        break;
+                    }
+
+                    case ArchCastKind:
+                    {
+                        if (payload.Length < 3 || ArchPanel is not { } panel) break;
+                        if (!panel.Chart.VoteOpen) break;   // no late ballots
+                        var choice = (PlanetId)payload[2];
+                        if (!Enum.IsDefined(choice)) break;
+                        panel.Chart.Cast(seat, choice);
+                        BroadcastArchVote(panel.Chart);     // everyone watches the pips move
+                        break;
+                    }
+
+                    case ArchFeedKind:
+                        if (payload.Length < 3) break;
+                        // Replayed against the authoritative pack and the authoritative gate,
+                        // which is what stops a client feeding a fragment it does not have, or
+                        // feeding one from the other side of the city.
+                        World.FeedGate(seat, payload[2]);
+                        break;
+                }
+                break;
+            }
+
+            case Msg.Arch when !IsHost:
+            {
+                if (payload.Length < 2 || World is null) break;
+
+                switch (payload[1])
+                {
+                    case ArchClaimKind:
+                    {
+                        if (payload.Length < 4) break;
+                        int index = BitConverter.ToUInt16(payload, 2);
+                        foreach (var g in World.Gates)
+                        {
+                            if (g.StructureIndex != index) continue;
+                            if (World.ClaimedGate is null) World.ClaimGate(g, LocalSeat);
+                            break;
+                        }
+                        break;
+                    }
+
+                    case ArchTallyKind:
+                    {
+                        if (payload.Length < 5 || ArchPanel is not { } panel) break;
+                        panel.Chart.AdoptClock(payload[2] != 0, payload[3] / 10f);
+                        int n = payload[4];
+                        if (payload.Length < 5 + n * 2) break;
+                        panel.Chart.Votes.Clear();
+                        for (int i = 0; i < n; i++)
+                        {
+                            var pick = (PlanetId)payload[6 + i * 2];
+                            if (Enum.IsDefined(pick)) panel.Chart.Cast(payload[5 + i * 2], pick);
+                        }
+                        break;
+                    }
+
+                    case ArchStateKind:
+                    {
+                        if (payload.Length < 17 + Unrendered.World.Arch.SocketCount) break;
+                        int at = 2;
+                        int index = BitConverter.ToUInt16(payload, at); at += 2;
+                        var phase = (Unrendered.World.Arch.Phase)payload[at++];
+                        if (!Enum.IsDefined(phase)) break;
+
+                        byte destByte = payload[at++];
+                        PlanetId? dest = destByte == 255 ? null : (PlanetId)destByte;
+                        if (dest is { } d && !Enum.IsDefined(d)) dest = null;
+
+                        Span<Fragment> sockets = stackalloc Fragment[Unrendered.World.Arch.SocketCount];
+                        for (int i = 0; i < Unrendered.World.Arch.SocketCount; i++)
+                        {
+                            var f = (Fragment)payload[at++];
+                            sockets[i] = Enum.IsDefined(f) ? f : Fragment.None;
+                        }
+
+                        var carrying = (Fragment)payload[at++];
+                        if (!Enum.IsDefined(carrying)) carrying = Fragment.None;
+                        byte toByte = payload[at++];
+                        int carryingTo = toByte == 255 ? -1 : toByte;
+                        float carryT = payload[at++] / 255f;
+                        float charge = payload[at++] / 255f;
+                        int entered = BitConverter.ToInt32(payload, at); at += 4;
+                        float grace = payload[at];
+
+                        World.NetAdoptGate(index, phase, dest, sockets, carrying, carryingTo,
+                            carryT, charge, entered, grace);
+                        break;
+                    }
+                }
+                break;
+            }
+
+            case Msg.Chat when IsHost:
+            {
+                // A client said something. What arrives is text and only text — the host is the
+                // one that decides whether it was a command, whether that seat may run it, and
+                // what it does.
+                if (payload.Length < 3 || payload[1] != ChatSay) break;
+                if (!_seatOfPeer.TryGetValue(from, out int who)) break;
+                int n = Math.Min(payload[2], payload.Length - 3);
+                if (n <= 0) break;
+                HandleTyped(DecodeName(payload.AsSpan(3, n)), who);
+                break;
+            }
+
+            case Msg.Chat when !IsHost:
+            {
+                if (payload.Length < 3) break;
+                int n = Math.Min(payload[2], payload.Length - 3);
+                if (n <= 0) break;
+                string line = DecodeName(payload.AsSpan(3, n));
+                Notices.Push(line, payload[1] == ChatTold
+                    ? NoticeFeed.Kind.Console
+                    : NoticeFeed.Kind.Chat);
                 break;
             }
 

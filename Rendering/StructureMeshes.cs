@@ -184,10 +184,15 @@ public static class StructureMeshes
 
     /// <summary>Height of the leg an arc springs from, at scale 1. Everything above
     /// this is curve; everything below is the pylon you can drive into.</summary>
-    private const float SpringHeight = 7f;
+    /// <summary>Public so the simulation side can be checked against it: <see cref="Unrendered.World.Arch"/>
+    /// keeps its own copy of this number to place sockets from, and a self-test asserts the two
+    /// agree. A socket the renderer draws where the sim does not fly fragments is a fragment
+    /// that arrives inside the stonework.</summary>
+    public const float SpringHeight = 7f;
 
     /// <summary>How far the apex rises above the springing point, at scale 1.</summary>
-    private const float ArchRise = 15f;
+    /// <summary>Also public, and for the same reason. See <see cref="SpringHeight"/>.</summary>
+    public const float ArchRise = 15f;
 
     /// <summary>Straight beams in the curve. Ten is the number where the arc stops
     /// reading as a polygon and starts reading as a curve at this resolution — more is

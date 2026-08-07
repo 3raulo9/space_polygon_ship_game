@@ -2502,6 +2502,416 @@ public static class SfxSynth
         };
     }
 
+    // --- The arch ------------------------------------------------------------------------
+    //
+    // The one bank in this file that is *engineered*. Everything else here is meat, powder or
+    // weather: the crab's noises are sick, the flower's are sung, a gun is a transient and a
+    // building coming down is gravel. An arch is servos, rails, contactors and a load — the
+    // first evidence on any of these planets that something was built to work and still does.
+    //
+    // Which is why almost all of it is Square with a swept Duty and a heavy crush. That
+    // combination is what reads as machinery rather than as an event, and it is used nowhere
+    // else in the game, so the arch is instantly tellable from every other sound a player has
+    // heard for the last three hours.
+
+    /// <summary>
+    /// A fragment settling out of a corpse: a short mineral ring over the wet crunch of the
+    /// body coming apart around it. Sine, not square — this is the one thing in the arch's
+    /// bank that is not a machine, and it has to cut cleanly out of a very noisy half-second.
+    /// </summary>
+    public static Params FragmentChime(Random rng, bool sun)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        // The sun rings a fifth above the moon. Not decorative: a player who has taken four of
+        // these knows which one dropped before the announce line finishes drawing, which is
+        // the whole difference between a tag and a thing you have a feeling about.
+        float baseF = sun ? Range(680f, 760f) : Range(450f, 505f);
+
+        return new Params
+        {
+            Wave = Osc.Sine,
+            Length = Range(0.85f, 1.05f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.985f, 1.0f),   // barely falls: a struck bell, not a chirp
+
+            Attack = 0.01f,                          // instantaneous, like something struck
+            Sustain = 0.18f,
+            Decay = 0.81f,                           // and then a very long tail
+
+            Detune = sun ? Range(1.495f, 1.505f)     // a fifth: bright, consonant, warm
+                         : Range(1.185f, 1.20f),     // a minor third: cold and hollow
+            DetuneGain = Range(0.3f, 0.42f),
+
+            TremoloDepth = Range(0.05f, 0.1f),       // the faintest beat between the two voices
+            TremoloSpeed = Range(3f, 5f),
+
+            LpCutoff = Range(0.85f, 1f),
+            HpCutoff = Range(0.04f, 0.07f),
+
+            Volume = 0.5f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// Every arch on the planet taking power. A very long swell up out of nothing into a held
+    /// machine tone — no transient at all at the front, because the read is that something
+    /// enormous which was always standing there has just started drawing current.
+    /// </summary>
+    public static Params ArchWake(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(52f, 64f);
+        return new Params
+        {
+            Wave = Osc.Square,
+            Length = Range(2.6f, 3.1f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(2.9f, 3.3f),     // climbs nearly two octaves: spinning up
+
+            Attack = 0.55f,                          // no strike: it arrives
+            Sustain = 0.24f,
+            Decay = 0.21f,
+
+            Duty = 0.5f,
+            DutySweep = Range(-0.18f, -0.1f),        // hollows out as it climbs
+
+            Detune = Range(2.005f, 2.02f),           // an octave, a hair sharp — power, not music
+            DetuneGain = Range(0.4f, 0.55f),
+
+            TremoloDepth = Range(0.14f, 0.22f),      // the pulse of something turning over
+            TremoloSpeed = Range(7f, 11f),
+
+            LpCutoff = Range(0.3f, 0.4f),
+            LpResonance = Range(0.2f, 0.32f),
+            LpSweep = Range(1.00004f, 1.00009f),     // opening: it gets brighter as it wakes
+            HpCutoff = Range(0.01f, 0.02f),
+
+            CrushBits = rng.Next(6, 9),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.62f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// One panel answering a hand — and, at the same instant, every other arch on the map
+    /// giving up. A hard contactor snap followed by a fall, which is the two halves of what
+    /// just happened in one sound: this one is live, those ones are not.
+    /// </summary>
+    public static Params ArchClaim(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(300f, 360f);
+        return new Params
+        {
+            Wave = Osc.Square,
+            Length = Range(1.1f, 1.35f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.34f, 0.42f),   // drops away hard: the others going dark
+
+            Attack = 0.008f,                         // the snap
+            Sustain = 0.2f,
+            Decay = 0.79f,
+
+            Duty = Range(0.28f, 0.36f),
+            DutySweep = Range(0.1f, 0.2f),           // thickens as it falls
+
+            Detune = Range(1.335f, 1.35f),           // a fourth: institutional, not melodic
+            DetuneGain = Range(0.35f, 0.5f),
+
+            LpCutoff = Range(0.42f, 0.55f),
+            LpResonance = Range(0.24f, 0.36f),
+            LpSweep = Range(0.99992f, 0.99997f),     // closing: the light going out of it
+            HpCutoff = Range(0.02f, 0.04f),
+
+            CrushBits = rng.Next(6, 9),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.58f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The rail hauling a fragment out along the span. <paramref name="reach"/> is 0..1 of how
+    /// far it has to travel — the keystone is a short trip and an outer foot is a long one, and
+    /// the haul has to sound like the distance it is covering or the five inserts are one
+    /// sound played five times.
+    /// </summary>
+    public static Params RailHaul(Random rng, float reach)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+        reach = Math.Clamp(reach, 0f, 1f);
+
+        float baseF = Range(112f, 132f);
+        return new Params
+        {
+            Wave = Osc.Square,
+            // Half a second to a second and a half. The travel time is the sound's length,
+            // because the renderer moves the fragment for exactly as long as this plays.
+            Length = 0.5f + reach * Range(0.9f, 1.1f),
+
+            StartFreq = baseF,
+            // Loads down as it goes out: a longer haul ends lower, so the outer sockets end
+            // with a heavier, more strained note than the keystone does.
+            EndFreq = baseF * (1f - 0.3f * reach) * Range(0.95f, 1.02f),
+
+            Attack = 0.06f,                          // a motor taking up slack
+            Sustain = 0.8f,
+            Decay = 0.14f,
+
+            Duty = Range(0.36f, 0.46f),
+            DutySweep = Range(-0.1f, -0.04f),
+
+            TremoloDepth = Range(0.34f, 0.46f),      // the teeth of the rail: this is the grind
+            TremoloSpeed = Range(26f, 38f),
+
+            VibratoDepth = Range(0.006f, 0.014f),    // a load that is not perfectly balanced
+            VibratoSpeed = Range(5f, 8f),
+
+            LpCutoff = Range(0.26f, 0.36f),
+            LpResonance = Range(0.2f, 0.3f),
+            HpCutoff = Range(0.015f, 0.03f),
+
+            CrushBits = rng.Next(5, 8),
+            CrushRate = rng.Next(2, 4),
+            Volume = 0.5f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// A fragment dropping into its socket and the contactors closing on it. Two things at
+    /// once — a hard mechanical seat and, underneath it, the socket taking a load it has been
+    /// waiting a very long time for. Short, final, and the sound a room counts to five on.
+    /// </summary>
+    public static Params SocketSeat(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(160f, 190f);
+        return new Params
+        {
+            Wave = Osc.Square,
+            Length = Range(0.5f, 0.62f),
+
+            StartFreq = baseF * Range(2.6f, 3.1f),   // the seat: high and instant
+            EndFreq = baseF * Range(0.72f, 0.82f),   // settling onto the load
+
+            Attack = 0.005f,                         // no approach at all — it arrives seated
+            Sustain = 0.16f,
+            Decay = 0.835f,
+
+            Duty = Range(0.2f, 0.3f),
+            DutySweep = Range(0.2f, 0.32f),          // opens out into a fat, held contact
+
+            Detune = Range(1.995f, 2.01f),
+            DetuneGain = Range(0.42f, 0.56f),
+
+            LpCutoff = Range(0.5f, 0.64f),
+            LpResonance = Range(0.3f, 0.44f),        // the ring of the housing it seated into
+            LpSweep = Range(0.99988f, 0.99995f),
+            HpCutoff = Range(0.02f, 0.035f),
+
+            CrushBits = rng.Next(5, 8),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.6f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The fifth. Not a louder socket — a different event: the span taking its own weight for
+    /// the first time. Everything that makes <see cref="SocketSeat"/> a click is stretched into
+    /// something structural, and the pitch goes the other way, climbing instead of settling.
+    /// </summary>
+    public static Params Keystone(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(64f, 78f);
+        return new Params
+        {
+            Wave = Osc.Square,
+            Length = Range(2.0f, 2.4f),
+
+            StartFreq = baseF * Range(3.4f, 4f),     // the strike of it dropping in
+            EndFreq = baseF * Range(1.9f, 2.2f),     // and then the whole span ringing under it
+
+            Attack = 0.004f,
+            Sustain = 0.34f,
+            Decay = 0.656f,
+
+            Duty = Range(0.18f, 0.26f),
+            DutySweep = Range(0.24f, 0.36f),
+
+            Detune = Range(1.4955f, 1.5045f),        // a fifth: this one is allowed to be music
+            DetuneGain = Range(0.5f, 0.66f),
+
+            TremoloDepth = Range(0.1f, 0.18f),
+            TremoloSpeed = Range(5f, 8f),
+
+            LpCutoff = Range(0.46f, 0.6f),
+            LpResonance = Range(0.34f, 0.48f),
+            LpSweep = Range(0.99994f, 0.99998f),
+            HpCutoff = Range(0.012f, 0.024f),
+
+            CrushBits = rng.Next(6, 9),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.68f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The bed under the opening: the span winding up with all five in. A loop, so it can be
+    /// held for as long as the charge takes and driven louder and higher as it climbs — see
+    /// <see cref="Audio.SetPortalCharge"/>. Deliberately the one bed in the game that is meant
+    /// to become unbearable rather than to sit underneath things.
+    /// </summary>
+    public static Params PortalBed(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Saw,                          // richer than square: something under load
+            Length = 1.4f,
+            Loop = true,
+
+            StartFreq = Range(84f, 96f),
+            EndFreq = Range(84f, 96f),               // pinned flat — a loop cannot glide
+
+            Duty = 0.5f,
+
+            Detune = Range(1.334f, 1.338f),          // a fourth, and slightly wrong with it
+            DetuneGain = Range(0.44f, 0.56f),
+
+            TremoloDepth = Range(0.2f, 0.3f),        // the turn of something very large
+            TremoloSpeed = Range(6f, 9f),
+
+            LpCutoff = Range(0.24f, 0.32f),
+            LpResonance = Range(0.3f, 0.42f),
+            HpCutoff = Range(0.008f, 0.018f),
+
+            CrushBits = rng.Next(6, 9),
+            CrushRate = rng.Next(1, 3),
+            Volume = 0.5f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The boom. The loudest single thing in the game — louder than a boss dying, because a
+    /// boss dying ends a fight and this ends a planet. Built as the low half of the sound; the
+    /// bright tear over the top of it is <see cref="PortalTear"/>, voiced with it.
+    /// </summary>
+    public static Params PortalBoom(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        return new Params
+        {
+            Wave = Osc.Noise,
+            Length = Range(3.2f, 3.8f),
+
+            StartFreq = Range(240f, 300f),
+            EndFreq = Range(28f, 40f),               // falls through the floor
+
+            Attack = 0.002f,
+            Sustain = 0.1f,
+            Decay = 0.898f,                          // nearly all tail: a very long roll
+
+            LpCutoff = Range(0.2f, 0.3f),
+            LpResonance = Range(0.16f, 0.26f),
+            LpSweep = Range(0.999955f, 0.999975f),   // closing down into a distant rumble
+            HpCutoff = Range(0.004f, 0.01f),
+
+            CrushBits = 0,                           // uncrushed: this is weather, not a machine
+            CrushRate = 0,
+            Volume = 0.78f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// The bright half of the opening: the actual tear. Climbs where the boom falls, so the two
+    /// together pull apart in opposite directions — which is the whole read of the moment.
+    /// </summary>
+    public static Params PortalTear(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(160f, 200f);
+        return new Params
+        {
+            Wave = Osc.Saw,
+            Length = Range(2.4f, 2.9f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(7f, 9f),         // three octaves up and still going
+
+            Attack = 0.05f,
+            Sustain = 0.3f,
+            Decay = 0.65f,
+
+            Detune = Range(1.0f, 1.008f),            // near-unison: a wide, beating shimmer
+            DetuneGain = Range(0.5f, 0.66f),
+
+            VibratoDepth = Range(0.01f, 0.02f),
+            VibratoSpeed = Range(7f, 11f),
+
+            LpCutoff = Range(0.55f, 0.72f),
+            LpResonance = Range(0.3f, 0.42f),
+            LpSweep = Range(1.00003f, 1.00007f),
+            HpCutoff = Range(0.03f, 0.055f),
+
+            Volume = 0.55f,
+            Seed = rng.Next(),
+        };
+    }
+
+    /// <summary>
+    /// One craft going through. A swallow: a short bright approach cut off dead by a low
+    /// close, so what everybody still outside hears is somebody stopping existing here. The
+    /// count moving without you.
+    /// </summary>
+    public static Params PortalSwallow(Random rng)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        float baseF = Range(420f, 500f);
+        return new Params
+        {
+            Wave = Osc.Sine,
+            Length = Range(0.9f, 1.1f),
+
+            StartFreq = baseF,
+            EndFreq = baseF * Range(0.12f, 0.18f),   // falls away to nothing
+
+            Attack = 0.04f,
+            Sustain = 0.12f,
+            Decay = 0.84f,
+
+            Detune = Range(1.495f, 1.505f),
+            DetuneGain = Range(0.3f, 0.44f),
+
+            LpCutoff = Range(0.5f, 0.66f),
+            LpResonance = Range(0.26f, 0.38f),
+            LpSweep = Range(0.99985f, 0.99993f),     // the door shutting behind them
+            HpCutoff = Range(0.02f, 0.04f),
+
+            Volume = 0.55f,
+            Seed = rng.Next(),
+        };
+    }
+
     // --- .wav header helpers --------------------------------------------------
 
     private static void WriteTag(byte[] b, int at, string tag)

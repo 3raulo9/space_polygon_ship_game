@@ -131,7 +131,16 @@ public sealed record BossGenome(
     // 0..1 across the board, so the entity can read them without knowing what rolled them.
     float Aggression,   // shorter gaps between attacks, faster wind-ups
     float Standoff,     // how far out it likes to sit, as a fraction of its band
-    float GaitSpeed)
+    float GaitSpeed,
+
+    // --- What it was rolled from ------------------------------------------------------
+    /// <summary>How deep into the crossing this was rolled, 0..1. Not a trait — everything it
+    /// touched is already baked into the fields above — but kept because it is one of the four
+    /// numbers a body can be <em>rebuilt</em> from, and rebuilding is how a rolled boss crosses
+    /// the wire: a fifty-trait animal would be a packet per body per snapshot, and
+    /// (seed, lineage, size, difficulty) is eight bytes that both ends roll into the same
+    /// creature. See <c>Snapshot.WriteRolled</c>.</summary>
+    float Difficulty = 0f)
 {
     /// <summary>
     /// How high the core sits in the body's own frame, before scale. The single number the
@@ -341,7 +350,8 @@ public static class BossGen
             Quirk: quirk,
             Aggression: Math.Clamp(0.2f + rng.NextSingle() * 0.6f + 0.2f * difficulty, 0f, 1f),
             Standoff: 0.15f + rng.NextSingle() * 0.8f,
-            GaitSpeed: 0.55f + rng.NextSingle() * 0.75f);
+            GaitSpeed: 0.55f + rng.NextSingle() * 0.75f,
+            Difficulty: difficulty);
     }
 
     // --- The body ------------------------------------------------------------------

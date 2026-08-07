@@ -37,7 +37,26 @@ public enum ItemKind
     /// a cell is a decision about the next thirty seconds and this is a decision about the run.
     /// It cannot be crafted and it cannot be taken apart. You do not open a piece of the
     /// moon.</para>
+    ///
+    /// <para><b>Called MOON FRAGMENT until the arch was built.</b> It had to give the name up:
+    /// a boss now leaves a FRAGMENT OF THE MOON on the ground, and two collectible moon rocks
+    /// with the same name and opposite purposes is a player throwing away the run's progress
+    /// because they thought it was a heal. This one is named for the colour it is drawn in
+    /// (<see cref="Palette.MoonStone"/>), which is lifted off the moon disc in the sky.</para>
     /// </summary>
+    Moonstone,
+
+    // --- The arch's keys ---------------------------------------------------------------
+    // What a DESCENT boss leaves behind. Five of them open the way off a planet, and that is
+    // the whole of what they do: they mend nothing, they are made of nothing, and they cannot
+    // be taken apart. Appended here rather than filed beside the moonstone deliberately — the
+    // enum is the wire, and these are the newest thing in it.
+
+    /// <summary>Half of what a boss can give up. Kept, carried, and fed to an arch.</summary>
+    SunFragment,
+
+    /// <summary>The other half. The coin is fair and has no memory, so a run really can end
+    /// with five of one and none of the other.</summary>
     MoonFragment,
 }
 
@@ -60,7 +79,9 @@ public static class ItemNames
         ItemKind.Zinc           => "ZINC",
         ItemKind.Lithium        => "LITHIUM",
         ItemKind.RepairKit      => "REPAIR KIT",
-        ItemKind.MoonFragment   => "MOON FRAGMENT",
+        ItemKind.Moonstone      => "MOONSTONE",
+        ItemKind.SunFragment    => "FRAGMENT OF THE SUN",
+        ItemKind.MoonFragment   => "FRAGMENT OF THE MOON",
         _                       => "SALVAGE",
     };
 }
@@ -182,9 +203,14 @@ public sealed class Inventory
         ItemKind.Battery      => 4,
         ItemKind.RepairKit    => 2,
         // One. Not because two would be unbalanced — it would, but that is what rarity is for —
-        // because a slot holding "MOON FRAGMENT x3" makes it a supply, and the whole of what
+        // because a slot holding "MOONSTONE x3" makes it a supply, and the whole of what
         // this item is worth is that having one is an event.
-        ItemKind.MoonFragment => 1,
+        ItemKind.Moonstone => 1,
+        // Also one, for a different reason: five fragments must cost five of the twenty slots.
+        // A stack would make carrying the run's progress free, and the weight is the point —
+        // a player holding all five is carrying a quarter of a pack in rocks that do nothing,
+        // which is exactly the pressure that makes a room split the load.
+        ItemKind.SunFragment or ItemKind.MoonFragment => 1,
         ItemKind.Bullet       => 20,
         ItemKind.CrabFragment => 9,
         ItemKind.CrabCore     => 1,

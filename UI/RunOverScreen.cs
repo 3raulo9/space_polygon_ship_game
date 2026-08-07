@@ -80,11 +80,18 @@ public sealed class RunOverScreen
     /// A match has nineteen other people in it, a spectator camera to watch them with, and a
     /// host who decides when it is over; a panel offering one of them "TRY AGAIN" while the
     /// others are still fighting would be nonsense, and Escape already gets them out.</para>
+    ///
+    /// <para><b>Clearing a planet no longer counts.</b> It used to: a Colossus going down was
+    /// the end of DESCENT and this screen was what you got. It is the middle now — the arches
+    /// take power, the room picks somewhere it has not been, and the crossing carries on. So
+    /// only a <em>lost</em> run opens this automatically, and the winning face is reached the
+    /// one way that is genuinely an ending: the last arch of a crossing, whose panel reads
+    /// IN PROGRESS and whose one row asks for it (see <c>Game.EnterRunOver</c>).</para>
     /// </summary>
     public static bool ShouldOpen(World.World world, bool networked)
     {
         if (networked) return false;
-        return world.Player.Spectating || world.Run is { Finished: true };
+        return world.Player.Spectating || world.Run is { Phase: DescentPhase.Lost };
     }
 
     /// <summary>
@@ -124,8 +131,13 @@ public sealed class RunOverScreen
             // which is the same fact stated as though it had stopped short.
             _lines.Add(("REACHED", Won ? "ALL FIVE WAVES"
                                        : $"WAVE {run.Wave} OF {Descent.WaveCount}"));
-            int suns = run.SunsOf(world.LocalIndex), moons = run.MoonsOf(world.LocalIndex);
-            if (suns + moons > 0) _lines.Add(("FRAGMENTS", $"{suns} SUN  {moons} MOON"));
+            // What they were still holding when it ended, out of their pack — not what they
+            // ever took. A player who carried three across a planet and fed them all to an
+            // arch shows none here, and that is right: the arch has them, and this line is
+            // about what was in your hands at the end.
+            int suns = world.FragmentsOf(world.LocalIndex, Fragment.Sun);
+            int moons = world.FragmentsOf(world.LocalIndex, Fragment.Moon);
+            if (suns + moons > 0) _lines.Add(("STILL CARRYING", $"{suns} SUN  {moons} MOON"));
         }
 
         _lines.Add(("DESTROYED", world.KillsOf(world.LocalIndex).ToString()));
