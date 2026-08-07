@@ -41,33 +41,88 @@ public sealed class StarMap
 
     public void ClearDirty() => CastDirty = false;
 
+    /// <summary>
+    /// Worlds this chart will not let anybody pick, as a bitmask over <see cref="PlanetId"/>.
+    ///
+    /// <para>Empty at the lobby's table, where every world is open. It is the arch that uses
+    /// this: a gate cannot send you to the planet you are standing on, and it cannot send you
+    /// anywhere the session has already been — the campaign is five worlds and you see each of
+    /// them once. A locked world is still drawn, struck through, because "you have been here"
+    /// is information about the run and hiding it would make the chart shrink for no visible
+    /// reason.</para>
+    /// </summary>
+    public int Locked { get; private set; }
+
+    public void Lock(PlanetId id) => Locked |= 1 << (int)id;
+    public void ClearLocks() => Locked = 0;
+    public bool IsLocked(PlanetId id) => (Locked & (1 << (int)id)) != 0;
+
+    /// <summary>Whether anything at all is still pickable. False only if a campaign has been
+    /// everywhere, which is the state the last planet's panel reports as IN PROGRESS.</summary>
+    public bool AnyOpen
+    {
+        get
+        {
+            foreach (var p in Planet.All) if (!IsLocked(p.Id)) return true;
+            return false;
+        }
+    }
+
     /// <summary>Walks the cursor along the chart. Hard edges, no wrap — the map is a row of
-    /// five worlds, not a carousel, and running off the end should feel like a wall.</summary>
+    /// five worlds, not a carousel, and running off the end should feel like a wall.
+    ///
+    /// <para>Locked worlds are stepped over rather than stopped on, so a cursor never rests
+    /// somewhere the player cannot commit to. Running out of open worlds in the direction of
+    /// travel is the wall.</para></summary>
     public void Move(int step)
     {
-        int i = Math.Clamp((int)Cursor + step, 0, Planet.All.Count - 1);
-        if (i == (int)Cursor) return;
-        Cursor = (PlanetId)i;
-        Audio.PlayBlip();
+        if (step == 0) return;
+        int i = (int)Cursor;
+        int last = Planet.All.Count - 1;
+        for (int guard = 0; guard <= last; guard++)
+        {
+            i += step;
+            if (i < 0 || i > last) return;              // walked off the end
+            if (IsLocked((PlanetId)i)) continue;        // been there; keep going
+            Cursor = (PlanetId)i;
+            Audio.PlayBlip();
+            return;
+        }
     }
 
     /// <summary>Point the cursor somewhere outright — used when the wire says the destination
-    /// changed, so a client's chart follows the host's choice.</summary>
-    public void PointAt(PlanetId id) => Cursor = id;
+    /// changed, so a client's chart follows the host's choice, and by the arch's panel when a
+    /// world is clicked directly rather than walked to.</summary>
+    public void PointAt(PlanetId id)
+    {
+        if (IsLocked(id)) return;
+        Cursor = id;
+    }
+
+    /// <summary>Puts the cursor on the first world that is still open. Called when a chart
+    /// opens, so it never comes up pointing at somewhere the run has already been.</summary>
+    public void PointAtFirstOpen()
+    {
+        foreach (var p in Planet.All)
+            if (!IsLocked(p.Id)) { Cursor = p.Id; return; }
+    }
 
     /// <summary>The local player commits to what is under the cursor. Only meaningful while a
     /// vote is open; outside one the host settles it and everyone else is a spectator to that.</summary>
     public void CastLocal(int seat)
     {
-        if (!VoteOpen) return;
+        if (!VoteOpen || IsLocked(Cursor)) return;
         Cast(seat, Cursor);
         CastDirty = true;
     }
 
-    /// <summary>Records a vote — the local player's, or one that arrived off the wire.</summary>
+    /// <summary>Records a vote — the local player's, or one that arrived off the wire. A ballot
+    /// for a locked world is dropped rather than counted: an old build, a stale packet or a
+    /// client that has not been told about a lock must not be able to send the room somewhere
+    /// it has already been.</summary>
     public void Cast(int seat, PlanetId choice)
     {
-        if (seat < 0) return;
+        if (seat < 0 || IsLocked(choice)) return;
         Votes[seat] = choice;
     }
 
@@ -120,15 +175,26 @@ public sealed class StarMap
     /// a host-breaks-ties rule would quietly make the host's vote worth two. An empty ballot
     /// falls back to <paramref name="fallback"/>, the destination that was already set.
     /// </summary>
+    /// <param name="fallback">Where an empty ballot lands. At the lobby's table that is the
+    /// destination already set; at an arch it is meaningless, so the arch passes the first open
+    /// world instead — a gate that resolved to "the planet you are standing on" would be a
+    /// three-hour run ending in a door back into the room you just left.</param>
     public PlanetId Resolve(PlanetId fallback)
     {
         if (Votes.Count == 0) return fallback;
 
         int best = 0;
-        foreach (var p in Planet.All) best = Math.Max(best, Tally(p.Id));
+        foreach (var p in Planet.All)
+            if (!IsLocked(p.Id)) best = Math.Max(best, Tally(p.Id));
 
         var leaders = new List<PlanetId>();
-        foreach (var p in Planet.All) if (Tally(p.Id) == best) leaders.Add(p.Id);
+        foreach (var p in Planet.All)
+            if (!IsLocked(p.Id) && Tally(p.Id) == best) leaders.Add(p.Id);
+
+        // Every ballot was for somewhere locked, which the casting rules above are meant to
+        // make impossible — but a resolve that returns nothing at all would strand the room,
+        // so it falls back rather than throwing.
+        if (leaders.Count == 0) return fallback;
 
         return leaders[Random.Shared.Next(leaders.Count)];
     }

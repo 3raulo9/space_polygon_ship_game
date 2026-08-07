@@ -49,6 +49,19 @@ public enum PickupKind
     /// <summary>A piece of the moon, lying where it came down. The rarest thing on any grid,
     /// and the only salvage in the game that arrives from <em>above</em> rather than being left
     /// by something that died.</summary>
+    Moonstone,
+
+    // --- The arch's keys ----------------------------------------------------------------
+    // The only salvage on the grid that is worth nothing at all to the craft carrying it. It
+    // mends no layer, loads no gun and makes no part; it is worth exactly one fifth of the way
+    // off this planet, and only once it is standing in front of an arch.
+
+    /// <summary>Half of what a boss leaves. Lies where the body fell until somebody takes it,
+    /// and unlike every other piece of salvage on the grid it is never swept, never evicted and
+    /// never times out — see <see cref="Unrendered.World.World.IsFragment"/>.</summary>
+    SunFragment,
+
+    /// <summary>The other half.</summary>
     MoonFragment,
 }
 
@@ -84,6 +97,16 @@ public sealed class Pickup
     // random phase so a field of pickups never pulses in lockstep.
     public float Age;
     private readonly float _phase;
+
+    /// <summary>The <see cref="Age"/> at which this last told somebody their pack was too full
+    /// to take it. Host-side only, and only ever set on a fragment — the one kind of salvage
+    /// that refuses rather than overflowing.
+    ///
+    /// <para>It lives on the pickup rather than on the player because the thing being
+    /// rate-limited is <em>this rock saying no</em>, not the craft hearing it: a player who
+    /// drives across three fragments they cannot lift should be told three times. Seeded
+    /// negative so the very first refusal is never swallowed by the gap.</para></summary>
+    public float LastRefusal = -999f;
 
     /// <summary>How many items this pickup yields when collected. Batteries, fragments and
     /// raw materials carry one; a stray round carries a random 5–20 bullets, rolled once at

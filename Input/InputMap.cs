@@ -39,6 +39,10 @@ public static class InputMap
     /// </summary>
     public static bool InventoryToggle => Binds.Pressed(InputAction.Inventory);
 
+    /// <summary>Opens the chat. Read only while the chat is shut — once it is open the key is a
+    /// letter like every other, and the box closes on Escape or on sending.</summary>
+    public static bool ChatToggle => Binds.Pressed(InputAction.Chat);
+
     /// <summary>Held, not pressed: the scoreboard is a thing you look at while the match
     /// carries on around you, not a screen you enter and leave.</summary>
     public static bool ScoreboardDown => Binds.Down(InputAction.Scoreboard);

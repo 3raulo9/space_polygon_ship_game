@@ -41,6 +41,14 @@ public sealed class EntityRenderer
     private readonly PolyMesh _kit = Meshes.RepairKit(Palette.RepairShell, Palette.RepairMark);
     private readonly PolyMesh _moon = Meshes.MoonShard(Palette.MoonStone, Palette.MoonBreak);
 
+    // The arch's two keys. Same mesh call, one flag apart — a sun is closed and a moon is cut
+    // open — so the pair can never drift apart into two separately-tuned objects.
+    /// <summary>The gates, drawn over the top of the arcs the city already had.</summary>
+    private readonly ArchRenderer _arches = new();
+
+    private readonly PolyMesh _sunFrag = Meshes.Fragment(Palette.SunStone, Palette.SunBreak, hollow: false);
+    private readonly PolyMesh _moonFrag = Meshes.Fragment(Palette.MoonStone, Palette.MoonBreak, hollow: true);
+
     // The DESCENT bosses. One renderer for all five lineages and every roll: unlike the crab
     // and the mouth, whose bodies are typed out, these are built from a genome at the moment
     // they are first drawn and cached from then on. See BossModel.
@@ -204,6 +212,11 @@ public sealed class EntityRenderer
             _boss.DrawShard(shard, cameraPos,
                 Torus.NearestImage(shard.Position, eyeXZ) - shard.Position);
 
+        // The gates. Late in the pass, because almost all of what they draw is translucent —
+        // a column of light, a portal's shells — and translucent geometry has to go down over
+        // the solid world rather than under it.
+        _arches.Draw(world, cameraPos, eyeXZ, (float)Raylib.GetTime());
+
         // The other players. This is a first-person game, so a craft on screen never existed
         // outside the hangar's turntable — which is exactly the draw reused here, one per
         // seat that is not the eye behind the camera. Drawn at each craft's own height, so a
@@ -301,8 +314,21 @@ public sealed class EntityRenderer
                 // find on a grid, and a player who is going to cross a whole city for one has
                 // to be able to tell it from a lump of scrap at the range they first see it,
                 // which at 320 pixels across means silhouette and size and nothing else.
-                case PickupKind.MoonFragment:
+                case PickupKind.Moonstone:
                     _moon.Draw(at, pk.Spin * 0.4f, pk.BobHeight + 0.3f, cameraPos, 1.7f);
+                    break;
+
+                // The arch's keys, drawn larger and higher than anything else on the grid —
+                // larger even than the moonstone, which was the previous record holder. There
+                // are five of these on a whole planet, they are the only way off it, and a
+                // player must never walk past one because they took it for scrap. They turn
+                // faster than the moonstone too: a fragment is powered, and the shard is a rock.
+                case PickupKind.SunFragment:
+                    _sunFrag.Draw(at, pk.Spin * 0.8f, pk.BobHeight + 0.5f, cameraPos, 2.0f);
+                    break;
+
+                case PickupKind.MoonFragment:
+                    _moonFrag.Draw(at, pk.Spin * 0.8f, pk.BobHeight + 0.5f, cameraPos, 2.0f);
                     break;
 
                 default: _bullet.Draw(at, pk.Spin, pk.BobHeight, cameraPos); break;

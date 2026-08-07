@@ -27,6 +27,19 @@ public sealed partial class World : IAnchorField
     public readonly List<PlayerTank> Players = new();
 
     /// <summary>
+    /// Whether there is a session behind this world — i.e. whether this is a match rather than
+    /// a solo run. Set by the game loop when it stands a world up.
+    ///
+    /// <para>The world went a long time without needing to know, and deliberately: everything
+    /// it does is per-seat whether there are twenty seats or one, which is what has kept solo
+    /// and multiplayer the same code. The arch is the first thing that genuinely differs —
+    /// choosing a destination is a twenty-second vote in a room and an immediate decision
+    /// alone, and "how many people have gone through" is a question with no meaning in a solo
+    /// run. Both of those are read off this.</para>
+    /// </summary>
+    public bool Networked { get; internal set; }
+
+    /// <summary>
     /// Which seat this machine is driving. Zero on the host, and on every solo run, which
     /// is why <see cref="Player"/> can stay the plain unqualified read it has always been.
     /// </summary>
@@ -1006,10 +1019,20 @@ public sealed partial class World : IAnchorField
     /// on a straight 5/5/5 — the craft this game had before the hangar existed — which
     /// is what the headless self-test and the capture harness both want.
     /// </summary>
-    public World(Loadout? loadout = null, MatchSettings? match = null)
+    /// <param name="session">The crossing this planet is one leg of, or null for a SANDBOX
+    /// world and for the tests that stand a lone DESCENT up.
+    ///
+    /// <para>A constructor parameter and emphatically <em>not</em> an init-only property, which
+    /// is what it was first written as and which was silently broken: object initialisers run
+    /// after the constructor, and the constructor is where <c>OpenDescent</c> stands the run
+    /// up. So the session was always null at the one moment it was read — the campaign never
+    /// recorded arriving anywhere, the chart never struck out the world underfoot, and the
+    /// difficulty curve quietly fell back to the per-planet one on every planet.</para></param>
+    public World(Loadout? loadout = null, MatchSettings? match = null, Campaign? session = null)
     {
         Loadout = loadout ?? new Loadout();
         Match = (match ?? MatchSettings.SinglePlayer).Clamped();
+        Session = session;
 
         // The wire's directory of the skyline, taken while the field is still whole and every
         // building's Index is its place in it. Held for the life of the stage, so a razed lot
@@ -1883,6 +1906,7 @@ public sealed partial class World : IAnchorField
         UpdateCrabBlasts(dt);
         UpdateSmoke(dt);
         UpdateStructures(dt);
+        SpillFragmentsOfTheDead();
         UpdatePickups(dt);
         // How far off the hunters are willing to sit. Fixed everywhere except SOLUNE after
         // dark, where they come right in — pushed onto the live hulls each tick rather than
@@ -2526,6 +2550,18 @@ public sealed partial class World : IAnchorField
     /// </summary>
     private bool FellStructure(Structure s, Vector3 impact)
     {
+        // A gate does not come down. There are a handful of them on a planet, they are the only
+        // way off it, and a room that has cut its own exit out of the skyline with a stray lance
+        // has lost a three-hour run to a ricochet.
+        //
+        // Refused here rather than in the four places that fell things, and refused for the
+        // whole run rather than only once the gates are lit — an arc chosen at the drop is
+        // already load-bearing, and "it was fine to destroy an hour ago" is not a rule anybody
+        // can play around. What the player sees is that these particular arcs shrug off a lance
+        // that flattens a tower, which is a fair thing to notice about the one structure on the
+        // map that turns out to have been built for something.
+        if (IsGate(s)) return false;
+
         _detached.Clear();
         if (!s.Strike(_detached)) return false;
 
@@ -3254,7 +3290,30 @@ public sealed partial class World : IAnchorField
     private void Collect(Pickup pk, int seat)
     {
         ItemKind kind = ItemOf(pk.Kind);
-        InventoryOf(seat).Add(kind, pk.Amount);
+        int leftover = InventoryOf(seat).Add(kind, pk.Amount);
+
+        // A fragment is the one thing on the grid that refuses to be picked up rather than
+        // overflowing. Everything else the pack cannot hold is simply lost as the pickup drifts
+        // back out — which is fine for a battery the field will mint another of, and is not
+        // fine for one fifth of the way off this planet. So the fragment stays exactly where it
+        // is, says so, and waits for the player to throw something away and come back.
+        //
+        // Deliberately not "bump the least valuable stack out to make room": the item that gets
+        // silently ejected is always the one somebody was saving. And the Add above is safe to
+        // have already run — a fragment stacks to one, so a pack with no room for it took
+        // nothing, and `leftover` being its whole amount is exactly that fact.
+        if (IsFragment(pk.Kind) && leftover >= pk.Amount)
+        {
+            // Once every FullPackRefusalGap at most, not once per tick — the collect walk runs
+            // every frame, and a craft parked on a fragment it cannot lift would otherwise
+            // machine-gun the refusal for as long as it sat there.
+            if (pk.Age - pk.LastRefusal >= FullPackRefusalGap)
+            {
+                pk.LastRefusal = pk.Age;
+                Emit(Cue.PackFull, pk.Position, owner: seat, personal: true);
+            }
+            return;
+        }
 
         // Through the cue channel rather than straight at the speaker, so the player who
         // actually scooped it hears it wherever they are — and nobody else's machine chimes
@@ -3300,6 +3359,8 @@ public sealed partial class World : IAnchorField
         PickupKind.Lithium        => ItemKind.Lithium,
         PickupKind.CrabCore       => ItemKind.CrabCore,
         PickupKind.RepairKit      => ItemKind.RepairKit,
+        PickupKind.Moonstone      => ItemKind.Moonstone,
+        PickupKind.SunFragment    => ItemKind.SunFragment,
         PickupKind.MoonFragment   => ItemKind.MoonFragment,
         _                         => ItemKind.Bullet,
     };
@@ -3320,6 +3381,8 @@ public sealed partial class World : IAnchorField
         ItemKind.Lead           => PickupKind.Lead,
         ItemKind.Zinc           => PickupKind.Zinc,
         ItemKind.Lithium        => PickupKind.Lithium,
+        ItemKind.Moonstone      => PickupKind.Moonstone,
+        ItemKind.SunFragment    => PickupKind.SunFragment,
         ItemKind.MoonFragment   => PickupKind.MoonFragment,
         _                       => PickupKind.Ammo,
     };
@@ -3340,8 +3403,33 @@ public sealed partial class World : IAnchorField
         PickupKind.Lead           => Palette.LeadGrey,
         PickupKind.Zinc           => Palette.ZincPale,
         PickupKind.Lithium        => Palette.LithiumRose,
+        PickupKind.Moonstone      => Palette.MoonStone,
+        PickupKind.SunFragment    => Palette.SunStone,
+        PickupKind.MoonFragment   => Palette.MoonBreak,
         _                         => Palette.Flag,
     };
+
+    /// <summary>
+    /// Whether a piece of salvage is one of the arch's five keys.
+    ///
+    /// <para>This is the most protected object on the grid, and it is protected here rather
+    /// than at each of the four places that could destroy one. A fragment is never evicted to
+    /// make room (<see cref="DropSalvage(Vector2, PickupKind)"/>), never swept between phases,
+    /// never times out and never respawns out in the fog when taken. Everything else lying
+    /// about is replaceable by definition — the field mints batteries forever and a body will
+    /// leave more scrap. There are exactly five of these per planet, they are the only way off
+    /// it, and a room that cannot leave because the world tidied one away has lost a run to
+    /// housekeeping.</para>
+    /// </summary>
+    public static bool IsFragment(PickupKind kind)
+        => kind is PickupKind.SunFragment or PickupKind.MoonFragment;
+
+    /// <summary>The same question about a piece of salvage on the grid.</summary>
+    public static bool IsFragment(Pickup pk) => IsFragment(pk.Kind);
+
+    /// <summary>The same question about a pack slot.</summary>
+    public static bool IsFragment(ItemKind kind)
+        => kind is ItemKind.SunFragment or ItemKind.MoonFragment;
 
     /// <summary>
     /// How far in front of the craft a thrown item lands. Past the collect reach
@@ -3380,7 +3468,8 @@ public sealed partial class World : IAnchorField
     /// pickup off the field carries.</summary>
     private void TossSalvage(Vector2 at, PickupKind kind)
     {
-        while (Pickups.Count >= MaxFieldSalvage) RemoveFarthest(Pickups, pk => pk.Position);
+        while (Pickups.Count >= MaxFieldSalvage
+               && RemoveFarthest(Pickups, pk => pk.Position, pk => !IsFragment(pk))) { }
         Pickups.Add(new Pickup(ReachablePoint(at), kind, amount: 1, thrown: true));
     }
 
@@ -3453,7 +3542,7 @@ public sealed partial class World : IAnchorField
             // early and the thing it would have saved you from is still out there. Refused
             // outright when nothing is missing, so it can never be wasted by a fat finger on a
             // craft that is already whole.
-            case ItemKind.MoonFragment:
+            case ItemKind.Moonstone:
             {
                 bool needed = player.Health < player.MaxHealth
                            || player.Shield < player.MaxShield
@@ -3581,8 +3670,14 @@ public sealed partial class World : IAnchorField
     ///
     /// <para><paramref name="only"/> narrows what may be released. The ambient salvage drip
     /// uses it to release only its own kind: the drift that keeps the field stocked must
-    /// never be allowed to delete the parts a player earned off a body.</para></summary>
-    private void RemoveFarthest<T>(List<T> list, Func<T, Vector2> posOf, Func<T, bool>? only = null)
+    /// never be allowed to delete the parts a player earned off a body.</para>
+    ///
+    /// <para>Returns whether anything was actually released, which matters wherever the call
+    /// sits in a loop that is trying to get under a ceiling: a field at its cap holding
+    /// <em>nothing</em> the filter will part with can never get under it, and a caller that
+    /// assumes success spins for ever. The salvage cap can now reach that state honestly —
+    /// fragments are never evictable.</para></summary>
+    private bool RemoveFarthest<T>(List<T> list, Func<T, Vector2> posOf, Func<T, bool>? only = null)
     {
         int farthest = -1;
         float best = float.MinValue;
@@ -3592,7 +3687,9 @@ public sealed partial class World : IAnchorField
             float d = DistanceToNearestPlayer(posOf(list[i]));
             if (d > best) { best = d; farthest = i; }
         }
-        if (farthest >= 0) list.RemoveAt(farthest);
+        if (farthest < 0) return false;
+        list.RemoveAt(farthest);
+        return true;
     }
 
     /// <summary>How far the nearest living craft is from a point, squared. The field's
@@ -7548,6 +7645,97 @@ public sealed partial class World : IAnchorField
             Emit(Cue.Warning, victim.Position, owner: Seat(victim), personal: true);
     }
 
+    /// <summary>How many lives each seat had on the previous tick. Seeded lazily on the first
+    /// pass, so a world built with any starting life count is never mistaken for a room that
+    /// just lost twenty craft on its opening frame.</summary>
+    private readonly int[] _livesWere = new int[MatchSettings.MaxSeats];
+    private bool _livesSeeded;
+
+    /// <summary>
+    /// Watches every seat for the moment it loses a life, and empties whatever fragments it was
+    /// carrying onto the grid where it fell.
+    ///
+    /// <para><b>Every death, not only the last one.</b> A craft with revives left is still
+    /// <see cref="PlayerTank.Alive"/> — that is what a revive is — so watching for alive→dead
+    /// would only spill when somebody was out of the run for good, and a carrier who died four
+    /// times on the way to the arch would have carried the fragments through all four. The
+    /// life counter falling is the honest signal: it fires once per wreck, which is once per
+    /// time there is actually a wreck to walk back to.</para>
+    ///
+    /// <para>Driven off a transition in the tick rather than hooked into
+    /// <see cref="DamagePlayer"/>, and that is not a detail either. A craft can end in a good
+    /// many ways that never pass through the damage path — crushed under a collapsing tower,
+    /// digested by the Maw, starved out as a FISH, spent by its own overload — and a spill that
+    /// only fired when somebody was shot would silently delete the run's progress on all of
+    /// them. A transition catches every cause there will ever be, including the ones added
+    /// after this was written, and it cannot fire twice for one death.</para>
+    /// </summary>
+    private void SpillFragmentsOfTheDead()
+    {
+        for (int seat = 0; seat < Players.Count && seat < _livesWere.Length; seat++)
+        {
+            int lives = Players[seat].Lives;
+            if (_livesSeeded && lives < _livesWere[seat]) SpillFragments(Players[seat], seat);
+            _livesWere[seat] = lives;
+        }
+        _livesSeeded = true;
+    }
+
+    /// <summary>
+    /// Empties whatever fragments a wreck was carrying back onto the grid.
+    ///
+    /// <para>This is the whole risk of being the runner, and the reason carrying is a decision
+    /// rather than a formality. A death is a setback and a trip back out — never a lost run:
+    /// what falls out here is never destroyed, is never evicted to make room, and lies in the
+    /// open until somebody comes for it. Which also makes a loaded carrier worth escorting,
+    /// and a loaded carrier standing in the open worth shooting.</para>
+    ///
+    /// <para><b>Only fragments.</b> The rest of a pack survives a death exactly as it always
+    /// has — this is not a corpse-run mechanic and turning it into one would make every death
+    /// in the game a chore. Fragments are singled out because they are the only thing in a pack
+    /// that is not yours: they are the room's way off the planet, and a player who is out of
+    /// lives must not take four of them with them.</para>
+    ///
+    /// <para>Scattered around the wreck rather than stacked on it, because five rocks on one
+    /// cell is one rock as far as the eye is concerned, and the count is the thing a room needs
+    /// to be able to read from a distance.</para>
+    /// </summary>
+    private void SpillFragments(PlayerTank victim, int seat)
+    {
+        if ((uint)seat >= (uint)Players.Count) return;
+        Inventory inv = InventoryOf(seat);
+        int spilled = 0;
+
+        foreach (ref ItemStack slot in inv.Slots.AsSpan())
+        {
+            if (slot.IsEmpty || !IsFragment(slot.Kind)) continue;
+            PickupKind rock = SalvageOf(slot.Kind);
+            for (int i = 0; i < slot.Count; i++)
+            {
+                float a = MathF.Tau * Random.Shared.NextSingle();
+                float r = FragmentSpillMin
+                    + Random.Shared.NextSingle() * (FragmentSpillMax - FragmentSpillMin);
+                DropSalvage(Torus.Wrap(victim.Position
+                    + new Vector2(MathF.Cos(a), MathF.Sin(a)) * r), rock);
+                spilled++;
+            }
+            slot = ItemStack.Empty;
+        }
+
+        if (spilled == 0) return;
+        // Said out loud, because it is information the whole room has to act on: somebody has
+        // to go and get them, and nobody can see a pack from across a city.
+        Announce?.Invoke(spilled == 1
+            ? $"{NameOrSeat(seat)} DROPPED A FRAGMENT"
+            : $"{NameOrSeat(seat)} DROPPED {spilled} FRAGMENTS");
+        Emit(Cue.FragmentFall, victim.Position);
+    }
+
+    /// <summary>How far from a wreck its fragments land. Far enough apart to be counted from a
+    /// distance, near enough that they are plainly all one spill.</summary>
+    private const float FragmentSpillMin = 2.5f;
+    private const float FragmentSpillMax = 6f;
+
     /// <summary>
     /// Deals damage to an enemy and sounds the explosion if this hit is what
     /// destroys it — the alive→dead transition, so a cluster killed by one blast
@@ -7733,7 +7921,7 @@ public sealed partial class World : IAnchorField
         // It lands somewhere in the middle distance — far enough that finding it is a decision,
         // near enough that the arrival is visible and audible from where the player is standing.
         Vector2 at = RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange);
-        DropSalvage(at, PickupKind.MoonFragment);
+        DropSalvage(at, PickupKind.Moonstone);
 
         // The impact. A piece of grid dust thrown up where it came down and the same distant
         // roll a detonation across the map gets — because that is exactly what a player hears:
@@ -7744,7 +7932,12 @@ public sealed partial class World : IAnchorField
 
     private void DropSalvage(Vector2 at, PickupKind kind)
     {
-        while (Pickups.Count >= MaxFieldSalvage) RemoveFarthest(Pickups, pk => pk.Position);
+        // Make room by releasing the most distant piece — but never a fragment. A boss leaves
+        // five pieces of scrap, two cells and a kit in the same breath as it leaves a fragment,
+        // and on a field already at its ceiling that pile is enough to push the fragment it
+        // just dropped straight back out of the world.
+        while (Pickups.Count >= MaxFieldSalvage
+               && RemoveFarthest(Pickups, pk => pk.Position, pk => !IsFragment(pk))) { }
         Pickups.Add(new Pickup(ReachablePoint(at), kind));
     }
 
@@ -7788,6 +7981,11 @@ public sealed partial class World : IAnchorField
     /// what a field packet can describe, which is the number that actually matters.
     /// </summary>
     private const int MaxFieldSalvage = 40;
+
+    /// <summary>How long a fragment waits before telling the same craft again that its pack is
+    /// too full to take it. The collect walk runs every frame; without this, parking on a
+    /// fragment you cannot lift is a machine-gun of refusals.</summary>
+    private const float FullPackRefusalGap = 1.6f;
 
     /// <summary>The drift that keeps the field stocked, as opposed to what a body left or what
     /// somebody threw away. Only this is subject to <see cref="MaxPickups"/>, and only this

@@ -836,6 +836,136 @@ public static class Snapshot
         return written[4] != 0 || written[^1] != 0;
     }
 
+    // --- The rolled bosses ------------------------------------------------------------
+
+    /// <summary>The most rolled bodies one packet will describe. A wave raises one; a TWINNED
+    /// Colossus ends its fight as two; the capture harness can stand a few on a field. Four is
+    /// past anything a run produces and keeps the packet inside a hundred bytes.</summary>
+    private const int MaxRolledOnWire = 4;
+
+    /// <summary>Bytes per rolled body: the twelve that say what it <em>is</em>, and the ten that
+    /// say what it is doing.</summary>
+    private const int RolledStride = 22;
+
+    /// <summary>
+    /// Writes the rolled bosses near <paramref name="forSeat"/>.
+    ///
+    /// <para><b>The genome is not on the wire, and could not be.</b> A rolled boss is fifty-odd
+    /// rolled traits — carriage, limb count and length, body proportions, spines, an oversized
+    /// limb, three of fourteen attack modules, a quirk, three swatches and a name — and
+    /// describing one would be a packet per body per snapshot. What travels instead is the four
+    /// numbers it was rolled <em>from</em>: seed, lineage, size class and difficulty. Both ends
+    /// run the identical roller over them and arrive at the identical animal.</para>
+    ///
+    /// <para>Scale and layer health ride along explicitly even though the roller produces them,
+    /// because the two halves a TWINNED boss comes apart into are the roller's output with those
+    /// two values overridden from the <em>parent</em> — which a client has no way to recover
+    /// once the parent is off the field. Four bytes is cheaper than making that reconstructible.</para>
+    /// </summary>
+    public static int WriteRolled(World.World world, int forSeat, uint tick, Span<byte> dst)
+    {
+        Vector2 eye = world.Players[Math.Clamp(forSeat, 0, world.Players.Count - 1)].Position;
+        int at = 0;
+        BitConverter.TryWriteBytes(dst.Slice(at, 4), tick); at += 4;
+        int countAt = at++;
+        int written = 0;
+
+        foreach (var b in world.Bosses)
+        {
+            if (written >= MaxRolledOnWire) break;
+            if (!b.Alive) continue;
+            if (Torus.DistanceSquared(b.Position, eye) > InterestRadius * InterestRadius) continue;
+
+            BossGenome g = b.Gene;
+            BitConverter.TryWriteBytes(dst.Slice(at, 4), g.Seed); at += 4;
+            dst[at++] = (byte)g.Lineage;
+            // Which of the two rollers made it. Read off the layer count rather than carried as
+            // a flag: a Colossus is the only thing with more than one layer, and deriving it
+            // means the two can never disagree.
+            dst[at++] = (byte)(g.Layers > BossGen.HeraldLayers ? 1 : 0);
+            dst[at++] = (byte)Math.Clamp((int)(g.Difficulty * 255f), 0, 255);
+            dst[at++] = 0;   // reserved: keeps the identity block on a round eight bytes
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(g.Scale, 512f)); at += 2;
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(g.LayerHealth, 64f)); at += 2;
+
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(b.Position.X, PosScale)); at += 2;
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(b.Position.Y, PosScale)); at += 2;
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), QAngle(b.Heading)); at += 2;
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(b.Height, PosScale)); at += 2;
+            dst[at++] = (byte)b.Phase;
+            dst[at++] = (byte)Math.Clamp(b.LayersLeft, 0, 255);
+            dst[at++] = (byte)Math.Clamp(b.TopFraction * 255f, 0f, 255f);
+            dst[at++] = 0;   // reserved
+
+            written++;
+        }
+
+        dst[countAt] = (byte)written;
+        return at;
+    }
+
+    /// <summary>Whether a rolled packet describes anything, so an empty one can be sent at a
+    /// slow tick purely as the "drop them" signal rather than every frame.</summary>
+    public static bool RolledCarryAnything(ReadOnlySpan<byte> written)
+        => written.Length >= 5 && written[4] != 0;
+
+    /// <summary>
+    /// Lays a rolled packet over this client's world, rebuilding each body from the four
+    /// numbers it was rolled from and posing it where the host says. Never throws on a short
+    /// packet — a bad one leaves the last frame's bodies standing, which is far better than
+    /// dropping a boss mid-fight.
+    /// </summary>
+    public static void ApplyRolled(World.World world, ReadOnlySpan<byte> src)
+    {
+        try
+        {
+            int at = 0;
+            at += 4;                       // tick
+            int n = src[at++];
+            if (n > MaxRolledOnWire) return;
+            if (src.Length < at + n * RolledStride) return;
+
+            world.BeginAdoptRolled();
+            for (int i = 0; i < n; i++)
+            {
+                int seed = BitConverter.ToInt32(src.Slice(at, 4)); at += 4;
+                var lineage = (BossLineage)src[at++];
+                bool colossus = src[at++] != 0;
+                float difficulty = src[at++] / 255f;
+                at++;                      // reserved
+                float scale = BitConverter.ToInt16(src.Slice(at, 2)) / 512f; at += 2;
+                float layerHealth = BitConverter.ToInt16(src.Slice(at, 2)) / 64f; at += 2;
+
+                var pos = new Vector2(BitConverter.ToInt16(src.Slice(at, 2)) / PosScale,
+                                      BitConverter.ToInt16(src.Slice(at + 2, 2)) / PosScale);
+                at += 4;
+                float heading = BitConverter.ToInt16(src.Slice(at, 2)) / AngScale; at += 2;
+                float height = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+                var phase = (ModularBoss.State)src[at++];
+                int layersLeft = src[at++];
+                float top = src[at++] / 255f;
+                at++;                      // reserved
+
+                if (!Enum.IsDefined(lineage) || !Enum.IsDefined(phase)) continue;
+
+                BossGenome gene = colossus
+                    ? BossGen.Colossus(seed, lineage, difficulty)
+                    : BossGen.Herald(seed, lineage, difficulty);
+                // The two overrides a TWINNED half carries, applied unconditionally: on every
+                // ordinary body they are the values the roller already produced, so this costs
+                // nothing and removes the special case entirely.
+                gene = gene with { Scale = scale, LayerHealth = layerHealth };
+
+                world.AdoptRolled(gene, pos, heading, height, phase, layersLeft, top);
+            }
+            world.EndAdoptRolled();
+        }
+        catch (Exception e) when (e is IndexOutOfRangeException or ArgumentOutOfRangeException)
+        {
+            world.EndAdoptRolled();
+        }
+    }
+
     /// <summary>Lays a bosses packet over this client's world, installing or dropping the
     /// render-only puppets. Never throws on a short packet — a bad one just leaves the last.</summary>
     public static void ApplyBosses(World.World world, ReadOnlySpan<byte> src)

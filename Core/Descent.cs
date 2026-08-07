@@ -153,6 +153,20 @@ public sealed class Descent
 
     private readonly BossLineage[] _order;
 
+    /// <summary>
+    /// The session this planet is one leg of, or null for a run standing on its own (a test, a
+    /// capture, the very first world before anybody has been anywhere).
+    ///
+    /// <para>The one thing the director takes from it is <see cref="Difficulty"/>: with a
+    /// campaign behind it, a run's boss roller reads how far into the <em>whole crossing</em>
+    /// it is rather than how far into this planet, which is what stops the fourth world playing
+    /// exactly like the first.</para>
+    /// </summary>
+    public Campaign? Session { get; init; }
+
+    /// <summary>Which leg of the crossing this is. 0 for the first world.</summary>
+    public int Hop { get; init; }
+
     /// <summary>How many of this wave's roster have not been sent in yet.</summary>
     public int Reserve { get; private set; }
 
@@ -179,17 +193,22 @@ public sealed class Descent
     /// <summary>The boss currently up, or the one about to be. Null between fights.</summary>
     public BossGenome? BossGene { get; private set; }
 
-    /// <summary>What each seat is carrying, indexed by seat. Two counts, because a player who
-    /// has taken four fragments should be wearing all four.</summary>
-    private readonly int[] _suns = new int[MatchSettings.MaxSeats];
-    private readonly int[] _moons = new int[MatchSettings.MaxSeats];
+    /// <summary>
+    /// How many fragments this planet has given up so far, 0..5. The director counts what it
+    /// has <em>dropped</em>, and nothing else — not who has them, not where they are.
+    ///
+    /// <para>That used to be the opposite way round. A fragment was a pure tag awarded to the
+    /// seat that landed the killing blow, and this class held two per-seat counters that were
+    /// the only record of it anywhere. Fragments are objects now: they fall at the corpse, they
+    /// lie there, they are carried in packs, they are dropped when a carrier dies and they are
+    /// spent into an arch. So the truth about who has what lives in the packs, which is the
+    /// only place that can survive a fragment changing hands — see
+    /// <c>World.FragmentsOf</c>.</para>
+    /// </summary>
+    public int Dropped { get; private set; }
 
-    public int SunsOf(int seat) => (uint)seat < (uint)_suns.Length ? _suns[seat] : 0;
-    public int MoonsOf(int seat) => (uint)seat < (uint)_moons.Length ? _moons[seat] : 0;
-    public bool Carrying(int seat) => SunsOf(seat) + MoonsOf(seat) > 0;
-
-    /// <summary>The last fragment awarded and who took it, so the world can drop a physical
-    /// shard at the corpse and the HUD can call it out. Cleared once read.</summary>
+    /// <summary>The last fragment rolled, so the world can put the right rock on the ground and
+    /// the HUD can name it. Cleared once read.</summary>
     public Fragment PendingFragment { get; private set; }
 
     private float _feed;
@@ -211,8 +230,16 @@ public sealed class Descent
 
     /// <summary>How deep into the run this is, 0..1. Feeds the boss roller, which leans its
     /// continuous traits on it — a late boss is bigger and pushier, though never differently
-    /// built.</summary>
-    private float Difficulty => Math.Clamp((Wave - 1) / (float)(WaveCount - 1), 0f, 1f);
+    /// built.
+    ///
+    /// <para>With a <see cref="Session"/> behind it this is the position in the whole crossing
+    /// rather than in this planet, so a herald on the fourth world outclasses the Colossus on
+    /// the first. Without one — a lone run, a test, a capture — it is the old per-planet curve,
+    /// unchanged, which is what keeps every existing boss-roll hatch reproducing what it
+    /// always did.</para></summary>
+    private float Difficulty => Session is { } c
+        ? c.DifficultyAt(Hop, Wave, WaveCount)
+        : Math.Clamp((Wave - 1) / (float)(WaveCount - 1), 0f, 1f);
 
     /// <summary>
     /// One tick of the run. <paramref name="readyHeld"/> is whether anybody is holding the
@@ -378,24 +405,27 @@ public sealed class Descent
     }
 
     /// <summary>
-    /// Awards the fragment a boss just gave up, to the seat that finished it. Fifty-fifty, as
-    /// specified. Returns which one it was so the world can raise the right shard out of the
-    /// corpse and the HUD can name it.
+    /// Rolls the fragment a boss just gave up. Fifty-fifty, every time, with no pity and no
+    /// memory — a run can genuinely end with five suns, and the fact that it can is the whole
+    /// reason a run that ends with three and two feels like it went somewhere.
+    ///
+    /// <para>It goes to <em>nobody</em>. The world puts it on the ground at the corpse and
+    /// whoever walks over it first has it, which is the change that turned a fragment from a
+    /// medal into a thing: it can be missed, carried, argued over, dropped when its carrier
+    /// dies, and picked back up out of the wreck by somebody else.</para>
     /// </summary>
-    public Fragment AwardFragment(int seat)
+    public Fragment RollFragment()
     {
         Fragment f = Random.Shared.Next(2) == 0 ? Fragment.Sun : Fragment.Moon;
-        if ((uint)seat < (uint)_suns.Length)
-        {
-            if (f == Fragment.Sun) _suns[seat]++; else _moons[seat]++;
-        }
         PendingFragment = f;
+        Dropped = Math.Min(WaveCount, Dropped + 1);
         // The beat after a boss dies, during which nothing happens on purpose.
         Clock = AfterBossPause;
         return f;
     }
 
-    /// <summary>Reads and clears the last award, so the world raises exactly one shard for it.</summary>
+    /// <summary>Reads and clears the last roll, so the world lays down exactly one rock for
+    /// it.</summary>
     public Fragment TakePendingFragment()
     {
         Fragment f = PendingFragment;
@@ -403,15 +433,20 @@ public sealed class Descent
         return f;
     }
 
-    /// <summary>The tag that hangs under a player's nickname. Empty for anybody carrying
-    /// nothing, which is most people for most of a run — that is what makes it worth wearing.</summary>
-    public string TagFor(int seat)
+    /// <summary>The tag that hangs under a nickname, given what that seat is actually carrying.
+    /// Empty for anybody holding nothing, which is most people for most of a run — that is what
+    /// makes it worth wearing.
+    ///
+    /// <para>Takes the counts rather than looking them up, because the answer lives in a pack
+    /// now and this class has never known about packs. Kept here anyway so the wording is
+    /// decided in one place: the HUD, the nameplate and the ending screen all say it the
+    /// same way.</para></summary>
+    public static string TagFor(int suns, int moons)
     {
-        int s = SunsOf(seat), m = MoonsOf(seat);
-        if (s + m == 0) return "";
-        if (m == 0) return s == 1 ? "SUN" : $"SUN {s}";
-        if (s == 0) return m == 1 ? "MOON" : $"MOON {m}";
-        return $"SUN {s} MOON {m}";
+        if (suns + moons == 0) return "";
+        if (moons == 0) return suns == 1 ? "SUN" : $"SUN {suns}";
+        if (suns == 0) return moons == 1 ? "MOON" : $"MOON {moons}";
+        return $"SUN {suns} MOON {moons}";
     }
 
     /// <summary>Whether the run is over, either way. The pause panel and the star chart both
@@ -429,6 +464,61 @@ public sealed class Descent
         DescentPhase.Cleared => "CLEAR",
         _ => "LOST",
     };
+
+    /// <summary>
+    /// Client-side: takes the host's account of where the run has got to.
+    ///
+    /// <para>Only the readouts. A client's director never <em>runs</em> — it spawns nothing,
+    /// raises no boss and rolls no fragment, because all of that is the host's and arrives as
+    /// entities through the field packets. What this exists for is the HUD: the phase label, the
+    /// wave bar and the salvage clock, which are otherwise the one part of DESCENT a client
+    /// could see no evidence of at all.</para>
+    /// </summary>
+    public void NetAdopt(DescentPhase phase, int wave, int killed, int total, float clock)
+    {
+        Phase = phase;
+        Wave = Math.Clamp(wave, 1, WaveCount);
+        WaveTotal = Math.Max(0, total);
+        Killed = Math.Clamp(killed, 0, WaveTotal);
+        Clock = MathF.Max(0f, clock);
+    }
+
+    // --- What {skip wave} reaches for ------------------------------------------------------
+    //
+    // Three narrow doors rather than one wide one. The console could have been given a setter
+    // for Clock and Killed and left to arrange the phases itself, and that would put the rules
+    // of the mode in two places — the day a wave gains a fourth thing to bookkeep, one of them
+    // would be updated. Each of these leaves the director in a state it could have reached by
+    // being played.
+
+    /// <summary>Cuts the drop short. The wave opens on the next tick exactly as it would have.</summary>
+    public void SkipLanding()
+    {
+        if (Phase == DescentPhase.Landing) Clock = 0f;
+    }
+
+    /// <summary>
+    /// Books the whole of the current wave as dead: nothing left in the reserve and nothing
+    /// left standing. The director's own rule — a crowd is over when the roster is spent and
+    /// the field is clear of it — then opens the herald on the next tick, so the fight that
+    /// closes the wave still happens.
+    /// </summary>
+    public void SpendTheWave()
+    {
+        if (Phase != DescentPhase.Wave) return;
+        Reserve = 0;
+        Killed = WaveTotal;
+    }
+
+    /// <summary>Ends a salvage window now. The same thing holding READY does, without the
+    /// hold — so what follows is the ordinary path into the next wave.</summary>
+    public void SkipTheBreak()
+    {
+        if (Phase != DescentPhase.Intermission) return;
+        Clock = 0f;
+        Ready = 1f;
+        _readyLatched = true;
+    }
 
     /// <summary>Marks the run failed. Solo, that is the craft running out of lives; in a match
     /// it is the whole room being spent.</summary>

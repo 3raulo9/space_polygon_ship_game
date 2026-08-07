@@ -212,7 +212,7 @@ public sealed partial class World
             // that grows on <em>light</em> (see FlowerRig.RipenRateAt), and on the one world
             // where the crop ripens slowest, the thing overhead that is stopping it is the thing
             // this occasionally turns out to be a piece of. It is a joke the game never explains.
-            _ => PickupKind.MoonFragment,
+            _ => PickupKind.Moonstone,
         };
     }
 

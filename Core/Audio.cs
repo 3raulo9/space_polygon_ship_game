@@ -86,6 +86,11 @@ public static class Audio
         _reelJet.Load(SfxSynth.Render(SfxSynth.ReelJet(_sfxRng)), "reel");
         _wind.Load(SfxSynth.Render(SfxSynth.WindRush(_sfxRng)), "wind");
         _cableStrain.Load(SfxSynth.Render(SfxSynth.CableStrain(_sfxRng)), "strain");
+        // The arch winding up. A bed for the same reason the others are: a charge lasts as
+        // long as it lasts, and what has to be carried is a rising pressure rather than an
+        // event. Unlike every other bed here it is meant to become genuinely hard to sit
+        // under by the end — see SfxSynth.PortalBed.
+        _portalCharge.Load(SfxSynth.Render(SfxSynth.PortalBed(_sfxRng)), "portal");
 
         _engine.WorldWrap = Torus.Size;
         CueBank.ApplyOverrideFile(_engine.Specs);
@@ -916,6 +921,80 @@ public static class Audio
     /// The deliberate opposite of a pickup, so a rejected load never reads as a good one.</summary>
     public static void PlayFull() => FlatSynth(Cue.Pickup, SfxSynth.FullBuzz(_sfxRng), 0.9f);
 
+    // --- The arch ---------------------------------------------------------------------
+    // Every one of these is host-raised (see CueBank.RaisedOnlyByHost): an arch is entirely
+    // the host's business, so a client hears these as echoes and never predicts one.
+
+    /// <summary>A fragment settling out of a corpse. Two voices — the chime that says which
+    /// one it is, and a small scatter under it so it reads as having physically landed rather
+    /// than having been awarded.</summary>
+    public static void PlayFragmentFall(Vector2 at)
+    {
+        // Which of the two it is, is decided here by the roll rather than carried on the wire.
+        // It costs the cue a parameter byte it would otherwise need, and it is honest: a
+        // listener four hundred units away is being told "a fragment landed", and the pitch is
+        // colour on that, not information anyone acts on. The player who took it is looking
+        // straight at it.
+        bool sun = _sfxRng.Next(2) == 0;
+        Synth(Cue.FragmentFall, SfxSynth.FragmentChime(_sfxRng, sun), at);
+        Synth(Cue.FragmentFall, SfxSynth.SeedBurst(_sfxRng), at, 0.35f);
+    }
+
+    /// <summary>Every arch on the planet taking power at once. Voiced twice — the swell, and
+    /// the keystone's ring an octave under it — because one voice at this length is a drone
+    /// and two is a machine.</summary>
+    public static void PlayArchWake(Vector2 at)
+    {
+        Synth(Cue.ArchWake, SfxSynth.ArchWake(_sfxRng), at);
+        var under = SfxSynth.Keystone(_sfxRng);
+        under.StartFreq *= 0.5f;
+        under.EndFreq *= 0.5f;
+        Synth(Cue.ArchWake, under, at, 0.45f);
+    }
+
+    /// <summary>One panel claimed and the rest going dark.</summary>
+    public static void PlayArchClaim(Vector2 at)
+        => Synth(Cue.ArchClaim, SfxSynth.ArchClaim(_sfxRng), at);
+
+    /// <summary>The rail hauling a fragment out along the span. <paramref name="reach"/> is
+    /// 0..1 of how far it has to go, so an outer foot is a longer, heavier haul than the
+    /// keystone.</summary>
+    public static void PlaySocketTravel(Vector2 at, float reach)
+        => Synth(Cue.SocketTravel, SfxSynth.RailHaul(_sfxRng, reach), at);
+
+    /// <summary>Contactors closing on a seated fragment.</summary>
+    public static void PlaySocketSeat(Vector2 at)
+        => Synth(Cue.SocketSeat, SfxSynth.SocketSeat(_sfxRng), at);
+
+    /// <summary>The fifth, closing the span. The seat is voiced under it so the keystone is
+    /// audibly the same act as the other four <em>plus</em> something — which is what it is.</summary>
+    public static void PlayArchKeystone(Vector2 at)
+    {
+        Synth(Cue.ArchKeystone, SfxSynth.SocketSeat(_sfxRng), at, 0.7f);
+        Synth(Cue.ArchKeystone, SfxSynth.Keystone(_sfxRng), at);
+    }
+
+    /// <summary>The boom. Two voices pulling in opposite directions — the roll falling through
+    /// the floor and the tear climbing out of the top — which is the whole read of a hole being
+    /// opened rather than something merely exploding.</summary>
+    public static void PlayPortalOpen(Vector2 at)
+    {
+        Synth(Cue.PortalOpen, SfxSynth.PortalBoom(_sfxRng), at);
+        Synth(Cue.PortalOpen, SfxSynth.PortalTear(_sfxRng), at, 0.8f);
+    }
+
+    /// <summary>One craft going through, heard by everybody still outside.</summary>
+    public static void PlayPortalEnter(Vector2 at)
+        => Synth(Cue.PortalEnter, SfxSynth.PortalSwallow(_sfxRng), at);
+
+    /// <summary>Voices the arch winding up. Safe to call every tick with whatever state the
+    /// arch is in; <paramref name="charge"/> is 0..1 of the way to open, and drives the rate,
+    /// so the thing audibly spins toward its own detonation.</summary>
+    public static void SetPortalCharge(bool present, Vector2 at, float charge)
+    {
+        if (_enabled) _portalCharge.Set(present, at, charge);
+    }
+
     private static double _nextGasTick;
     private const double GasTickGap = 1.1;
 
@@ -1067,6 +1146,12 @@ public static class Audio
     /// listening to it.</summary>
     private static readonly Bed _cableStrain = new(Cue.CableStrain, wokenPitch: 1.6f);
 
+    /// <summary>The arch winding up with all five fragments in it. Driven the same way as the
+    /// monster beds — off the world's own step, every tick an arch is charging — and pitched
+    /// hard, because the rate climbing is how a player anywhere in the city knows how close
+    /// the thing is to opening without being able to see it.</summary>
+    private static readonly Bed _portalCharge = new(Cue.PortalCharge, wokenPitch: 2.6f);
+
     /// <summary>Past this many world units the rotor can't be heard. The cue table owns the
     /// real number now; the boss reads this one.</summary>
     public const float HumRange = 55f;
@@ -1143,6 +1228,7 @@ public static class Audio
 
         _hum.Service(dt);
         _mawHover.Service(dt);
+        _portalCharge.Service(dt);
         _lanceCharge.Service(dt);
         _reelJet.Service(dt);
         _wind.Service(dt);
@@ -1168,6 +1254,7 @@ public static class Audio
         if (!_enabled) return;
         _hum.Stop();
         _mawHover.Stop();
+        _portalCharge.Stop();
         _lanceCharge.Stop();
         _reelJet.Stop();
         _wind.Stop();

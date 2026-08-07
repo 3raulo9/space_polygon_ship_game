@@ -288,6 +288,14 @@ public static partial class SelfTest
         // quietly becoming SANDBOX with a bar over it. Its own block so the output reads as one.
         failures += RunDescentChecks();
 
+        // --- The way off a planet ---------------------------------------------------
+        // The fragments, the gates, the panel, the portal, and the crossing that strings
+        // five planets into one session.
+        failures += RunArchChecks();
+
+        // --- The chat and its console -----------------------------------------------
+        failures += RunChatChecks();
+
         // The FLOWER: a chassis made almost entirely of refusals, none of which a screenshot
         // can tell apart from a broken one. Its own block, same reasoning as above.
         failures += RunFlowerChecks();
@@ -543,17 +551,29 @@ public static partial class SelfTest
         if (RunOverScreen.ShouldOpen(solo, networked: true))
             return "a match put an ending screen over one player's death";
 
-        // ...and winning ends a run too, which is the half a plain death check would miss.
-        var won = new World.World(null,
-            new MatchSettings { MaxPlayers = 1, Mode = GameMode.Descent })
+        // ...and clearing a world does NOT end a run, which is the half that changed when the
+        // arch was built. A Colossus going down used to be the end of DESCENT; it is the middle
+        // now — the arches take power and the crossing carries on — and a panel appearing over
+        // a player who has just been handed three light columns and somewhere to go would take
+        // the run away from them at the exact moment it opened up.
+        var cleared = new World.World(null,
+            new MatchSettings { MaxPlayers = 1, Mode = GameMode.Descent }, new Campaign())
         { DynamicSpawning = false };
-        if (won.Run is null) return "a DESCENT world opened with no run on it";
-        if (RunOverScreen.ShouldOpen(won, networked: false))
+        if (cleared.Run is null) return "a DESCENT world opened with no run on it";
+        if (RunOverScreen.ShouldOpen(cleared, networked: false))
             return "a descent was called over at the landing";
-        won.Run.SkipTo(DescentPhase.Cleared, Descent.WaveCount, won);
-        if (!RunOverScreen.ShouldOpen(won, networked: false))
-            return "clearing a world did not end the run";
-        if (won.Player.Spectating) return "the test cleared the world by dying, which proves nothing";
+        cleared.Run.SkipTo(DescentPhase.Cleared, Descent.WaveCount, cleared);
+        if (RunOverScreen.ShouldOpen(cleared, networked: false))
+            return "clearing a world ended the run instead of opening the arches";
+        if (cleared.Player.Spectating) return "the test cleared the world by dying, which proves nothing";
+
+        // A LOST descent still does, though — that is the one automatic ending left.
+        var beaten = new World.World(null,
+            new MatchSettings { MaxPlayers = 1, Mode = GameMode.Descent }, new Campaign())
+        { DynamicSpawning = false };
+        beaten.Run!.SkipTo(DescentPhase.Lost, 3, beaten);
+        if (!RunOverScreen.ShouldOpen(beaten, networked: false))
+            return "a lost descent did not end the run";
         return null;
     }
 
@@ -740,7 +760,7 @@ public static partial class SelfTest
         if (p.Health >= p.MaxHealth) return "the setup failed to wound the hull";
 
         var inv = world.Inventory;
-        inv.Slots[0] = new ItemStack(ItemKind.MoonFragment, 1);
+        inv.Slots[0] = new ItemStack(ItemKind.Moonstone, 1);
         if (!world.ChargeFromSlot(p, inv, 0)) return "a fragment refused a craft that needed it";
 
         if (p.ChargesLeft != p.ShieldCharges)
@@ -750,14 +770,14 @@ public static partial class SelfTest
         if (!inv.Slots[0].IsEmpty) return "the fragment was not spent";
 
         // And it is refused outright by a craft with nothing missing.
-        inv.Slots[1] = new ItemStack(ItemKind.MoonFragment, 1);
+        inv.Slots[1] = new ItemStack(ItemKind.Moonstone, 1);
         if (world.ChargeFromSlot(p, inv, 1)) return "a whole craft still swallowed a fragment";
         if (inv.Slots[1].IsEmpty) return "a refused fragment was spent anyway";
 
         // It round-trips through the grid like everything else a pack can hold: thrown out and
         // picked back up, it is still a moon fragment and not a handful of rounds.
-        if (World.World.SalvageOf(ItemKind.MoonFragment) != PickupKind.MoonFragment
-            || World.World.ItemOf(PickupKind.MoonFragment) != ItemKind.MoonFragment)
+        if (World.World.SalvageOf(ItemKind.Moonstone) != PickupKind.Moonstone
+            || World.World.ItemOf(PickupKind.Moonstone) != ItemKind.Moonstone)
             return "a fragment did not survive being thrown on the grid";
         return null;
     }

@@ -27,6 +27,12 @@ public enum InputAction : byte
     Mark,
     Scoreboard,
 
+    /// <summary>Opens the chat, and — pressed again with nothing typed — the scrollable history
+    /// behind it. Its own row rather than a reuse of anything, because it is the one control in
+    /// the game that takes the keyboard away from every other control: while it is open, W is a
+    /// letter.</summary>
+    Chat,
+
     /// <summary>Held during a DESCENT salvage window to cut the break short. Its own row rather
     /// than a reuse of INTERACT — which is otherwise never read inside a match — because
     /// INTERACT defaults to E, and E is already the TANK's smoke and the SOLDIER's right hook.
@@ -159,6 +165,7 @@ public static class InputActions
         InputAction.Inventory => "INVENTORY",
         InputAction.Mark => "MARK",
         InputAction.Scoreboard => "SCOREBOARD",
+        InputAction.Chat => "CHAT",
         InputAction.Ready => "READY (DESCENT)",
 
         InputAction.TankLurch => "LURCH",

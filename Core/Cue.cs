@@ -111,6 +111,24 @@ public enum Cue : byte
     FlowerWilt,        // roots tearing out of the plate
     FlowerUproot,      // the plant gone, a hole where it was
     FlowerBloomOpen,   // the ring unfurling on new ground
+
+    // --- The arch -------------------------------------------------------------------------
+    // The way off a planet, and the only bank in the game that is *mechanical* rather than
+    // organic or ordnance. Everything a boss makes is meat and everything a gun makes is
+    // powder; this is machinery — rails, servos, contactors, a thing built to take a load and
+    // hold it. Which is the whole reason it reads as an exit: it is the first evidence on any
+    // of these planets that something here was engineered to work.
+
+    PackFull,       // a fragment refused by a pack with no room for it
+    FragmentFall,   // a fragment settling out of a corpse — mineral, ringing
+    ArchWake,       // every arch on the map taking power when the Colossus goes down
+    ArchClaim,      // one panel answering a hand, and the others going dark
+    SocketTravel,   // the rail hauling a fragment out along the span (param = 0..1 of the run)
+    SocketSeat,     // it dropping into its socket: contactors closing, the load taken
+    ArchKeystone,   // the fifth one, closing the span. Its own id because it is its own event
+    PortalCharge,   // a bed: the span winding up once all five are in (param = 0..1)
+    PortalOpen,     // the boom
+    PortalEnter,    // one craft stepping through
 }
 
 /// <summary>
@@ -141,7 +159,11 @@ public static class CueBank
     /// either way; this decides whether to scale it by 255 on the way through.</summary>
     public static bool IsFraction(Cue id)
         => id is Cue.CoreHit or Cue.MawHurt or Cue.GasJump or Cue.FishBeach
-              or Cue.TailBeat or Cue.TailFlop or Cue.MawCrystal;
+              or Cue.TailBeat or Cue.TailFlop or Cue.MawCrystal
+              // How far along the span this haul is going, which sets how long the rail runs
+              // and how far the grind climbs. The outer sockets are a longer trip than the
+              // inner ones and they have to sound like it.
+              or Cue.SocketTravel;
 
     /// <summary>
     /// Whether only the host can ever raise this cue. Nearly every noise in the game is
@@ -150,7 +172,15 @@ public static class CueBank
     /// do not predict pickups, so a collect chime is decided on the host and nowhere else,
     /// and the owner has to be allowed to hear the echo or they never hear it at all.
     /// </summary>
-    public static bool RaisedOnlyByHost(Cue id) => id is Cue.Pickup;
+    /// <para>The arch's bank joins it for the same reason and then some: an arch is entirely
+    /// host-authoritative — who claimed it, which socket a fragment went into, whether the
+    /// span is charged — so every noise it makes is decided in one place. A client that
+    /// predicted a socket seating would be guessing at the count the whole room is reading.</para>
+    /// </summary>
+    public static bool RaisedOnlyByHost(Cue id)
+        => id is Cue.Pickup or Cue.PackFull or Cue.FragmentFall or Cue.ArchWake
+              or Cue.ArchClaim or Cue.SocketTravel or Cue.SocketSeat or Cue.ArchKeystone
+              or Cue.PortalOpen or Cue.PortalEnter;
 
     /// <summary>
     /// Builds the acoustic table. Read it as a description of the world: a rifle is a sharp
@@ -342,6 +372,69 @@ public static class CueBank
         t.Set((int)Cue.FlowerUproot, "FlowerUproot", S(Bus.Player, 0.8f, 110f, 1.5f, 140, 2, reverb: 0.4f, air: 0.7f));
         t.Set((int)Cue.FlowerBloomOpen, "FlowerBloomOpen", S(Bus.Player, 0.7f, 100f, 1.6f, 135, 2, reverb: 0.45f, air: 0.75f));
 
+        // --- The arch ----------------------------------------------------------------------
+        // Ranges here are unusually generous and rolloffs unusually slow, and that is the
+        // design rather than an oversight: this bank's job is to tell a room spread across a
+        // whole city that something is happening at a place none of them are standing. A
+        // socket seating three hundred units away is information — it says somebody is at the
+        // arch and the count just went up — so it is allowed to carry like a boss dying.
+
+        // The refusal. A panel sound, like every other thing your own pack says to you, and
+        // deliberately on the same id family as Pickup so the two are turned down together:
+        // "took it" and "could not take it" are one conversation.
+        t.Set((int)Cue.PackFull, "PackFull", Panel(0.6f, 205));
+
+        // A fragment arriving on the grid out of a corpse. Bright and mineral against the wet
+        // noise of a body coming apart around it — the one clean sound in that whole moment,
+        // which is how a player picks it out of the wreck.
+        t.Set((int)Cue.FragmentFall, "FragmentFall",
+            S(Bus.Player, 0.8f, 170f, 1.0f, 215, 3, reverb: 0.5f, air: 0.5f, jitter: 0f, min: 8f));
+
+        // Every arch on the planet taking power at once. Never culled, never stolen, and the
+        // longest reach of anything in the game bar a boss death — it is the mode telling the
+        // whole room that the fight is over and there is now somewhere to go.
+        t.Set((int)Cue.ArchWake, "ArchWake",
+            S(Bus.Player, 1.0f, 320f, 0.7f, 250, 4, reverb: 0.65f, air: 0.35f, jitter: 0f,
+              occludes: false, min: 25f));
+
+        // One panel claimed, the rest going dark. Carries nearly as far, because the fact that
+        // matters is *which* arch, and everybody needs it at once.
+        t.Set((int)Cue.ArchClaim, "ArchClaim",
+            S(Bus.Player, 0.9f, 280f, 0.75f, 240, 2, reverb: 0.55f, air: 0.4f, jitter: 0f,
+              occludes: false, min: 20f));
+
+        // The rail. A grinding haul with a load on it, and the only sustained mechanical noise
+        // a player ever causes on purpose.
+        t.Set((int)Cue.SocketTravel, "SocketTravel",
+            S(Bus.Player, 0.7f, 190f, 1.1f, 190, 3, reverb: 0.5f, air: 0.55f, jitter: 0.02f));
+
+        // Contactors closing on a seated fragment. Hard, final, and audible across the city so
+        // a room can count to five without anybody saying a word.
+        t.Set((int)Cue.SocketSeat, "SocketSeat",
+            S(Bus.Player, 0.9f, 260f, 0.85f, 235, 3, reverb: 0.55f, air: 0.45f, jitter: 0f, min: 15f));
+
+        // The fifth. Bigger than the other four in every dimension, because it is not another
+        // socket closing — it is the span taking its own weight for the first time.
+        t.Set((int)Cue.ArchKeystone, "ArchKeystone",
+            S(Bus.Player, 1.0f, 320f, 0.7f, 250, 2, reverb: 0.7f, air: 0.35f, jitter: 0f,
+              occludes: false, min: 25f));
+
+        // The bed under the whole opening sequence. One instance, never stolen, and it climbs
+        // for the length of the charge — the only bed in the game that is meant to become
+        // unbearable rather than to sit under things.
+        t.Set((int)Cue.PortalCharge, "PortalCharge", Bed(Bus.Player, 0.75f, 260f, 0.7f, reverb: 0.5f));
+
+        // The boom. The loudest single event in the game — louder than a boss dying, and
+        // deliberately: a boss dying ends a fight and this ends a planet.
+        t.Set((int)Cue.PortalOpen, "PortalOpen",
+            S(Bus.Explosions, 1.0f, 400f, 0.6f, 255, 4, reverb: 0.75f, air: 0.3f, jitter: 0f,
+              occludes: false, min: 30f));
+
+        // One craft going through. Heard by everybody still outside, which is the point — it
+        // is the sound of the count moving without you.
+        t.Set((int)Cue.PortalEnter, "PortalEnter",
+            S(Bus.Player, 0.85f, 240f, 0.85f, 230, 6, reverb: 0.6f, air: 0.45f, jitter: 0f, min: 15f));
+
         return t;
     }
 
@@ -443,6 +536,19 @@ public static class CueBank
             case Cue.FlowerWilt: Audio.PlayFlowerWilt(at); break;
             case Cue.FlowerUproot: Audio.PlayFlowerUproot(at); break;
             case Cue.FlowerBloomOpen: Audio.PlayFlowerOpen(at); break;
+
+            case Cue.PackFull: Audio.PlayFull(); break;
+            case Cue.FragmentFall: Audio.PlayFragmentFall(at); break;
+            case Cue.ArchWake: Audio.PlayArchWake(at); break;
+            case Cue.ArchClaim: Audio.PlayArchClaim(at); break;
+            case Cue.SocketTravel: Audio.PlaySocketTravel(at, param); break;
+            case Cue.SocketSeat: Audio.PlaySocketSeat(at); break;
+            case Cue.ArchKeystone: Audio.PlayArchKeystone(at); break;
+            case Cue.PortalOpen: Audio.PlayPortalOpen(at); break;
+            case Cue.PortalEnter: Audio.PlayPortalEnter(at); break;
+            // PortalCharge is a bed. It is never raised as a one-shot and never crosses the
+            // wire — every machine drives its own off the arch state the snapshot already
+            // carries, exactly like BossHum. It has a row here only so it can own a spec.
         }
     }
 }

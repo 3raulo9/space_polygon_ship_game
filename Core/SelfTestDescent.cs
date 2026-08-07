@@ -179,7 +179,7 @@ public static partial class SelfTest
 
         // Kill it, and the run has to hold still for a beat before the break opens.
         field.BossUp = false;
-        run.AwardFragment(0);
+        run.RollFragment();
         Spin(run, field, Descent.AfterBossPause + 0.2f);
         if (run.Phase != DescentPhase.Intermission) return "a dead herald did not open the break";
         if (run.Wave != 2) return "the run did not advance to wave two";
@@ -236,7 +236,6 @@ public static partial class SelfTest
     {
         var run = new Descent(PlanetId.Kirene, seed);
         var field = new StubField();
-        int seat = 0;
 
         for (int guard = 0; guard < 20000 && !run.Finished; guard++)
         {
@@ -244,11 +243,12 @@ public static partial class SelfTest
             field.WipeTheField(run);
             if (field.BossUp)
             {
-                // Killing a boss is two things in the world — the entity dies and the fragment
-                // is awarded — so the stub does both, in that order.
+                // Killing a boss is two things in the world — the entity dies and a fragment
+                // hits the ground — so the stub does both, in that order. It goes to nobody:
+                // the director rolls what fell and the world lays it down, and who ends up
+                // holding it is a question about packs that this class no longer asks.
                 field.BossUp = false;
-                run.AwardFragment(seat);
-                seat = (seat + 1) % 2;
+                run.RollFragment();
             }
         }
         if (!run.Finished) return (run, field, "a full run never finished");
@@ -260,24 +260,24 @@ public static partial class SelfTest
         var (run, _, err) = DriveAFullRun(seed: 5150);
         if (err is not null) return err;
 
-        int total = 0;
-        for (int seat = 0; seat < 4; seat++) total += run.SunsOf(seat) + run.MoonsOf(seat);
-        if (total != Descent.WaveCount)
-            return $"{total} fragments came out of a run with {Descent.WaveCount} boss fights";
+        // Five fights, five fragments on the ground. The director counts what it dropped and
+        // nothing else — where they went is the world's business now.
+        if (run.Dropped != Descent.WaveCount)
+            return $"{run.Dropped} fragments came out of a run with {Descent.WaveCount} boss fights";
 
-        // Whoever took one is wearing it, and whoever did not is wearing nothing — a tag that
-        // everybody has is not a tag.
-        bool anyTagged = false, anyBare = false;
-        for (int seat = 0; seat < 4; seat++)
-        {
-            bool has = run.Carrying(seat);
-            if (has && run.TagFor(seat).Length == 0) return "a carrier has no tag to wear";
-            if (!has && run.TagFor(seat).Length != 0) return "somebody carrying nothing has a tag";
-            anyTagged |= has;
-            anyBare |= !has;
-        }
-        if (!anyTagged) return "nobody ended the run carrying anything";
-        if (!anyBare) return "every seat in the roster was handed a fragment";
+        // And it never over-counts, however many times it is asked past the end of a run.
+        for (int i = 0; i < 5; i++) run.RollFragment();
+        if (run.Dropped != Descent.WaveCount)
+            return $"the drop counter ran past {Descent.WaveCount} to {run.Dropped}";
+
+        // The tag says what somebody is holding, in one wording used by the nameplate, the HUD
+        // and the ending screen alike. Nothing at all for somebody carrying nothing, which is
+        // what makes having one worth anything.
+        if (Descent.TagFor(0, 0).Length != 0) return "somebody carrying nothing has a tag";
+        if (Descent.TagFor(1, 0) != "SUN") return "one sun is not worn as SUN";
+        if (Descent.TagFor(0, 1) != "MOON") return "one moon is not worn as MOON";
+        if (Descent.TagFor(3, 0) != "SUN 3") return "three suns are not worn as SUN 3";
+        if (Descent.TagFor(2, 1) != "SUN 2 MOON 1") return "a mixed hand is not worn as both";
 
         // Fifty-fifty, with no memory: over many runs both kinds have to actually turn up.
         int suns = 0, moons = 0;
@@ -285,7 +285,7 @@ public static partial class SelfTest
         {
             var r = new Descent(PlanetId.Solune, s);
             for (int i = 0; i < 5; i++)
-                if (r.AwardFragment(0) == Fragment.Sun) suns++; else moons++;
+                if (r.RollFragment() == Fragment.Sun) suns++; else moons++;
         }
         if (suns == 0 || moons == 0) return "only one of the two fragments is ever handed out";
         if (suns < 90 || moons < 90) return $"the 50/50 came out {suns}/{moons} over 300 draws";
@@ -299,7 +299,7 @@ public static partial class SelfTest
         Spin(run, field, Descent.LandingLength + 0.2f);
         ClearOneWave(run, field);
         field.BossUp = false;
-        run.AwardFragment(0);
+        run.RollFragment();
         Spin(run, field, Descent.AfterBossPause + 0.2f);
         if (run.Phase != DescentPhase.Intermission) return "the run did not reach a break";
 

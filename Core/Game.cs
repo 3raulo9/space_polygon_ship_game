@@ -220,7 +220,7 @@ public sealed class Game : IDisposable
 
             // Age the join/quit feed once per rendered frame so its lines fade out whatever
             // the sim is doing behind them.
-            _session?.Notices.Age(Raylib.GetFrameTime());
+            Feed.Age(Raylib.GetFrameTime());
 
             if (_capturePath != null && RunCaptureFrame()) break;
 
@@ -357,6 +357,67 @@ public sealed class Game : IDisposable
                 }
             }
 
+            // The chat owns the keyboard outright while it is open — W is a letter — so it is
+            // handled before anything else that reads a key, and nothing below runs while it
+            // is up.
+            if (_chat.Open)
+            {
+                UpdateChat();
+                if (_chat.Open)
+                {
+                    // The craft is planted and the trigger is dead: an empty input frame, the
+                    // same one the pause panel sends. In a match the world keeps running around
+                    // it — a room cannot be held still because one person is typing — so the
+                    // craft standing there is exactly as killable as it was, which is the price
+                    // of opening it and is meant to be felt.
+                    StepSim(readInput: false);
+                    NoteCrossing();
+                    NoteRunOver();
+                    DrawChat();
+                    continue;
+                }
+            }
+            else if (InputMap.ChatToggle && !_inventoryOpen && !_archPanel.Open)
+            {
+                // Not over a panel: the inventory and the arch's board already own the mouse and
+                // the keys, and two things fighting over the keyboard is how a player ends up
+                // typing into something they cannot see.
+                OpenChat();
+                continue;
+            }
+
+            // The gate's panel. Handled before the inventory's key so that Escape, which both
+            // of them answer to, closes whichever one is actually up.
+            if (_archPanel.Open)
+            {
+                if (InputMap.QuitPressed) CloseArchPanel();
+                else UpdateArchPanel();
+
+                if (_archPanel.Open)
+                {
+                    StepSim(readInput: true);
+                    NoteRunOver();
+                    DrawArchPanel();
+                    continue;
+                }
+            }
+            else if (!_inventoryOpen)
+            {
+                // Standing at a gate with power in it, looking at the panel: the left button
+                // opens it instead of firing.
+                //
+                // Stealing the trigger anywhere else would be indefensible. Here it is safe by
+                // construction: a gate only lights when the Colossus falls, and the phase change
+                // that lights it also sweeps the field — there is nothing left on the planet to
+                // shoot at. This is the one moment in a run where the fire button has no job.
+                if (ArchPanelInReach() is { } reachable
+                    && Raylib.IsMouseButtonPressed(MouseButton.Left))
+                {
+                    OpenArchPanel(reachable);
+                    continue;
+                }
+            }
+
             if (InputMap.InventoryToggle)
                 SetInventory(!_inventoryOpen);
             else if (InputMap.QuitPressed)
@@ -412,11 +473,23 @@ public sealed class Game : IDisposable
 
             StepSim(readInput: true);
 
+            // Did that step take the room off the planet? Checked before the run-over test,
+            // because a crossing replaces the world the test would be asking about.
+            if (NoteCrossing()) continue;
+
             // Did that step end the run? Solo only: a match has team-mates to spectate and a
             // host who decides when it is over, so nobody there gets a panel because one craft
             // went down. Checked after the step rather than before, so the frame the craft dies
             // on is drawn as a frame of the game.
             NoteRunOver();
+
+            // This craft going through, and the white-out that follows it.
+            UpdateTransit();
+            if (_transit >= 0f)
+            {
+                DrawTransit();
+                continue;
+            }
 
             // The live world, with the crafting panel laid over it when it's open.
             if (_inventoryOpen) DrawInventory();
@@ -710,6 +783,363 @@ public sealed class Game : IDisposable
         }
     }
 
+    // --- The chat ----------------------------------------------------------------------------
+
+    private readonly UI.ChatBox _chat = new();
+
+    /// <summary>
+    /// The feed a solo run talks into.
+    ///
+    /// <para>A match has one on the session, mirrored between machines. Alone there is nobody to
+    /// mirror to and no session to hang it off, but the console still has to be able to answer —
+    /// so a solo run gets its own, and every screen that draws a feed reads
+    /// <see cref="Feed"/> rather than reaching for the session.</para>
+    /// </summary>
+    private readonly Net.NoticeFeed _soloFeed = new();
+
+    /// <summary>Whichever feed this run is actually using.</summary>
+    private Net.NoticeFeed Feed => _session?.Notices ?? _soloFeed;
+
+    private void OpenChat()
+    {
+        _chat.Show();
+        // The pointer comes back: the wheel scrolls the history, and inside a match the mouse
+        // has been aiming a gun since the drop.
+        Raylib.EnableCursor();
+        Audio.PlayBlip();
+    }
+
+    private void CloseChat()
+    {
+        if (!_chat.Open) return;
+        _chat.Hide();
+        Raylib.DisableCursor();
+        Audio.PlayBlip();
+    }
+
+    /// <summary>One frame of the chat, and what to do with a line that was committed.</summary>
+    private void UpdateChat()
+    {
+        IReadOnlyList<string> names = _session?.Nicknames ?? SoloNicknames;
+
+        switch (_chat.Update(names, Feed.History.Count))
+        {
+            case UI.ChatBox.Action.Close:
+                CloseChat();
+                break;
+
+            case UI.ChatBox.Action.Send:
+                Typed(_chat.Take());
+                CloseChat();
+                break;
+        }
+    }
+
+    /// <summary>The one name a solo run has, for the completion to offer.</summary>
+    private IReadOnlyList<string> SoloNicknames
+        => _world is null ? Array.Empty<string>() : new[] { _world.NameOrSeat(_world.LocalIndex) };
+
+    /// <summary>
+    /// A committed line.
+    ///
+    /// <para>In a match this goes straight to the session, which routes it to the host — the
+    /// host is the only machine that decides whether a line was a command, whether that seat may
+    /// run it, and what it does. Solo there is no session, so the same three decisions are made
+    /// here; kept deliberately parallel to <c>Session.HandleTyped</c>, and the parse itself —
+    /// which is all the actual rules — is the same call in both.</para>
+    /// </summary>
+    private void Typed(string text)
+    {
+        if (text.Length == 0) return;
+
+        if (_session is { } net) { net.Say(text); return; }
+
+        var cmd = ChatCommand.Parse(text);
+        switch (cmd.Verb)
+        {
+            case ChatVerb.Say:
+                // Nobody to say it to, so it goes in the log and no further. Allowed rather than
+                // refused: the box is the console alone, and being able to leave yourself a note
+                // in the history costs nothing.
+                _soloFeed.Push(ChatCommand.Spoken(_world?.NameOrSeat(0) ?? "PILOT", cmd.Text),
+                    Net.NoticeFeed.Kind.Chat);
+                break;
+
+            case ChatVerb.Unknown:
+                _soloFeed.Push(cmd.Complaint ?? "THAT IS NOT A COMMAND",
+                    Net.NoticeFeed.Kind.Console);
+                break;
+
+            default:
+                // A solo player is the host of a room of one, so the authority check passes by
+                // construction — which is exactly why there is no second console.
+                _soloFeed.Push(_world is null ? "NOT IN A RUN" : _world.RunCommand(cmd, 0),
+                    Net.NoticeFeed.Kind.Console);
+                break;
+        }
+    }
+
+    private void DrawChat()
+    {
+        _renderer.DrawChat(_world!, Feed, _chat, (float)Raylib.GetTime());
+        _renderer.Present();
+    }
+
+    // --- Going through -----------------------------------------------------------------------
+
+    /// <summary>How long this machine's craft has been through the portal, or -1 for "still on
+    /// the planet". Drives the whole transit: the white-out, the fall to black, and the count
+    /// that fills while everybody else finds their way to the arch.</summary>
+    private float _transit = -1f;
+
+    /// <summary>The white-out. Very short — this is the flash of going through, not a fade.</summary>
+    private const float TransitWhite = 0.5f;
+
+    /// <summary>And how long it takes to fall from white to black. Slow, because what is on the
+    /// other side of it is nothing: a black screen with a count on it, and the count is the
+    /// point.</summary>
+    private const float TransitFall = 1.6f;
+
+    /// <summary>
+    /// Notices this craft going through, and drives the transit once it has.
+    ///
+    /// <para>Entering is committing — there is no way back out of this, by design. The white
+    /// flash is not a transition effect, it is the last thing that happens on that planet, and
+    /// a fade that could run backwards would make stepping into a portal feel like opening a
+    /// menu.</para>
+    /// </summary>
+    private void UpdateTransit()
+    {
+        if (_world is not { ClaimedGate: { } gate }) { _transit = -1f; return; }
+
+        bool through = gate.HasEntered(_world.LocalIndex);
+        if (!through) { _transit = -1f; return; }
+
+        if (_transit < 0f)
+        {
+            _transit = 0f;
+            // The world goes with them. Everything still happening on the planet — the fire,
+            // the wind, the soundtrack — recedes over the white-out, so what is left on the
+            // far side is silence and a number. Reused from the ending screen's fade, which is
+            // the same idea: the place receding rather than the audio being switched off.
+            Audio.SetWorldFade(0f);
+        }
+        _transit += Raylib.GetFrameTime();
+    }
+
+    // --- The gate's panel ------------------------------------------------------------------
+
+    private readonly UI.ArchPanel _archPanel = new();
+
+    /// <summary>
+    /// The gate whose panel this craft is standing at, or null. Only ever one — the gates are
+    /// scattered across four hundred units and their reach is nine, so two can never overlap.
+    /// </summary>
+    private World.Arch? ArchPanelInReach()
+    {
+        if (_world is not { IsDescent: true } w || w.Spectating) return null;
+        Vector2 me = w.Player.Position;
+        foreach (var gate in w.Gates)
+        {
+            if (gate.State == World.Arch.Phase.Dark) continue;
+            // A claimed gate is only workable by the room that claimed it, which is every room —
+            // there is only one. An unclaimed one is workable by whoever reaches it first, and
+            // reaching it first is the point.
+            if (w.ClaimedGate is not null && !ReferenceEquals(gate, w.ClaimedGate)) continue;
+            if (gate.InReach(me)) return gate;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Opens the panel on a gate — claiming it, if nobody has yet. This is the race: the claim
+    /// happens on the frame the button goes down, and every other gate on the planet goes dark
+    /// in the same instant.
+    /// </summary>
+    private void OpenArchPanel(World.Arch gate)
+    {
+        World.World w = _world!;
+
+        if (w.ClaimedGate is null)
+        {
+            // Host-authoritative. A client asks and waits to be told — it must not claim
+            // locally and then be contradicted, because "which arch" is the one fact the whole
+            // room has to agree on before anybody walks anywhere.
+            if (_session is { IsHost: false })
+            {
+                _session.RequestArchClaim(gate.StructureIndex);
+                return;
+            }
+            if (!w.ClaimGate(gate, w.LocalIndex)) return;
+            _session?.BroadcastArchClaim(gate.StructureIndex);
+        }
+
+        _archPanel.OpenOn(gate, w.Match.Destination, w.VisitedMask);
+        // So a TALLY off the wire lands in the chart this player is actually looking at.
+        if (_session is not null) _session.ArchPanel = _archPanel;
+
+        // The pointer comes back. Inside a match the mouse has been aiming a gun since the
+        // drop, and a panel you cannot point at is not a panel.
+        Raylib.EnableCursor();
+        Audio.PlayBlip();
+
+        // A room votes on where to go; alone there is nobody to argue with, so the chart is
+        // simply a choice and the twenty-second clock would be a twenty-second wait.
+        if (_archPanel.Where == UI.ArchPanel.Page.Chart && _session is { IsHost: true })
+        {
+            _archPanel.Chart.OpenVote();
+            _session.BroadcastArchVote(_archPanel.Chart);
+        }
+    }
+
+    private void CloseArchPanel()
+    {
+        if (!_archPanel.Open) return;
+        _archPanel.Close();
+        Raylib.DisableCursor();
+        Audio.PlayBlip();
+    }
+
+    /// <summary>Carries out whatever the panel decided this frame.</summary>
+    private void UpdateArchPanel()
+    {
+        World.World w = _world!;
+
+        switch (_archPanel.Update(w))
+        {
+            case UI.ArchPanel.Action.Close:
+                CloseArchPanel();
+                break;
+
+            case UI.ArchPanel.Action.Cast:
+                if (_session is null)
+                {
+                    // Solo: the click is the decision, and the panel moves straight on to the
+                    // board. There is no ballot because there is nobody to hold one with.
+                    w.SetGateDestination(_archPanel.Chart.Cursor);
+                    _archPanel.NoteDestinationSet();
+                }
+                else
+                {
+                    _archPanel.Chart.CastLocal(w.LocalIndex);
+                    _session.SendArchVote(_archPanel.Chart);
+                }
+                break;
+
+            case UI.ArchPanel.Action.Feed:
+                if (_session is { IsHost: false })
+                    _session.RequestArchFeed(_archPanel.FeedSlot);
+                else
+                    w.FeedGate(w.LocalIndex, _archPanel.FeedSlot);
+                break;
+
+            case UI.ArchPanel.Action.EndRun:
+                // Nowhere left to go. The panel hands the player the ending screen rather than
+                // leaving them standing under an arch that will never open — which is exactly
+                // the dead end the run-over screen was built to close.
+                CloseArchPanel();
+                EnterRunOver();
+                break;
+        }
+
+        // The room's ballot, run down on the host and mirrored to everyone else.
+        if (_session is { IsHost: true } && _archPanel.Chart.Tick(Raylib.GetFrameTime()))
+        {
+            w.SetGateDestination(_archPanel.Chart.Resolve(FirstOpenWorld(w)));
+            _archPanel.NoteDestinationSet();
+            _session.BroadcastArchVote(_archPanel.Chart);
+        }
+    }
+
+    /// <summary>
+    /// Reads the latch a departed gate leaves and carries out the crossing. Returns true if the
+    /// world was replaced, so the frame is abandoned rather than going on to draw a planet that
+    /// no longer exists.
+    ///
+    /// <para>Clients do not cross here. They are brought over by the new run arriving on the
+    /// wire, which is the same mechanism that stood the first planet up — twenty machines each
+    /// deciding for themselves when the room had left would be twenty different answers.</para>
+    /// </summary>
+    private bool NoteCrossing()
+    {
+        if (_world?.Departed is not { } gate) return false;
+        if (_session is { IsHost: false }) return false;
+
+        // Where it was aimed. A gate cannot open without a destination — the panel will not
+        // take a fragment until the chart has closed — so this is belt and braces rather than
+        // a real case, and it falls back to somewhere the room has not been rather than
+        // stranding it.
+        PlanetId to = gate.Destination ?? FirstOpenWorld(_world);
+        CrossPortal(to);
+        return true;
+    }
+
+    /// <summary>
+    /// The crossing. Tears the planet down and builds the next one, carrying the room over.
+    ///
+    /// <para>Only the host does this in a match — a client is brought across by the new run
+    /// arriving on the wire, which is the same mechanism that stood the first planet up. Doing
+    /// it locally would mean twenty machines independently deciding when a room had left.</para>
+    /// </summary>
+    private void CrossPortal(PlanetId to)
+    {
+        World.World old = _world!;
+        Campaign session = old.Session ?? new Campaign();
+        session.Hop();
+
+        MatchSettings rules = old.Match.Clamped();
+        rules.Destination = to;
+        rules.Mode = GameMode.Descent;
+
+        var next = new World.World(_loadout, rules, session)
+        {
+            Networked = old.Networked,
+            Authoritative = old.Authoritative,
+            LocalIndex = old.LocalIndex,
+        };
+        // Hull, shields, reserve, magazine, revives and the whole pack. The fragments went into
+        // the arch; everything else that survived the last planet survives this one.
+        next.CarryOverFrom(old);
+
+        _world = next;
+        _archPanel.Close();
+        _transit = -1f;
+        Audio.ResumeWorldSound();
+
+        if (_session is { IsHost: true })
+        {
+            _session.ReplaceWorld(next);
+            _session.BroadcastRules(rules);
+            _session.BroadcastRun();
+        }
+    }
+
+    /// <summary>Where an empty ballot lands: the first world the session has not crossed. Never
+    /// the planet underfoot, which is what <see cref="StarMap.Resolve"/>'s usual fallback would
+    /// hand back and which would be a portal into the room you are standing in.</summary>
+    private static PlanetId FirstOpenWorld(World.World w)
+    {
+        foreach (var p in Planet.All)
+            if (!w.HasVisited(p.Id)) return p.Id;
+        return w.Match.Destination;
+    }
+
+    private void DrawArchPanel()
+    {
+        _renderer.DrawArchPanel(_world!, _archPanel, (float)Raylib.GetTime());
+        _renderer.Present();
+    }
+
+    private void DrawTransit()
+    {
+        World.World w = _world!;
+        World.Arch gate = w.ClaimedGate!;
+        _renderer.DrawTransit(w, _transit, TransitWhite, TransitFall,
+            gate.EnteredCount, w.SeatsStillComing, gate.Grace,
+            Planet.Get(gate.Destination ?? w.Match.Destination).Name);
+        _renderer.Present();
+    }
+
     /// <summary>
     /// Opens or closes the live inventory overlay. Opening resets the drag state; closing
     /// returns any half-held stack to where it came from so nothing is stranded on the
@@ -974,7 +1404,12 @@ public sealed class Game : IDisposable
         _steam = Net.SteamNet.Host();
         if (_steam == null) { _room.Fail("COULD NOT OPEN A SOCKET"); return; }
         _session = new Net.Session(_steam, host: true) { LocalName = MpName() };
-        _session.HostMatch(new World.World(_loadout, _room.Match.Clamped()));
+        // Same as a solo run: a match DESCENT is a crossing, and the host owns the session.
+        _session.HostMatch(new World.World(_loadout, _room.Match.Clamped(),
+            _room.Match.Mode == GameMode.Descent ? new Campaign() : null)
+        {
+            Networked = true,
+        });
         _session.Room = _room;
         _room.IsHost = true;
         _room.Seat(0, _session.LocalName);
@@ -989,7 +1424,8 @@ public sealed class Game : IDisposable
         if (_steam == null) { _room.Fail("THAT IS NOT A CODE"); return; }
         _session = new Net.Session(_steam, host: false) { LocalName = MpName() };
         // A client owns nothing but its own craft: the host paints the rest through snapshots.
-        _session.JoinMatch(new World.World(_loadout) { DynamicSpawning = false, Authoritative = false });
+        _session.JoinMatch(new World.World(_loadout)
+        { DynamicSpawning = false, Authoritative = false, Networked = true });
         // A placeholder chassis — the real one is chosen at the pod and sent as a Pick. The
         // Hello still carries our name, which is how the host has it before any rename.
         _session.SendHello(_loadout.Class);
@@ -1050,8 +1486,18 @@ public sealed class Game : IDisposable
     {
         if (_world is null) return;
         if (!UI.RunOverScreen.ShouldOpen(_world, networked: _session != null)) return;
+        EnterRunOver();
+    }
 
-        _runOver.Open(_world);
+    /// <summary>
+    /// Hands the player the ending screen. Split out of <see cref="NoteRunOver"/> because there
+    /// is now a second way to reach it that is not a death and not an automatic check: the last
+    /// arch of a crossing, whose panel reads IN PROGRESS and whose one row ends the run
+    /// deliberately.
+    /// </summary>
+    private void EnterRunOver()
+    {
+        _runOver.Open(_world!);
         _runOverAge = 0f;
         _inventoryOpen = false;
         _state = GameState.Dead;
@@ -1143,7 +1589,11 @@ public sealed class Game : IDisposable
             && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("UNRENDERED_DESCENT")))
             solo.Mode = GameMode.Descent;
 
-        _world = new World.World(_loadout, solo);
+        // A DESCENT is one leg of a crossing now, so it opens with a session behind it: the
+        // seed every planet's bosses and gates are rolled from, and the record of where the run
+        // has already been. SANDBOX gets none — it has no end and nowhere to go.
+        _world = new World.World(_loadout, solo,
+            solo.Mode == GameMode.Descent ? new Campaign() : null);
         if (_capturePath != null
             && float.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_HOUR"), out float hour))
             _world.SetDayPhaseForTest(hour);
@@ -1255,6 +1705,37 @@ public sealed class Game : IDisposable
             for (int i = 0; i < 2; i++)
             {
                 _renderer.DrawRunOver(_world!, _runOver, _menuTime, 1f);
+                _renderer.Present();
+            }
+            Raylib.TakeScreenshot(_capturePath!);
+            return true;
+        }
+
+        // The chat. UNRENDERED_CAPTURE_CHAT=<what is typed>, and =history opens the scrollback
+        // instead. Seeds a few lines of conversation first, because an empty chat photographs
+        // as an empty screen and the thing worth checking is whether small text stays legible
+        // against a bright grid.
+        if (Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_CHAT") is { } typed)
+        {
+            foreach (var line in new[]
+            {
+                "HOST: TWO OF FIVE DOWN",
+                "ACE: I HAVE BOTH FRAGMENTS",
+                "MERC: WATCH THE LEFT ARCH",
+                "GAVE ACE 100 ROUNDS",
+                "ACE: ON MY WAY",
+            })
+                Feed.Push(line, line.StartsWith("GAVE")
+                    ? Net.NoticeFeed.Kind.Console : Net.NoticeFeed.Kind.Chat);
+
+            OpenChat();
+            if (typed == "history") _chat.ShowHistoryForTest();
+            else foreach (char c in typed) _chat.TypeForTest(c);
+
+            _menuTime += (float)Config.FixedDt;
+            for (int i = 0; i < 2; i++)
+            {
+                _renderer.DrawChat(_world!, Feed, _chat, _menuTime);
                 _renderer.Present();
             }
             Raylib.TakeScreenshot(_capturePath!);
@@ -1769,8 +2250,10 @@ public sealed class Game : IDisposable
 
     private void Draw()
     {
-        // The join/quit feed rides along in a match; single player passes null and draws none.
-        _renderer.DrawWorld(_world!, _session?.Notices);
+        // The feed rides along. It used to be the session's or nothing, which meant a solo run
+        // drew none at all — fine when the only lines in it were "ACE JOINED", and wrong now
+        // that the console answers into it and a single player has one.
+        _renderer.DrawWorld(_world!, Feed);
         _renderer.Present();
     }
 

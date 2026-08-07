@@ -148,5 +148,15 @@ internal static class PixelFont
         // The take-apart bench's gamble: what falls out of a cell is one of three metals, or
         // nothing at all, and this is the only honest thing to draw under that arrow.
         ['?'] = new[] { ".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.." },
+
+        // The braces that make a line a command. Without these the console was unusable in the
+        // most literal way available: a player typed "{" and nothing at all appeared, because
+        // an unknown glyph draws as a blank — so the one character that decides whether a line
+        // is a command or a message was invisible while you were deciding it.
+        //
+        // Curled at the waist so they are tellable from [ and ] at five pixels wide, which is
+        // the whole difficulty at this size.
+        ['{'] = new[] { "..##.", ".#...", ".#...", "##...", ".#...", ".#...", "..##." },
+        ['}'] = new[] { ".##..", "...#.", "...#.", "...##", "...#.", "...#.", ".##.." },
     };
 }
