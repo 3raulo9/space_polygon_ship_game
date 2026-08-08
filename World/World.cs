@@ -1195,7 +1195,14 @@ public sealed partial class World : IAnchorField
 
     /// <summary>One positioned sound the sim asked for this step. The host collects these and
     /// broadcasts them; each machine plays them attenuated to its own craft.</summary>
-    public readonly record struct SoundCue(Cue Id, Vector2 Pos, float Param, int Owner);
+    /// <summary><paramref name="Personal"/> marks a cue only <paramref name="Owner"/> should ever
+    /// hear — a collect chime, a pack-full refusal, a low-hull alarm. It has to travel with the
+    /// cue rather than being spent when it is raised: the host declines to play somebody else's
+    /// personal cue locally, but it still writes it to the wire, and without this the recipient
+    /// list is "everybody in earshot". These clips carry no distance attenuation, so nineteen
+    /// other machines were chiming at full volume for salvage they had nothing to do with.</summary>
+    public readonly record struct SoundCue(Cue Id, Vector2 Pos, float Param, int Owner,
+        bool Personal = false);
 
     /// <summary>Cues raised since the last broadcast. Host-side; drained by the session.</summary>
     public readonly List<SoundCue> SoundCues = new();
@@ -1276,25 +1283,34 @@ public sealed partial class World : IAnchorField
         // client standing in the same place would hear. Never applied to our own.
         if (!mine && range > Net.Snapshot.InterestRadius)
         {
-            if (Authoritative && CollectSoundCues) SoundCues.Add(new SoundCue(id, pos, param, owner));
+            if (Authoritative && CollectSoundCues)
+                SoundCues.Add(new SoundCue(id, pos, param, owner, personal));
             return;
         }
 
         if (mine || (Authoritative && !personal))
         {
             CueBank.Play(id, pos, param);
+            LastPlayedCue = id;
             // Anything heavy going off close enough rings the ears: the mix drops away, the
             // top end goes with it and a tone is left behind. Raised here rather than at
             // the forty places a blast can come from, so nothing can be forgotten.
             if (IsConcussive(id)) ShakeFromBlast(range);
         }
-        if (Authoritative && CollectSoundCues) SoundCues.Add(new SoundCue(id, pos, param, owner));
+        if (Authoritative && CollectSoundCues)
+            SoundCues.Add(new SoundCue(id, pos, param, owner, personal));
     }
 
     /// <summary>Counts cues actually taken from the wire and played. A verification hook — the
     /// headless self-test asserts sounds cross the wire, since it can open no audio device to
     /// hear them.</summary>
     public int RemoteCuesPlayed { get; private set; }
+
+    /// <summary>The last cue this machine actually put through the speaker, whether it raised it
+    /// or took it off the wire. The other half of the same verification hook: headless there is
+    /// no device, so "did the right player hear the right thing" can only be asked of a record
+    /// like this one. Never read by the game.</summary>
+    public Cue? LastPlayedCue { get; set; }
 
     // --- Client boss puppets ------------------------------------------------------
     // A client is shown the host's bosses, not simulating them. These install and refresh
@@ -1512,6 +1528,7 @@ public sealed partial class World : IAnchorField
         if (owner == LocalIndex && !CueBank.RaisedOnlyByHost(id)) return;
         RemoteCuesPlayed++;
         CueBank.Play(id, pos, param);
+        LastPlayedCue = id;
         if (IsConcussive(id)) ShakeFromBlast(Torus.Distance(pos, Eye.Position));
     }
 
@@ -1782,6 +1799,11 @@ public sealed partial class World : IAnchorField
             // are cosmetic and run off a local clock here, no AI behind them.
             if (Boss is { IsPuppet: true } bp) bp.Animate(dt);
             if (Maw is { IsPuppet: true } mp) mp.Animate(dt);
+            // And the rolled ones, which had no such line at all. Their shape comes off the
+            // run's seed and their pose off the snapshot, but the motion between poses is a
+            // pure function of the phase they are in — so it runs here, on this machine's
+            // clock, exactly as the two hand-built monsters above already did.
+            foreach (var rolled in Bosses) rolled.AnimatePuppet(dt);
             // Salvage the host placed just bobs and turns — a local clock, since the client
             // never collects it (the host does, and drops it from the next packet).
             foreach (var pk in Pickups) pk.Update(dt);
@@ -1795,6 +1817,12 @@ public sealed partial class World : IAnchorField
             // one-shots — the rotor, the single loudest thing about the encounter, was silent
             // on every machine but one. Driven here off the puppets the snapshot installs.
             DriveMonsterBeds();
+            // The rolled bosses' rotor, after the two hand-built beds so it wins the channel
+            // the same way it does on the host. DriveMonsterBeds only knows about the
+            // Crab-Core and the Maw and actively silences the hum when neither is up — which
+            // in DESCENT is always, so the loudest continuous thing in the mode's every boss
+            // fight did not exist on any machine but the host's.
+            DriveBossHum();
             AgeRemoteRigs(dt);
             AgeMarkers(dt);
             Debris.Update(dt);
@@ -2037,8 +2065,8 @@ public sealed partial class World : IAnchorField
     /// </summary>
     private void DriveMonsterBeds()
     {
-        if (Boss is { } b) Audio.SetBossHum(true, b.Position, b.Agitation);
-        else Audio.SetBossHum(false, Vector2.Zero, 0f);
+        if (Boss is { } b) { Audio.SetBossHum(true, b.Position, b.Agitation); BossHumOn = true; }
+        else { Audio.SetBossHum(false, Vector2.Zero, 0f); BossHumOn = false; }
 
         if (Maw is { } m) Audio.SetMawHover(true, m.Position, m.Agitation);
         else Audio.SetMawHover(false, Vector2.Zero, 0f);
@@ -6209,6 +6237,15 @@ public sealed partial class World : IAnchorField
     /// to land a shot on a specific body without arranging the geometry for a real round.</summary>
     public void HurtSoldierForTest(EnemySoldier s, float amount) => DamageSoldier(s, amount);
 
+    /// <summary>Test hatch: bills one seat's craft exactly as an arriving round would, so the
+    /// cues a hit raises — the hull, the alarm, the explosion — can be checked without having
+    /// to arrange an actual shot from an actual chassis.</summary>
+    public void HurtSeatForTest(int seat, float amount)
+    {
+        if ((uint)seat >= (uint)Players.Count) return;
+        DamagePlayer(amount, Players[seat], Players[seat].Position);
+    }
+
     /// <summary>
     /// True while the squads have no idea the player is anything but one of their own: a
     /// VIRUS wearing a stolen body, and not having done anything with it yet.
@@ -6926,7 +6963,7 @@ public sealed partial class World : IAnchorField
         // The bite reaches its owner wherever they are — this used to sound only when the
         // withering mote happened to be the one at this keyboard, so a remote player rotting
         // in the open was told nothing at all.
-        if (!who.Alive) Emit(Cue.Explosion, who.Position, owner: Seat(who));
+        if (!who.Alive) Emit(Cue.Explosion, who.Position);
         else Emit(Cue.Warning, who.Position, owner: Seat(who), personal: true);
     }
 
@@ -7486,7 +7523,11 @@ public sealed partial class World : IAnchorField
         {
             DamageEnemy(shieldBody, claw.Soak());
             mark.Jolt(0.15f);
-            Emit(Cue.Hit, mark.Position, owner: Seat(mark));
+            // No owner: `owner` is who CAUSED a cue, which is what lets the machine that
+            // already played it locally drop the host's echo. Naming the craft that was HIT
+            // inverts that — this is settled on the host, so the one player being shot at was
+            // the only one who threw the sound away. Same reasoning at every Emit below.
+            Emit(Cue.Hit, mark.Position);
             return true;
         }
 
@@ -7606,7 +7647,7 @@ public sealed partial class World : IAnchorField
                 {
                     // Wholly soaked: the body took it, the player didn't. A plain hit cue,
                     // so a corrupted host being worn down still sounds like being shot at.
-                    Emit(Cue.Hit, victim.Position, owner: Seat(victim));
+                    Emit(Cue.Hit, victim.Position);
                     return;
                 }
                 // The host broke and the overflow is about to reach a naked mote — it eats

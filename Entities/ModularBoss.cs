@@ -492,6 +492,20 @@ public sealed class ModularBoss
     }
 
     /// <summary>
+    /// Client-side: runs the cosmetic clock on a body the host is posing, and nothing else.
+    ///
+    /// <para><see cref="Update"/> is the host's entry point — it decides, it acts, it fills
+    /// <see cref="Acts"/> — and it is the only thing that ever called <c>Animate</c>. So on a
+    /// client a rolled boss was a statue: the host's positions arrived and it slid around the
+    /// city with its core stopped dead and its gait frozen on whatever frame it was built at.
+    /// In DESCENT that is the entire boss fight, on every screen but the host's.</para>
+    ///
+    /// <para>The heading is deliberately not touched. That is streamed, and turning it here as
+    /// <see cref="Update"/>'s posed branch does would fight the snapshot for it.</para>
+    /// </summary>
+    public void AnimatePuppet(float dt) => Animate(dt);
+
+    /// <summary>
     /// Client-side: poses this body where the host says it is.
     ///
     /// <para>Position, bearing, altitude, phase and how peeled it is — and nothing else. The

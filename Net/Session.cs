@@ -1676,6 +1676,13 @@ public sealed class Session
         foreach (var c in World.SoundCues)
         {
             if (n >= MaxSounds) break;
+            // A personal cue goes to the one seat it belongs to and nowhere else. The host
+            // already declines to play somebody else's — this is the same rule applied to the
+            // wire, which never had it: a collect chime, a pack-full refusal and a low-hull
+            // alarm were broadcast to the whole room, and since none of those clips carry any
+            // distance attenuation, every machine in earshot heard them at full volume for
+            // something that happened to somebody else.
+            if (c.Personal && c.Owner != forSeat) continue;
             if (Torus.DistanceSquared(c.Pos, eye) > Snapshot.InterestRadius * Snapshot.InterestRadius)
                 continue;
             dst[at++] = (byte)c.Id;
@@ -2194,7 +2201,13 @@ public sealed class Session
 
                     case ArchStateKind:
                     {
-                        if (payload.Length < 17 + Unrendered.World.Arch.SocketCount) break;
+                        // Exactly what BroadcastGate writes: id, kind, index(2), state, dest,
+                        // one byte per socket, carrying, carryingTo, carryT, charge,
+                        // entered(4), grace. This guard asked for two bytes more than that,
+                        // so EVERY gate-state packet was thrown away here — a client saw the
+                        // arch get claimed and then nothing: no socket ever filled, no charge
+                        // ever ran, no portal ever opened, and the grace clock never moved.
+                        if (payload.Length < 15 + Unrendered.World.Arch.SocketCount) break;
                         int at = 2;
                         int index = BitConverter.ToUInt16(payload, at); at += 2;
                         var phase = (Unrendered.World.Arch.Phase)payload[at++];
