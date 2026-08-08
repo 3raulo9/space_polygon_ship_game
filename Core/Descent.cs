@@ -282,8 +282,12 @@ public sealed class Descent
         Killed = 0;
         _feed = 0f;
         Phase = DescentPhase.Wave;
+        // The line on the feed is the whole announcement. A wave opening used to also sound
+        // the alarm, which is the loudest, most alarming clip in the bank — and a run opens
+        // five of them, so what should have been a warning became the thing you brace for
+        // every couple of minutes whether or not anything is actually near you. The crowd
+        // fading in on the horizon says it better.
         field.Announce($"WAVE {Wave} OF {WaveCount}   {WaveTotal} CONTACTS");
-        field.Signal(Cue.Alarm);
     }
 
     private void TickWave(float dt, IDescentField field)

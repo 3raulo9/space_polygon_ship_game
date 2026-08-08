@@ -880,10 +880,21 @@ public sealed partial class World : IDescentField
         // Never fights the Crab-Core for the channel: a descent has no ambient crab, so
         // whichever of the two is speaking is the only one that can be.
         if (loud is not null)
+        {
             Audio.SetBossHum(true, loud.Position, 0.4f + 0.6f * loud.Ruin);
+            BossHumOn = true;
+        }
         else if (Boss is null)
+        {
             Audio.SetBossHum(false, Vector2.Zero, 0f);
+            BossHumOn = false;
+        }
     }
+
+    /// <summary>Whether this machine is currently asking for the boss rotor. A verification
+    /// hook only — <see cref="Audio"/> opens no device headless, so this is the only way the
+    /// self-test can ask whether a client drives the bed a host drives. Never read by the game.</summary>
+    public bool BossHumOn { get; private set; }
 
     private void AgeShards(float dt)
     {
@@ -1357,7 +1368,18 @@ public sealed partial class World : IDescentField
 
     void IDescentField.Announce(string line) => Announce?.Invoke(line);
 
-    void IDescentField.Signal(Cue id, float param) => Emit(id, Eye.Position, param, personal: true);
+    /// <summary>
+    /// The run's own voice: the Colossus's scream, the maw's crystal. Raised at this machine's
+    /// own ear, because it is the director speaking to the room rather than something that
+    /// happened at a place.
+    ///
+    /// <para>This was <c>personal: true</c> with no owner, which is the one combination that
+    /// reaches nobody who raises it: <c>personal</c> withholds the cue from the authoritative
+    /// machine, and an owner of <see cref="Projectile.NoOwner"/> matches no seat, so it was never
+    /// "mine" either. The host heard none of these — and in a solo run, where there is no client
+    /// to broadcast to, the Colossus's scream did not exist at all.</para>
+    /// </summary>
+    void IDescentField.Signal(Cue id, float param) => Emit(id, Eye.Position, param);
 
     /// <summary>Where a wave's hunters fade in. Further out than the sandbox drip so a crowd
     /// arrives as a horizon full of shapes.</summary>

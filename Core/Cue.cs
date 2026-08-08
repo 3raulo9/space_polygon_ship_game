@@ -176,11 +176,17 @@ public static class CueBank
     /// host-authoritative — who claimed it, which socket a fragment went into, whether the
     /// span is charged — so every noise it makes is decided in one place. A client that
     /// predicted a socket seating would be guessing at the count the whole room is reading.</para>
+    ///
+    /// <para>The low-hull alarm belongs to the same list and for exactly the reason above.
+    /// Damage is settled on the host and nowhere else, so a client never raises its own
+    /// <see cref="Cue.Warning"/> — and while it was missing from here, the one machine the
+    /// alarm exists to warn was the one machine that discarded it as its own echo. Every other
+    /// player in the room heard it instead.</para>
     /// </summary>
     public static bool RaisedOnlyByHost(Cue id)
         => id is Cue.Pickup or Cue.PackFull or Cue.FragmentFall or Cue.ArchWake
               or Cue.ArchClaim or Cue.SocketTravel or Cue.SocketSeat or Cue.ArchKeystone
-              or Cue.PortalOpen or Cue.PortalEnter;
+              or Cue.PortalOpen or Cue.PortalEnter or Cue.Warning;
 
     /// <summary>
     /// Builds the acoustic table. Read it as a description of the world: a rifle is a sharp
