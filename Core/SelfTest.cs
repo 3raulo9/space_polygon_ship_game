@@ -305,6 +305,11 @@ public static partial class SelfTest
         // it stands up a fresh two-seat world per attack and is the slowest thing in the file.
         failures += RunDuelChecks();
 
+        // And whether all of the above is the same game on a machine that is not the host.
+        // Its own block, and deliberately the last one: everything before it passes on the
+        // host by construction, which is exactly how these got in.
+        failures += RunParityChecks();
+
         Console.WriteLine(failures == 0
             ? "SELFTEST: all checks passed"
             : $"SELFTEST: {failures} check(s) FAILED");
