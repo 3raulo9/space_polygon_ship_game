@@ -174,12 +174,58 @@ public sealed class ModularBoss
     public IReadOnlyList<EntityCue> Cues => _cues;
     public void ClearCues() => _cues.Clear();
 
-    /// <summary>Raised on the tick a layer breaks, so the world can stage the moment — the
-    /// screen wash, the shockwave, the towers coming down — without polling for it.</summary>
-    public int LayersBrokenThisTick { get; private set; }
+    /// <summary>
+    /// Layers that have come off and not yet been staged by the world — the screen wash, the
+    /// shockwave, the plates blowing out.
+    ///
+    /// <para>A queue rather than a flag raised for one tick, and that is the whole point. The
+    /// killing blow arrives from the projectile pass, which runs <em>earlier in the frame</em>
+    /// than the loop that steps the bosses, so anything raised by <see cref="Damage"/> is
+    /// cleared at the top of this body's own <see cref="Update"/> before the world ever gets to
+    /// read it. A break that nobody staged is a hit that visibly did nothing; the same trap
+    /// cost the fragment as well — see <see cref="ClaimDeathPayout"/>. Nothing here is ever
+    /// cleared by the clock: it is drained by whoever acts on it, exactly once each.</para>
+    /// </summary>
+    private int _breaksToStage;
 
-    /// <summary>Set on the tick it finally dies, so the fragment drops exactly once.</summary>
-    public bool JustDied { get; private set; }
+    /// <summary>Takes one shed layer off the queue, so the world can stage it. False once there
+    /// is nothing owing — the caller is meant to loop on this.</summary>
+    public bool TakeLayerBreak()
+    {
+        if (_breaksToStage <= 0) return false;
+        _breaksToStage--;
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a fragment falls out of this body when it dies. True for every boss a run
+    /// raises, and false for the two halves a TWINNED parent leaves behind: those are the same
+    /// fight still going rather than two more fights, and the planet's five rocks are counted
+    /// one to a fight. They still come apart into parts like any other machine.
+    /// </summary>
+    public bool PaysFragment { get; init; } = true;
+
+    /// <summary>Whether the world has already paid this corpse out.</summary>
+    private bool _paidOut;
+
+    /// <summary>
+    /// Claims the one payout a body owes when it dies — its fragment, its salvage, its
+    /// announcement. True exactly once in the life of a boss, and only once it is dying or
+    /// dead.
+    ///
+    /// <para>Asked of the corpse every tick rather than answered by a flag raised on the tick
+    /// the last layer broke. A boss spends nearly two seconds coming apart, so the world has
+    /// hundreds of chances to notice — and it cannot matter <em>where</em> in the frame the
+    /// killing blow landed, which is what broke this before: a round fired in the projectile
+    /// pass killed a boss whose own Update then wiped the flag on the very same frame, and the
+    /// fragment, the parts and the line on the screen all silently did not happen.</para>
+    /// </summary>
+    public bool ClaimDeathPayout()
+    {
+        if (Alive || _paidOut) return false;
+        _paidOut = true;
+        return true;
+    }
 
     // --- Geometry ------------------------------------------------------------------
 
@@ -311,9 +357,6 @@ public sealed class ModularBoss
     /// </summary>
     public void Update(float dt, Vector2 targetPos, float targetHeight)
     {
-        LayersBrokenThisTick = 0;
-        JustDied = false;
-
         // A posed rig is held where PoseAs put it: the clock does not advance, so the phase
         // never times out and the capture gets the exact frame it asked for. Everything
         // cosmetic still runs, so the core keeps turning and the gait keeps breathing.
@@ -431,12 +474,11 @@ public sealed class ModularBoss
     /// are emptied and the dying state runs, so the corpse comes apart and the death animation
     /// plays out exactly as it would have.</para>
     ///
-    /// <para><b>It deliberately does not raise <see cref="JustDied"/>.</b> That flag is cleared
-    /// at the top of <see cref="Update"/>, so a death staged from outside the tick — which is
-    /// where a console command comes from — would be wiped before the world ever read it, and
-    /// the payout, the salvage and the fragment would all silently not happen. The caller is
-    /// expected to run the death itself; returning false when there was nothing to kill is how
-    /// it knows whether to.</para>
+    /// <para>The payout looks after itself: a body that is dying owes its fragment whoever put
+    /// it there, and <see cref="ClaimDeathPayout"/> is asked of the corpse rather than raised by
+    /// whatever killed it. A caller that wants the death to land inside its own call — the
+    /// console does, so the command can answer for itself — may run it immediately; the claim
+    /// makes doing so and letting the tick catch it the same thing.</para>
     /// </summary>
     public bool KillOutright()
     {
@@ -946,16 +988,18 @@ public sealed class ModularBoss
             // Colossus are meant to be five acts, not one damage number.
             _layers[top] = 0f;
             LayersLeft--;
-            LayersBrokenThisTick++;
 
             if (LayersLeft <= 0)
             {
                 Enter(State.Dying, DeathDuration);
-                JustDied = true;
                 _cues.Add(new EntityCue(Cue.BossDeath, Position));
             }
             else
             {
+                // Only a layer the body survives is staged as a break. The last one is a death,
+                // and a death has a staging of its own — announcing "0 LAYERS LEFT" over the
+                // top of the fragment falling would be the same moment told twice, badly.
+                _breaksToStage++;
                 Enter(State.Breaking, BreakDuration / RabidFactor);
                 _cues.Add(new EntityCue(Cue.CrabScream, Position, 1f));
                 // The break itself throws everyone off it — a shed layer is not a cosmetic

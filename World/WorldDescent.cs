@@ -837,8 +837,18 @@ public sealed partial class World : IDescentField
             foreach (var cue in boss.Cues) Emit(cue.Id, cue.At, cue.Param);
             boss.ClearCues();
 
-            if (boss.LayersBrokenThisTick > 0) StageLayerBreak(boss);
-            if (boss.JustDied) BossWentDown(boss);
+            // Everything the body owes the world, drained rather than sampled. A boss is killed
+            // by a round, and rounds are resolved in the projectile pass — which runs earlier in
+            // the same frame than this loop — so a flag raised by the hit was wiped by the
+            // boss's own Update a few lines above before this ever read it. That is how a
+            // fight could end with no fragment on the ground and no line on the screen.
+            //
+            // Asking the corpse instead makes it independent of where in the frame the killing
+            // blow landed: it is dying for the best part of two seconds, and the first tick to
+            // notice pays it out. Only the host pays — a client is shown the rock in the field
+            // packet like every other piece of salvage, and must not roll one of its own.
+            while (boss.TakeLayerBreak()) StageLayerBreak(boss);
+            if (Authoritative && !boss.Alive) BossWentDown(boss);
 
             // The rotor. Driven off whichever boss is loudest — the nearest living one — so a
             // pair of TWINNED halves does not stack two hums on one listener.
@@ -1137,35 +1147,48 @@ public sealed partial class World : IDescentField
     }
 
     /// <summary>
-    /// It is down. The fragment goes to whoever landed the last blow, the shard rises out of
-    /// the corpse, and the run is told so it can move on to the break.
+    /// It is down. The rock hits the ground where it fell, the shard rises out of the corpse,
+    /// the parts scatter, and the run is told so it can move on to the break.
+    ///
+    /// <para>Every boss the run raises pays exactly one fragment, always — a fight that ends
+    /// with nothing on the ground is a planet nobody can leave. Safe to call more than once and
+    /// from anywhere: the corpse itself holds the claim.</para>
     /// </summary>
     private void BossWentDown(ModularBoss boss)
     {
         if (Run is null) return;
-
-        int seat = (uint)_lastBossHitBy < (uint)Players.Count ? _lastBossHitBy : 0;
-        Fragment got = Run.RollFragment();
-        Run.TakePendingFragment();
-
-        // The ceremony — a shard of light standing up out of the corpse — and, underneath it,
-        // the rock itself. The light fades after a few seconds; the rock does not fade, ever.
-        //
-        // Two objects at one place on purpose. The rise is what makes a kill land: it is
-        // legible from across the city and it says *a fragment just dropped, and it dropped
-        // there*. The pickup is what makes it a thing rather than a medal — somebody now has
-        // to walk over and take it, and until they do it is lying in the open.
-        _shards.Add(new FragmentShard { Position = boss.Position, Kind = got, Seat = seat });
-        DropFragment(boss.Position, got);
+        // One payout per body, whoever asks first. The tick asks every frame of the dying and
+        // the console asks the instant it kills, so this is the only thing standing between a
+        // skipped boss and two fragments for one corpse.
+        if (!boss.ClaimDeathPayout()) return;
 
         Emit(Cue.BossDeath, boss.Position);
-        Emit(Cue.MawCrystal, boss.Position, 1f);
-        Emit(Cue.FragmentFall, boss.Position);
-        // Names what fell and how far along the planet is, rather than who won it — nobody has
-        // won anything yet. The count is the line that matters during a run: four of five is
-        // the moment a room starts thinking about the arch.
-        Announce?.Invoke($"FRAGMENT OF THE {(got == Fragment.Sun ? "SUN" : "MOON")}"
-            + $"   {Run.Dropped} OF {Descent.WaveCount}");
+
+        if (boss.PaysFragment)
+        {
+            int seat = (uint)_lastBossHitBy < (uint)Players.Count ? _lastBossHitBy : 0;
+            Fragment got = Run.RollFragment();
+            Run.TakePendingFragment();
+
+            // The ceremony — a shard of light standing up out of the corpse — and, underneath
+            // it, the rock itself. The light fades after a few seconds; the rock does not fade,
+            // ever.
+            //
+            // Two objects at one place on purpose. The rise is what makes a kill land: it is
+            // legible from across the city and it says *a fragment just dropped, and it dropped
+            // there*. The pickup is what makes it a thing rather than a medal — somebody now has
+            // to walk over and take it, and until they do it is lying in the open.
+            _shards.Add(new FragmentShard { Position = boss.Position, Kind = got, Seat = seat });
+            DropFragment(boss.Position, got);
+
+            Emit(Cue.MawCrystal, boss.Position, 1f);
+            Emit(Cue.FragmentFall, boss.Position);
+            // Names what fell and how far along the planet is, rather than who won it — nobody
+            // has won anything yet. The count is the line that matters during a run: four of
+            // five is the moment a room starts thinking about the arch.
+            Announce?.Invoke($"FRAGMENT OF THE {(got == Fragment.Sun ? "SUN" : "MOON")}"
+                + $"   {Run.Dropped} OF {Descent.WaveCount}");
+        }
 
         // A boss is worth a real pile of parts — it is the biggest machine on the field and it
         // has just been opened.
@@ -1178,8 +1201,9 @@ public sealed partial class World : IDescentField
 
         // TWINNED: its death is not the end of it. Two halves, each carrying one layer, rolled
         // off the parent's own seed so they are visibly its children rather than two new
-        // strangers.
-        if (boss.Gene.Quirk == Quirk.Split && boss.Gene.Layers > 1)
+        // strangers. They pay no fragment of their own — the parent already dropped this
+        // fight's rock, and a planet has exactly five whatever the quirks roll.
+        if (boss.PaysFragment && boss.Gene.Quirk == Quirk.Split && boss.Gene.Layers > 1)
         {
             for (int i = 0; i < 2; i++)
             {
@@ -1190,7 +1214,7 @@ public sealed partial class World : IDescentField
                 };
                 Vector2 at = Torus.Wrap(boss.Position
                     + new Vector2(i == 0 ? 8f : -8f, i == 0 ? 6f : -6f));
-                Bosses.Add(new ModularBoss(half, at, boss.Heading));
+                Bosses.Add(new ModularBoss(half, at, boss.Heading) { PaysFragment = false });
             }
             Announce?.Invoke($"{boss.Gene.Name} COMES APART INTO TWO");
         }

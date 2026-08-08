@@ -81,10 +81,9 @@ public sealed partial class World
                 // that did nothing whenever it caught one of those would be untrustworthy.
                 ModularBoss? boss = Headline;
                 if (boss is null || !boss.KillOutright()) return "THERE IS NOTHING TO SKIP";
-                // The death is run here rather than left to the tick's JustDied check, which is
-                // cleared at the top of the boss's own Update and would swallow a kill staged
-                // from outside the step — see KillOutright. This is the call that drops the
-                // fragment, sheds the layers and pays the corpse out.
+                // Paid out here rather than left to the next tick — which would also do it —
+                // so the command answers for a thing that has already happened. Claiming the
+                // payout is what keeps the two from both landing on one corpse.
                 BossWentDown(boss);
                 return $"KILLED {boss.Gene.Name}";
             }
