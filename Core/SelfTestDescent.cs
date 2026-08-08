@@ -25,6 +25,8 @@ public static partial class SelfTest
         failures += Check("the crowd is followed by a herald, and the herald by a break", WavesRunIntoHeraldsAndBreaks);
         failures += Check("a whole descent reaches the Colossus and clears", AWholeDescentCanBeCleared);
         failures += Check("every boss fight hands out a fragment, and somebody wears it", EveryBossGivesAFragment);
+        failures += Check("a boss killed in a real world leaves its rock on the ground", AKilledBossLeavesItsFragment);
+        failures += Check("a TWINNED boss is one fight and one fragment", TwinnedHalvesPayNoSecondFragment);
         failures += Check("holding READY cuts the salvage window short", ReadyEndsTheBreakEarly);
         failures += Check("a run meets all five lineages, in a shuffled order", RunMeetsAllFiveLineages);
         failures += Check("the same seed rolls the same boss; a different one does not", GenomesAreSeededAndVaried);
@@ -179,7 +181,7 @@ public static partial class SelfTest
 
         // Kill it, and the run has to hold still for a beat before the break opens.
         field.BossUp = false;
-        run.AwardFragment(0);
+        run.RollFragment();
         Spin(run, field, Descent.AfterBossPause + 0.2f);
         if (run.Phase != DescentPhase.Intermission) return "a dead herald did not open the break";
         if (run.Wave != 2) return "the run did not advance to wave two";
@@ -236,7 +238,6 @@ public static partial class SelfTest
     {
         var run = new Descent(PlanetId.Kirene, seed);
         var field = new StubField();
-        int seat = 0;
 
         for (int guard = 0; guard < 20000 && !run.Finished; guard++)
         {
@@ -244,11 +245,12 @@ public static partial class SelfTest
             field.WipeTheField(run);
             if (field.BossUp)
             {
-                // Killing a boss is two things in the world — the entity dies and the fragment
-                // is awarded — so the stub does both, in that order.
+                // Killing a boss is two things in the world — the entity dies and a fragment
+                // hits the ground — so the stub does both, in that order. It goes to nobody:
+                // the director rolls what fell and the world lays it down, and who ends up
+                // holding it is a question about packs that this class no longer asks.
                 field.BossUp = false;
-                run.AwardFragment(seat);
-                seat = (seat + 1) % 2;
+                run.RollFragment();
             }
         }
         if (!run.Finished) return (run, field, "a full run never finished");
@@ -260,24 +262,24 @@ public static partial class SelfTest
         var (run, _, err) = DriveAFullRun(seed: 5150);
         if (err is not null) return err;
 
-        int total = 0;
-        for (int seat = 0; seat < 4; seat++) total += run.SunsOf(seat) + run.MoonsOf(seat);
-        if (total != Descent.WaveCount)
-            return $"{total} fragments came out of a run with {Descent.WaveCount} boss fights";
+        // Five fights, five fragments on the ground. The director counts what it dropped and
+        // nothing else — where they went is the world's business now.
+        if (run.Dropped != Descent.WaveCount)
+            return $"{run.Dropped} fragments came out of a run with {Descent.WaveCount} boss fights";
 
-        // Whoever took one is wearing it, and whoever did not is wearing nothing — a tag that
-        // everybody has is not a tag.
-        bool anyTagged = false, anyBare = false;
-        for (int seat = 0; seat < 4; seat++)
-        {
-            bool has = run.Carrying(seat);
-            if (has && run.TagFor(seat).Length == 0) return "a carrier has no tag to wear";
-            if (!has && run.TagFor(seat).Length != 0) return "somebody carrying nothing has a tag";
-            anyTagged |= has;
-            anyBare |= !has;
-        }
-        if (!anyTagged) return "nobody ended the run carrying anything";
-        if (!anyBare) return "every seat in the roster was handed a fragment";
+        // And it never over-counts, however many times it is asked past the end of a run.
+        for (int i = 0; i < 5; i++) run.RollFragment();
+        if (run.Dropped != Descent.WaveCount)
+            return $"the drop counter ran past {Descent.WaveCount} to {run.Dropped}";
+
+        // The tag says what somebody is holding, in one wording used by the nameplate, the HUD
+        // and the ending screen alike. Nothing at all for somebody carrying nothing, which is
+        // what makes having one worth anything.
+        if (Descent.TagFor(0, 0).Length != 0) return "somebody carrying nothing has a tag";
+        if (Descent.TagFor(1, 0) != "SUN") return "one sun is not worn as SUN";
+        if (Descent.TagFor(0, 1) != "MOON") return "one moon is not worn as MOON";
+        if (Descent.TagFor(3, 0) != "SUN 3") return "three suns are not worn as SUN 3";
+        if (Descent.TagFor(2, 1) != "SUN 2 MOON 1") return "a mixed hand is not worn as both";
 
         // Fifty-fifty, with no memory: over many runs both kinds have to actually turn up.
         int suns = 0, moons = 0;
@@ -285,11 +287,131 @@ public static partial class SelfTest
         {
             var r = new Descent(PlanetId.Solune, s);
             for (int i = 0; i < 5; i++)
-                if (r.AwardFragment(0) == Fragment.Sun) suns++; else moons++;
+                if (r.RollFragment() == Fragment.Sun) suns++; else moons++;
         }
         if (suns == 0 || moons == 0) return "only one of the two fragments is ever handed out";
         if (suns < 90 || moons < 90) return $"the 50/50 came out {suns}/{moons} over 300 draws";
         return null;
+    }
+
+    /// <summary>
+    /// The one that matters to a room standing over a corpse: kill a boss in a <em>real</em>
+    /// world, stepped by the real loop, and a rock has to be lying there afterwards.
+    ///
+    /// <para>Everything above this drives a stub director, and a stub cannot see the seam that
+    /// actually broke: the killing blow lands in the projectile pass, which runs earlier in the
+    /// frame than the loop that steps the bosses, so a payout keyed to a flag raised by the hit
+    /// was wiped by the boss's own Update on the very same frame. Five fights, no fragments,
+    /// and a planet nobody could leave. So this hits the world from outside its tick, exactly
+    /// where a round comes from, and then asks the ground.</para>
+    /// </summary>
+    private static string? AKilledBossLeavesItsFragment()
+    {
+        var (w, lines) = BossWorld();
+        // A Colossus rather than a herald, so the shed layers are in the picture too: they
+        // travel the same road as the death and were lost the same way, which is a fight where
+        // shooting a bar off does nothing visible at all.
+        var gene = BossGen.Colossus(4242, BossLineage.Stalker) with { Quirk = Quirk.None, LayerHealth = 20f };
+        ModularBoss boss = w.SpawnBossForTest(gene, w.Players[0].Position + new Vector2(0f, 55f));
+
+        string? err = FightItToDeath(w, boss);
+        if (err is not null) return err;
+
+        int rocks = GroundFragments(w);
+        if (rocks != 1) return $"a boss fight left {rocks} fragments on the ground rather than one";
+        if (w.Run!.Dropped != 1) return $"the run counted {w.Run.Dropped} fragments off one fight";
+        if (w.Shards.Count != 1) return "no shard rose out of the corpse";
+        if (!lines.Any(l => l.StartsWith("FRAGMENT OF THE")))
+            return "a fragment fell without the room being told";
+        if (!lines.Any(l => l.EndsWith("LAST LAYER"))) return "no shed layer was ever staged";
+        // The fatal layer is a death, not a break: it must not be announced as one.
+        if (lines.Any(l => l.EndsWith("0 LAYERS LEFT")))
+            return "a death was announced as a layer coming off";
+
+        // And the corpse lies there for the best part of two seconds being asked every tick:
+        // it must answer once.
+        for (int i = 0; i < 300; i++) w.Update((float)Config.FixedDt, InputFrame.Empty);
+        if (GroundFragments(w) != 1) return "a dying boss paid out more than once";
+        return null;
+    }
+
+    /// <summary>
+    /// A TWINNED parent leaves two halves behind, and the three bodies are one fight. The
+    /// planet has five rocks on it whatever the quirks roll — a run that could come home with
+    /// seven is a run where the count under the HUD means nothing.
+    /// </summary>
+    private static string? TwinnedHalvesPayNoSecondFragment()
+    {
+        var (w, _) = BossWorld();
+        // Twinning needs a body with layers to divide, so this is built rather than drawn: a
+        // herald carries one layer and a Colossus is barred from the quirk, which is exactly
+        // why this branch has to be tested by hand or not at all.
+        var gene = BossGen.Colossus(777, BossLineage.Column) with { Quirk = Quirk.Split, LayerHealth = 20f };
+        if (gene.Layers <= 1) return "the twinning test rolled a boss that cannot come apart";
+        ModularBoss parent = w.SpawnBossForTest(gene, w.Players[0].Position + new Vector2(0f, 55f));
+
+        string? err = FightItToDeath(w, parent);
+        if (err is not null) return err;
+        if (w.Bosses.Count(b => b.Alive) != 2) return "a TWINNED parent did not leave two halves";
+        if (GroundFragments(w) != 1) return "the parent did not drop this fight's rock";
+
+        // Now put both halves down the same way.
+        foreach (var half in w.Bosses.Where(b => b.Alive).ToList())
+        {
+            err = FightItToDeath(w, half);
+            if (err is not null) return err;
+        }
+        int rocks = GroundFragments(w);
+        if (rocks != 1) return $"one TWINNED fight left {rocks} fragments on the ground";
+        if (w.Run!.Dropped != 1) return $"one TWINNED fight counted {w.Run.Dropped} fragments";
+        return null;
+    }
+
+    /// <summary>A DESCENT world with nothing on it but whatever a test stands there: no wave
+    /// director, no hunters, and a place to catch what the world says out loud.</summary>
+    private static (World.World World, List<string> Lines) BossWorld()
+    {
+        var w = new World.World(null, new MatchSettings
+        {
+            MaxPlayers = 1, Mode = GameMode.Descent, Destination = PlanetId.Kirene,
+            // The director stays shut so the only thing that can put a fragment on this
+            // ground is the boss the test kills.
+            SpawnEnemies = false,
+        })
+        { DynamicSpawning = false };
+        w.Enemies.Clear();
+        w.Pickups.Clear();
+
+        var lines = new List<string>();
+        w.Announce = lines.Add;
+        return (w, lines);
+    }
+
+    /// <summary>
+    /// Kills one boss the way the game does: the world is stepped, and the damage arrives from
+    /// <em>outside</em> that step, which is where every round in the game comes from. Runs one
+    /// tick past the death so the loop has had its chance to notice.
+    /// </summary>
+    private static string? FightItToDeath(World.World w, ModularBoss boss)
+    {
+        const float dt = 1f / 30f;
+        for (int i = 0; i < 6000 && boss.Alive; i++)
+        {
+            w.Update(dt, InputFrame.Empty);
+            if (!boss.Untouchable) boss.Damage(500f, fromFront: false);
+        }
+        if (boss.Alive) return $"a {boss.Gene.Name} could not be killed in two hundred seconds";
+        w.Update(dt, InputFrame.Empty);
+        return null;
+    }
+
+    /// <summary>Fragments lying on the grid, of either kind.</summary>
+    private static int GroundFragments(World.World w)
+    {
+        int n = 0;
+        foreach (var pk in w.Pickups)
+            if (pk.Kind is PickupKind.SunFragment or PickupKind.MoonFragment) n++;
+        return n;
     }
 
     private static string? ReadyEndsTheBreakEarly()
@@ -299,7 +421,7 @@ public static partial class SelfTest
         Spin(run, field, Descent.LandingLength + 0.2f);
         ClearOneWave(run, field);
         field.BossUp = false;
-        run.AwardFragment(0);
+        run.RollFragment();
         Spin(run, field, Descent.AfterBossPause + 0.2f);
         if (run.Phase != DescentPhase.Intermission) return "the run did not reach a break";
 

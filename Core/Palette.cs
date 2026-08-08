@@ -210,4 +210,50 @@ public static class Palette
     // weathered, and at eighteen pixels that single paler facet is the entire read: it is what
     // makes the silhouette a *fragment* rather than a rock.
     public static readonly Color MoonBreak = new(220, 230, 236, 255);
+
+    // --- The sun fragment ------------------------------------------------------
+    // Its opposite number, built by exactly the same rule so the pair reads as a pair: lifted
+    // off the sun disc the sky already draws (SkyRenderer.SunColor, #E2C496) rather than
+    // invented. Look up at noon on SOLUNE, then look down at what a boss left — same light.
+    //
+    // Where the moon shard is cold and flat, this one is warm and *has* a fresh break that
+    // glows: the difference between the two at eighteen pixels is temperature, not shape, and
+    // temperature survives fog at a distance that a silhouette does not.
+
+    // #E2C496 — the stone: the sun's own face at the altitude the sky draws it.
+    public static readonly Color SunStone = new(226, 196, 150, 255);
+
+    // #FFF0CE — the fresh break, and the one facet on either fragment that is nearly white.
+    public static readonly Color SunBreak = new(255, 240, 206, 255);
+
+    // --- The arch ---------------------------------------------------------------
+    // The way off a planet. It is deliberately NOT built out of the city's palette — a tower is
+    // StructureShell purple and belongs to whoever lived here; this predates them and is the
+    // only thing on the grid that is neither wreckage, weapon nor weather.
+
+    // #262B36 — the arch asleep. Darker than the fog it stands in, so for five waves it is a
+    // hole in the skyline rather than an object: something you notice by what it blocks.
+    public static readonly Color ArchDead = new(38, 43, 54, 255);
+
+    // #4E5A70 — the same stone once the Colossus is down and it has power in it. Never bright;
+    // what is bright is the light it throws (BatteryCore, reused deliberately — it is already
+    // the game's word for "this is charged, this is yours, this works").
+    public static readonly Color ArchLive = new(78, 90, 112, 255);
+
+    // #8C6A2E — the empty socket. A cold recess with nothing in it, which the panel's board
+    // and the arch itself both draw, so five unfilled sockets read the same in either place.
+    public static readonly Color ArchSocket = new(140, 106, 46, 255);
+
+    // --- The portal -------------------------------------------------------------
+    // What five fragments open. Its colour is read off the mix that opened it — five suns is
+    // PortalSun, five moons is PortalMoon, and everything between is the straight lerp — so
+    // the coin flip that had no mechanical weight all run is finally visible at the one moment
+    // it means anything. Both are pushed past their stone tones into neon on purpose: this is
+    // an opening in the world, not a rock, and it has to stop reading as either fragment.
+
+    // #FF9A3C — five suns. Hot, and the only orange in the game that is not an elite's hull.
+    public static readonly Color PortalSun = new(255, 154, 60, 255);
+
+    // #7CC8FF — five moons. Cold, pale, and nothing else on the grid is this blue.
+    public static readonly Color PortalMoon = new(124, 200, 255, 255);
 }

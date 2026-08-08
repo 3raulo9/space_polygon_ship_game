@@ -174,12 +174,58 @@ public sealed class ModularBoss
     public IReadOnlyList<EntityCue> Cues => _cues;
     public void ClearCues() => _cues.Clear();
 
-    /// <summary>Raised on the tick a layer breaks, so the world can stage the moment — the
-    /// screen wash, the shockwave, the towers coming down — without polling for it.</summary>
-    public int LayersBrokenThisTick { get; private set; }
+    /// <summary>
+    /// Layers that have come off and not yet been staged by the world — the screen wash, the
+    /// shockwave, the plates blowing out.
+    ///
+    /// <para>A queue rather than a flag raised for one tick, and that is the whole point. The
+    /// killing blow arrives from the projectile pass, which runs <em>earlier in the frame</em>
+    /// than the loop that steps the bosses, so anything raised by <see cref="Damage"/> is
+    /// cleared at the top of this body's own <see cref="Update"/> before the world ever gets to
+    /// read it. A break that nobody staged is a hit that visibly did nothing; the same trap
+    /// cost the fragment as well — see <see cref="ClaimDeathPayout"/>. Nothing here is ever
+    /// cleared by the clock: it is drained by whoever acts on it, exactly once each.</para>
+    /// </summary>
+    private int _breaksToStage;
 
-    /// <summary>Set on the tick it finally dies, so the fragment drops exactly once.</summary>
-    public bool JustDied { get; private set; }
+    /// <summary>Takes one shed layer off the queue, so the world can stage it. False once there
+    /// is nothing owing — the caller is meant to loop on this.</summary>
+    public bool TakeLayerBreak()
+    {
+        if (_breaksToStage <= 0) return false;
+        _breaksToStage--;
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a fragment falls out of this body when it dies. True for every boss a run
+    /// raises, and false for the two halves a TWINNED parent leaves behind: those are the same
+    /// fight still going rather than two more fights, and the planet's five rocks are counted
+    /// one to a fight. They still come apart into parts like any other machine.
+    /// </summary>
+    public bool PaysFragment { get; init; } = true;
+
+    /// <summary>Whether the world has already paid this corpse out.</summary>
+    private bool _paidOut;
+
+    /// <summary>
+    /// Claims the one payout a body owes when it dies — its fragment, its salvage, its
+    /// announcement. True exactly once in the life of a boss, and only once it is dying or
+    /// dead.
+    ///
+    /// <para>Asked of the corpse every tick rather than answered by a flag raised on the tick
+    /// the last layer broke. A boss spends nearly two seconds coming apart, so the world has
+    /// hundreds of chances to notice — and it cannot matter <em>where</em> in the frame the
+    /// killing blow landed, which is what broke this before: a round fired in the projectile
+    /// pass killed a boss whose own Update then wiped the flag on the very same frame, and the
+    /// fragment, the parts and the line on the screen all silently did not happen.</para>
+    /// </summary>
+    public bool ClaimDeathPayout()
+    {
+        if (Alive || _paidOut) return false;
+        _paidOut = true;
+        return true;
+    }
 
     // --- Geometry ------------------------------------------------------------------
 
@@ -311,9 +357,6 @@ public sealed class ModularBoss
     /// </summary>
     public void Update(float dt, Vector2 targetPos, float targetHeight)
     {
-        LayersBrokenThisTick = 0;
-        JustDied = false;
-
         // A posed rig is held where PoseAs put it: the clock does not advance, so the phase
         // never times out and the capture gets the exact frame it asked for. Everything
         // cosmetic still runs, so the core keeps turning and the gait keeps breathing.
@@ -415,6 +458,79 @@ public sealed class ModularBoss
             _ => 0f,
         };
         CoreHeat = phase is State.Winding or State.Breaking ? _phaseT : 0.2f;
+    }
+
+    /// <summary>
+    /// Kills it outright, whatever it happens to be doing. The console's <c>{skip wave}</c>.
+    ///
+    /// <para>Its own door rather than a very large <see cref="Damage"/> call, because damage is
+    /// refused in three states a boss spends a good deal of its life in — the arrival, the beat
+    /// between layers, and a PHASED body's periodic absence — and a testing command that
+    /// silently did nothing whenever it happened to be aimed at one of those would be worse
+    /// than no command at all. That is exactly how it failed first time: a boss skipped on the
+    /// frame it was raised was still fading up out of the fog and shrugged the whole thing off.</para>
+    ///
+    /// <para>It ends the fight the way losing it does rather than deleting the body: the layers
+    /// are emptied and the dying state runs, so the corpse comes apart and the death animation
+    /// plays out exactly as it would have.</para>
+    ///
+    /// <para>The payout looks after itself: a body that is dying owes its fragment whoever put
+    /// it there, and <see cref="ClaimDeathPayout"/> is asked of the corpse rather than raised by
+    /// whatever killed it. A caller that wants the death to land inside its own call — the
+    /// console does, so the command can answer for itself — may run it immediately; the claim
+    /// makes doing so and letting the tick catch it the same thing.</para>
+    /// </summary>
+    public bool KillOutright()
+    {
+        if (!Alive) return false;
+        for (int i = 0; i < _layers.Length; i++) _layers[i] = 0f;
+        LayersLeft = 0;
+        PlatesUp = false;
+        _phaseOut = 0f;
+        Enter(State.Dying, DeathDuration);
+        return true;
+    }
+
+    /// <summary>
+    /// Client-side: poses this body where the host says it is.
+    ///
+    /// <para>Position, bearing, altitude, phase and how peeled it is — and nothing else. The
+    /// rig's own motion is left running on this machine's clock: the gait keeps walking, the
+    /// body keeps breathing, the wind-up keeps swelling, all driven by
+    /// <see cref="Animate"/> from the phase this hands it. Streaming the pose itself would be
+    /// forty joints at twenty hertz for a creature whose animation is a pure function of what
+    /// it is doing, and it would look worse — a limb interpolated between two snapshots is a
+    /// limb that stutters, and one driven locally does not.</para>
+    ///
+    /// <para><see cref="Posed"/> is set, which is what keeps the client's copy from making
+    /// decisions: it stands where it is put, holds its band against nobody, and never commits
+    /// to an attack of its own. Every act a rolled boss performs is the host's.</para>
+    /// </summary>
+    public void NetSet(Vector2 at, float heading, float height, State phase, int layersLeft,
+        float topFraction)
+    {
+        Posed = true;
+        Position = Torus.Wrap(at);
+        Heading = heading;
+        Height = height;
+
+        // The phase drives the whole rig, so a change here is what makes a client see the
+        // wind-up, the strike and the recovery rather than a body sliding about.
+        if (Phase != phase)
+        {
+            Phase = phase;
+            _phaseT = 0f;
+            _phaseLen = 1f;
+        }
+
+        LayersLeft = Math.Clamp(layersLeft, 0, _layers.Length);
+        // Only the bar that is actually moving is streamed. The ones behind it are full by
+        // definition and the ones in front of it are gone, which is the same invariant the HUD
+        // draws from — so a client can fill the array back in without being told.
+        for (int i = 0; i < _layers.Length; i++)
+            _layers[i] = i < LayersLeft - 1 ? Gene.LayerHealth
+                       : i == LayersLeft - 1 ? Gene.LayerHealth * Math.Clamp(topFraction, 0f, 1f)
+                       : 0f;
     }
 
     private void UpdateStalking(float dt, Vector2 target)
@@ -872,16 +988,18 @@ public sealed class ModularBoss
             // Colossus are meant to be five acts, not one damage number.
             _layers[top] = 0f;
             LayersLeft--;
-            LayersBrokenThisTick++;
 
             if (LayersLeft <= 0)
             {
                 Enter(State.Dying, DeathDuration);
-                JustDied = true;
                 _cues.Add(new EntityCue(Cue.BossDeath, Position));
             }
             else
             {
+                // Only a layer the body survives is staged as a break. The last one is a death,
+                // and a death has a staging of its own — announcing "0 LAYERS LEFT" over the
+                // top of the fragment falling would be the same moment told twice, badly.
+                _breaksToStage++;
                 Enter(State.Breaking, BreakDuration / RabidFactor);
                 _cues.Add(new EntityCue(Cue.CrabScream, Position, 1f));
                 // The break itself throws everyone off it — a shed layer is not a cosmetic

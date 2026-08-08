@@ -33,6 +33,33 @@ public static class StarMapRenderer
     private const int TextX = 100;    // the readout column, clear of the big body
     private const int TextY = 112;
 
+    /// <summary>Where world <paramref name="i"/>'s disc sits in the row. Public because the
+    /// arch's panel is clicked rather than walked, and a hit test that derived the layout
+    /// separately would drift the first time the row moved.</summary>
+    public static Vector2 RowCentre(int i)
+    {
+        int n = Planet.All.Count;
+        return new Vector2(W / (n + 1) * (i + 1), RowY);
+    }
+
+    /// <summary>
+    /// Which world the mouse is over, or null. Generous — the click target is more than twice
+    /// the disc, because these are eight-pixel octagons at 320×240 and asking a player to hit
+    /// one exactly is asking them to fight the game rather than the planet.
+    /// </summary>
+    public static PlanetId? WorldAt(Vector2 point)
+    {
+        for (int i = 0; i < Planet.All.Count; i++)
+        {
+            Vector2 d = point - RowCentre(i);
+            // Boxed rather than circular, and taller than it is wide, so the name under each
+            // disc is part of its own target.
+            if (MathF.Abs(d.X) <= RowRadius + 6f && d.Y >= -RowRadius - 4f && d.Y <= RowRadius + 12f)
+                return Planet.All[i].Id;
+        }
+        return null;
+    }
+
     /// <summary>
     /// The whole screen: the row of worlds, the chosen one large, its conditions written out,
     /// and — in a room — the tally under each and the clock over the lot.
@@ -69,15 +96,29 @@ public static class StarMapRenderer
     private static void DrawRow(StarMap chart, float elapsed, bool voting)
     {
         int n = Planet.All.Count;
-        int spacing = W / (n + 1);
 
         for (int i = 0; i < n; i++)
         {
             Planet p = Planet.All[i];
             bool on = (int)chart.Cursor == i;
-            var at = new Vector2(spacing * (i + 1), RowY);
+            bool shut = chart.IsLocked(p.Id);
+            Vector2 at = RowCentre(i);
 
-            Disc(at, RowRadius, p, elapsed, lit: on);
+            Disc(at, RowRadius, p, elapsed, lit: on && !shut);
+
+            // A world the run has already used, or the one it is standing on. Struck through
+            // rather than hidden: "we have been there" is a fact about the session worth
+            // seeing, and a chart that silently shrank from five worlds to two would read as
+            // the game having lost some.
+            if (shut)
+            {
+                Raylib.DrawRectangle((int)at.X - (int)RowRadius - 4, RowY - 1,
+                    (int)RowRadius * 2 + 8, 2, Palette.Warning);
+                PixelFont.DrawCentered(p.Name, (int)at.X, RowY + (int)RowRadius + 6, 1,
+                    Scale(Palette.HudChrome, 0.28f));
+                continue;
+            }
+
             if (on) Raylib.DrawPolyLines(at, Sides, RowRadius + 4f, elapsed * 18f, Palette.Flag);
 
             PixelFont.DrawCentered(p.Name, (int)at.X, RowY + (int)RowRadius + 6, 1,

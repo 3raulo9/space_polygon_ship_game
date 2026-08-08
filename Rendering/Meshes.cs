@@ -787,6 +787,93 @@ public static class Meshes
         return m;
     }
 
+    /// <summary>
+    /// The arch's two keys, as a matched pair: same envelope, same standing disc, opposite
+    /// interiors. A sun is a solid hub throwing spokes; a moon is the ring with the hub bitten
+    /// out of it. Told apart at any range by whether the middle is full or empty, which
+    /// survives fog, motion and eighteen pixels — where colour alone does not.
+    ///
+    /// <para><b>These are deliberately SYMMETRIC</b>, and they are the only pickups in the game
+    /// that make a point of it. The moonstone (<see cref="MoonShard"/>) is lopsided because
+    /// nobody shaped it — it came off something. These were shaped: they are cut to fit a
+    /// socket, and a player who has seen one before an arch lights up should already suspect
+    /// they are looking at a key rather than at salvage.</para>
+    ///
+    /// <para>Standing on edge rather than lying flat, so the silhouette is the disc rather than
+    /// a foreshortened ellipse — the whole read is the outline, and a coin seen from above is
+    /// not a coin.</para>
+    /// </summary>
+    /// <param name="hollow">A moon: the hub is left out and the ring is broken at one side.
+    /// A sun keeps its hub and closes.</param>
+    public static PolyMesh Fragment(Color stone, Color bright, bool hollow)
+    {
+        var m = new PolyMesh();
+
+        const int teeth = 9;          // odd, so no spoke is ever directly opposite another
+        const float outer = 0.52f;
+        const float inner = 0.30f;
+        const float hub = 0.17f;
+        const float half = 0.09f;     // half its thickness: a thick coin, not a plate
+        const float lift = 0.56f;     // stood on its rim, centred about here
+
+        // Where the ring is cut. A moon is broken open at one tooth — that gap IS the crescent,
+        // and it is what makes the hollow one read as a moon rather than as a washer.
+        const int gap = teeth / 2;
+
+        Vector3 P(float a, float r, float z) => new(MathF.Cos(a) * r, lift + MathF.Sin(a) * r, z);
+
+        for (int i = 0; i < teeth; i++)
+        {
+            if (hollow && i == gap) continue;
+
+            float a0 = MathF.Tau * i / teeth;
+            float a1 = MathF.Tau * (i + 1) / teeth;
+            // Every other segment stands proud, which is what turns a smooth annulus into
+            // something that looks cut to engage with a mechanism.
+            float r = (i & 1) == 0 ? outer : outer * 0.86f;
+
+            Vector3 o0 = P(a0, r, -half), o1 = P(a1, r, -half);
+            Vector3 i0 = P(a0, inner, -half), i1 = P(a1, inner, -half);
+            Vector3 o0b = P(a0, r, half), o1b = P(a1, r, half);
+            Vector3 i0b = P(a0, inner, half), i1b = P(a1, inner, half);
+
+            // The two flat faces of the ring, and the rim between them. The bright tone goes on
+            // the rim alone: it is the edge that catches the directional light on every bearing,
+            // so the fragment has a lit outline from any angle instead of a lit side.
+            m.AddFace(stone, o0, o1, i1, i0);
+            m.AddFace(stone, i0b, i1b, o1b, o0b);
+            m.AddFace(bright, o0, o0b, o1b, o1);
+            m.AddFace(stone, i1, i1b, i0b, i0);
+        }
+
+        if (hollow)
+        {
+            // Cap the two cut ends, so the break reads as a break and not as a hole in the mesh.
+            float a0 = MathF.Tau * gap / teeth, a1 = MathF.Tau * (gap + 1) / teeth;
+            foreach (float a in new[] { a0, a1 })
+                m.AddFace(bright, P(a, outer, -half), P(a, inner, -half),
+                                  P(a, inner, half), P(a, outer, half));
+            return m;
+        }
+
+        // A sun's hub, and the spokes out to the ring. Solid, closed, and the reason the two
+        // silhouettes can never be confused.
+        for (int i = 0; i < teeth; i++)
+        {
+            float a0 = MathF.Tau * i / teeth;
+            float a1 = MathF.Tau * (i + 1) / teeth;
+            Vector3 c = new(0f, lift, 0f);
+
+            m.AddFace(bright, P(a0, hub, -half), P(a1, hub, -half), c with { Z = -half });
+            m.AddFace(bright, c with { Z = half }, P(a1, hub, half), P(a0, hub, half));
+
+            // One spoke per tooth, drawn as a flat blade between hub and ring on both faces.
+            m.AddFace(stone, P(a0, hub, -half), P(a0, inner, -half),
+                             P(a0, inner, half), P(a0, hub, half));
+        }
+        return m;
+    }
+
     /// <summary>A dull metal cube with a chamfered crown — lead, and nothing else about
     /// it worth drawing.</summary>
     public static PolyMesh MetalBlock(Color fill, Color crown)

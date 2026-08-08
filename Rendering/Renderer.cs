@@ -519,16 +519,25 @@ public sealed class Renderer : IDisposable
             // of the fragments: a run's five drops are visible on the people who took them, from
             // across the arena, for the rest of the session. A player carrying nothing has no
             // tag at all — which is what makes having one worth anything.
-            if (world.Run is { } run && run.Carrying(seat))
+            // Read off their pack rather than off a tally, because a fragment is an object now
+            // and can change hands: the tag has to go dark the instant somebody is killed and
+            // drops what they were carrying, and light up on whoever picks it out of the wreck.
+            if (world.IsDescent)
             {
-                string tag = run.TagFor(seat);
-                // Suns are the flag's jaundiced yellow and moons the HUD's cold chrome: the two
-                // colours the palette already keeps for "the warm one" and "the cold one", so a
-                // glance separates them at a range where the letters are illegible.
-                Color tint = run.MoonsOf(seat) == 0 ? Palette.Flag
-                    : run.SunsOf(seat) == 0 ? Palette.HudChrome
-                    : Palette.BatteryCore;   // carrying both
-                PixelFont.DrawCentered(tag, (int)s.X, by + bh + 3, 1, tint);
+                int suns = world.FragmentsOf(seat, Fragment.Sun);
+                int moons = world.FragmentsOf(seat, Fragment.Moon);
+                if (suns + moons > 0)
+                {
+                    // Suns are the flag's jaundiced yellow and moons the HUD's cold chrome: the
+                    // two colours the palette already keeps for "the warm one" and "the cold
+                    // one", so a glance separates them at a range where the letters are
+                    // illegible.
+                    Color tint = moons == 0 ? Palette.Flag
+                        : suns == 0 ? Palette.HudChrome
+                        : Palette.BatteryCore;   // carrying both
+                    PixelFont.DrawCentered(Descent.TagFor(suns, moons),
+                        (int)s.X, by + bh + 3, 1, tint);
+                }
             }
         }
     }
@@ -855,6 +864,98 @@ public sealed class Renderer : IDisposable
         Raylib.BeginTextureMode(_target);
         InventoryRenderer.Draw(world, screen, elapsed, _itemIcons);
         Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The gate's panel, laid over the running world exactly as the inventory is — same
+    /// surface, same live world underneath, same borrowed item icons. It reuses the inventory's
+    /// treatment on purpose: both are screens the player is standing in front of, and giving
+    /// the arch its own visual language would make it read as a menu the game had put up rather
+    /// than as a thing bolted to a building.
+    /// </summary>
+    public void DrawArchPanel(World.World world, UI.ArchPanel panel, float elapsed)
+    {
+        DrawWorld(world);
+
+        Raylib.BeginTextureMode(_target);
+        ArchPanelRenderer.Draw(world, panel, elapsed, _itemIcons);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The chat over the running world. No wash and no panel across the frame — the world is
+    /// drawn exactly as it always is and the text goes down the left of it, because the whole
+    /// point of an in-game chat is that you are still in the game.
+    /// </summary>
+    public void DrawChat(World.World world, Net.NoticeFeed feed, UI.ChatBox chat, float time)
+    {
+        DrawWorld(world, feed);
+
+        Raylib.BeginTextureMode(_target);
+        ChatRenderer.Draw(chat, feed, time);
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// Going through. The world blows out to white, falls away to black, and what is left is a
+    /// count and the name of somewhere you have not been.
+    ///
+    /// <para>The world is still drawn underneath for the whole of the white-out, and that
+    /// matters: the last thing on the screen before the flash takes it is the planet, seen from
+    /// inside the thing that is removing you from it. Cutting straight to a black screen would
+    /// be a loading screen, and this is meant to be the end of a place.</para>
+    ///
+    /// <para>The count is deliberately the only thing on the far side. There is nothing to
+    /// press, nothing to read, and no way back — you are through, and the wait is the last part
+    /// of leaving somewhere with other people.</para>
+    /// </summary>
+    public void DrawTransit(World.World world, float age, float white, float fall,
+        int through, int of, float grace, string destination)
+    {
+        // Still inside the flash: the planet is there under a rising white.
+        if (age < white + fall) DrawWorld(world, null, instruments: false);
+
+        Raylib.BeginTextureMode(_target);
+
+        // Up to white fast, then down to black slowly. Two curves rather than one, because the
+        // going-in is a detonation and the coming-out is a descent.
+        float wash = age < white
+            ? Math.Clamp(age / white, 0f, 1f)
+            : 1f;
+        float dark = age < white ? 0f
+            : Math.Clamp((age - white) / fall, 0f, 1f);
+
+        int a = (int)(255f * wash);
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(255, 255, 255, a));
+        Raylib.DrawRectangle(0, 0, Config.InternalWidth, Config.InternalHeight,
+            new Color(0, 0, 0, (int)(255f * dark)));
+
+        // The count comes up out of the black rather than being there waiting — it resolves as
+        // the fall finishes, so the screen is genuinely empty for a beat first.
+        if (dark >= 1f)
+        {
+            int mid = Config.InternalWidth / 2;
+            PixelFont.DrawCentered($"{through} / {of}", mid, 96, 3, Palette.BatteryCore);
+            PixelFont.DrawCentered(of == 1 ? "THROUGH" : "THROUGH THE ARCH", mid, 122, 1,
+                Dim(Palette.HudChrome, 0.7f));
+            PixelFont.DrawCentered(destination, mid, 150, 2, Palette.Flag);
+
+            // The clock the first player through started on everybody else. Only drawn while
+            // it is actually running and only in a room — solo there is nobody to wait for and
+            // the number would be a countdown to nothing.
+            if (grace > 0.5f && of > 1)
+                PixelFont.DrawCentered($"{(int)MathF.Ceiling(grace)}", mid, 174, 1,
+                    Dim(Palette.Warning, 0.85f));
+        }
+
+        Raylib.EndTextureMode();
+    }
+
+    private static Color Dim(Color c, float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return new Color((int)(c.R * t), (int)(c.G * t), (int)(c.B * t), (int)c.A);
     }
 
     /// <summary>

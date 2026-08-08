@@ -65,6 +65,53 @@ internal static class DescentHud
         }
 
         DrawFragmentTally(world, run);
+        DrawGatePrompt(world);
+    }
+
+    // --- Standing at a gate ---------------------------------------------------------------
+
+    /// <summary>
+    /// The prompt that appears when the craft is close enough to work a gate's panel.
+    ///
+    /// <para>Without this the whole feature is invisible: the panel is opened by the left mouse
+    /// button, which has meant FIRE since the game started, and nothing anywhere else in the
+    /// game has ever asked the player to click on a thing in the world. A player who walks up
+    /// to a lit arch and is told nothing simply drives past it.</para>
+    ///
+    /// <para>Low and centred, under the crosshair rather than over it — it is an invitation,
+    /// not a warning, and the one thing the middle of the screen must stay clear of is the
+    /// place the player is looking.</para>
+    /// </summary>
+    private static void DrawGatePrompt(World.World world)
+    {
+        if (world.Spectating) return;
+
+        World.Arch? gate = null;
+        foreach (var g in world.Gates)
+        {
+            if (g.State == World.Arch.Phase.Dark) continue;
+            if (world.ClaimedGate is not null && !ReferenceEquals(g, world.ClaimedGate)) continue;
+            if (g.InReach(world.Player.Position)) { gate = g; break; }
+        }
+        if (gate is null) return;
+
+        // What clicking it will actually do, which is three different things across the life of
+        // a gate. A player standing at an unclaimed panel is about to commit the whole room to
+        // this arch, and that is worth saying out loud before they do it.
+        string line = gate.State switch
+        {
+            World.Arch.Phase.Lit => "CLICK THE PANEL TO CLAIM THIS ARCH",
+            World.Arch.Phase.Open => "DRIVE INTO IT",
+            _ when gate.Destination is null => "CLICK THE PANEL TO SET THE COURSE",
+            _ => $"CLICK THE PANEL   {gate.Filled} OF {World.Arch.SocketCount} SEATED",
+        };
+
+        // Breathing, for the same reason the panel out in the world does: at this size a static
+        // line under a crosshair is furniture, and a player scanning a dark frame does not read
+        // furniture.
+        float beat = 0.6f + 0.4f * MathF.Sin((float)Raylib.GetTime() * 3.4f);
+        PixelFont.DrawCentered(line, Mid, H - 74, 1,
+            Scale(gate.State == World.Arch.Phase.Open ? Palette.BatteryCore : Palette.Flag, beat));
     }
 
     // --- The landing ---------------------------------------------------------------
@@ -272,7 +319,8 @@ internal static class DescentHud
     private static void DrawFragmentTally(World.World world, Descent run)
     {
         int seat = world.LocalIndex;
-        int suns = run.SunsOf(seat), moons = run.MoonsOf(seat);
+        int suns = world.FragmentsOf(seat, Fragment.Sun);
+        int moons = world.FragmentsOf(seat, Fragment.Moon);
         if (suns + moons == 0) return;
 
         int y = H - 52;

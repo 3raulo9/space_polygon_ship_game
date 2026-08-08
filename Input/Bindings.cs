@@ -60,6 +60,12 @@ public sealed class Bindings
             InputAction.Mark => M(MouseButton.Middle, KeyboardKey.B),
             InputAction.Scoreboard => One(KeyboardKey.Tab),
 
+            // C, which nothing else in the game uses. Deliberately a single bind with no
+            // alternate: every other row here offers two keys, and a second way to open the
+            // chat is a second key that could be pressed by accident in a firefight — and
+            // opening the chat plants the craft and takes the trigger away.
+            InputAction.Chat => One(KeyboardKey.C),
+
             // V, which nothing else in the game uses. Only ever read during a DESCENT salvage
             // window, so it is free the rest of the time — but it still gets its own key rather
             // than sharing, because the one moment it is read is a moment somebody is also
