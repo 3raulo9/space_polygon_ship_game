@@ -254,6 +254,13 @@ internal static class CreatorRenderer
 
     public static void DrawHud(CreatorScreen s, float elapsed)
     {
+        // Everything the bench draws goes under the pointer, whichever page it is.
+        DrawPanels(s, elapsed);
+        PixelCursor.Draw(s.Mouse);
+    }
+
+    private static void DrawPanels(CreatorScreen s, float elapsed)
+    {
         if (s.Current == CreatorScreen.Page.Library) { DrawLibrary(s, elapsed); return; }
 
         DrawTopBar(s);
