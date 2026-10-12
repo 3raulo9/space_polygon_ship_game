@@ -203,12 +203,15 @@ internal static class HudRenderer
     }
 
     // --- The Crab-Core's integrity bar ---
-    // Centred under the strip whenever the boss is awake and near: the core takes a lot
-    // of punishment, and without a bar a fight that long gives the player no way to tell
-    // if any of their air shots are doing anything.
+    // A small bar down the left side, hung under the stage's progress bar (or at the top of
+    // the band when there isn't one), whenever the boss is awake and near: the core takes a
+    // lot of punishment, and without a bar a fight that long gives the player no way to
+    // tell if any of their air shots are doing anything. Kept small and to the side on
+    // purpose — it is a readout to glance at, not the thing on screen.
 
-    private const int BossBarW = 168;
-    private const int BossBarH = 4;
+    private const int BossBarX = 10;
+    private const int BossBarW = 96;
+    private const int BossBarH = 3;
 
     /// <summary>The trailing chip: the part of the bar a hit just knocked off, left on
     /// screen in white for a beat and then drained away, so each landed shot is a visible
@@ -250,13 +253,13 @@ internal static class HudRenderer
         }
         else _crabGhostHold = 0f;
 
-        int x = (W - BossBarW) / 2;
-        // Clear of the SPECTATING caption, which uses the top of this band.
-        int y = StripH + (world.Spectating ? 26 : 6);
+        int x = BossBarX;
+        // Under the stage's progress bar, which DescentHud has already drawn this frame.
+        int y = world.IsDescent ? DescentHud.BandBottom : StripH + 4;
         float a = _crabShown;
 
-        PixelFont.DrawCentered("VECTOR.CRAB-CORE", W / 2, y, 1, Fade(Palette.NeonRed, a));
-        y += 9;
+        PixelFont.Draw("VECTOR.CRAB-CORE", x, y, 1, Fade(Palette.NeonRed, a));
+        y += 8;
 
         Raylib.DrawRectangle(x - 1, y - 1, BossBarW + 2, BossBarH + 2, Fade(new Color(5, 7, 10, 220), a));
         int ghostW = (int)MathF.Round(BossBarW * _crabGhost);
@@ -274,9 +277,9 @@ internal static class HudRenderer
             Raylib.DrawRectangle(x, y, liveW, 1, Fade(Lerp(fill, Color.White, 0.45f), a));
         }
 
-        // Tenths, so how many bites are left is countable at a glance.
-        for (int i = 1; i < 10; i++)
-            Raylib.DrawRectangle(x + BossBarW * i / 10, y, 1, BossBarH, Fade(new Color(5, 7, 10, 255), a * 0.7f));
+        // Fifths, so how much is left is countable at a glance at this size.
+        for (int i = 1; i < 5; i++)
+            Raylib.DrawRectangle(x + BossBarW * i / 5, y, 1, BossBarH, Fade(new Color(5, 7, 10, 255), a * 0.7f));
     }
 
     private static Color Fade(Color c, float a) => new(c.R, c.G, c.B, (byte)(c.A * Math.Clamp(a, 0f, 1f)));

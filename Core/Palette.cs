@@ -64,6 +64,8 @@ public static class Palette
 
     // #FF2828 — flashing neon red. The core once the threat display begins.
     public static readonly Color NeonRed = new(255, 40, 40, 255);
+    /// <summary>The Crab-Core gem at rest: a hot yellow that reddens toward the next shot.</summary>
+    public static readonly Color NeonYellow = new(255, 214, 40, 255);
 
     // --- Maw-Core (the Hanging Mouth) ----------------------------------------
     // The Crab-Core's carapace and crystal with the walking half torn off, left

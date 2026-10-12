@@ -779,6 +779,14 @@ public static class Snapshot
             dst[at++] = (byte)Math.Clamp(b.GrabArm * 255f, 0f, 255f);
             dst[at++] = (byte)Math.Clamp(b.StrikeArm * 255f, 0f, 255f);
             dst[at++] = (byte)Math.Clamp(b.SeizureGlow * 255f, 0f, 255f);
+            // The gem's heat and vent, and the lance: its clock, its locked elevation and the
+            // seed it splinters by — enough for a client to draw the same beam the host hurts
+            // people with, rather than a crystal that never fires.
+            dst[at++] = (byte)Math.Clamp(b.Heat * 255f, 0f, 255f);
+            dst[at++] = (byte)Math.Clamp(b.VentProgress * 255f, 0f, 255f);
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), (ushort)Math.Clamp(b.StateTime * 1000f, 0f, 65535f)); at += 2;
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), QAngle(b.LockPitch)); at += 2;
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), (ushort)b.ShotSeed); at += 2;
         }
 
         if (world.Maw is { Alive: true } m
@@ -986,7 +994,13 @@ public static class Snapshot
                 float grab = src[at++] / 255f;
                 float strike = src[at++] / 255f;
                 float glow = src[at++] / 255f;
-                world.AdoptBoss(Torus.Wrap(new Vector2(x, y)), head, phase, core, grab, strike, glow);
+                float heat = src[at++] / 255f;
+                float vent = src[at++] / 255f;
+                float clock = BitConverter.ToUInt16(src.Slice(at, 2)) / 1000f; at += 2;
+                float pitch = BitConverter.ToInt16(src.Slice(at, 2)) / AngScale; at += 2;
+                int seed = BitConverter.ToUInt16(src.Slice(at, 2)); at += 2;
+                world.AdoptBoss(Torus.Wrap(new Vector2(x, y)), head, phase, core, grab, strike, glow,
+                    heat, vent, clock, pitch, seed);
             }
             else world.ClearBossPuppet();
 

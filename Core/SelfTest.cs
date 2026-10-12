@@ -49,6 +49,9 @@ public static partial class SelfTest
         failures += Check("a held player is raised to face the core", SeizureFramesTheCore);
         failures += Check("the boss's hands frame the held player", SeizureHandsReachThePlayer);
         failures += Check("the boss's beam fires where the player was", BeamLocksItsDirection);
+        failures += Check("the boss's beam reaches a craft up in the air", BeamAimsAtFlyers);
+        failures += Check("a beam fired into the sky splinters, and the splinters bite less", SkyBeamBreaksApart);
+        failures += Check("the core reddens to fire and vents back to yellow after", CoreHeatDrivesTheLance);
         failures += Check("the maw hangs at the top of the player's jump", MawHangsAtJumpApex);
         failures += Check("only a leaping shot reaches the maw's crystal", MawNeedsAnAirShot);
         failures += Check("the maw swallows a player who stands under it", MawSwallowsStillPlayer);
@@ -4473,6 +4476,110 @@ public static partial class SelfTest
     /// Protocol forward until it commits to the hunt — the state a seizure needs.
     /// Returns nulls if it never got there.
     /// </summary>
+    /// <summary>
+    /// A fish or a soldier hanging high over the field is still in the lance's sights: the
+    /// charge aims at where the craft actually is, height and all, and the shot it locks
+    /// passes through it — not under it, along the grid where a tank would have been.
+    /// </summary>
+    private static string? BeamAimsAtFlyers()
+    {
+        var (boss, player) = CorneredByBoss();
+        if (boss == null || player == null) return "boss never reached pursuit";
+        const float Up = 28f;
+        // Close in on the plane — inside the grab range — but well overhead: a flyer is a
+        // shot from any range, since there is nothing up there to get a claw on.
+        var at = new Vector2(0f, 14f);
+        float dt = (float)Config.FixedDt;
+        for (int i = 0; i < 60 * 30 && !boss.BeamActive; i++)
+        {
+            if (boss.Phase == Entities.CrabCore.State.Pursuit) boss.Position = at;
+            boss.Update(dt, player.Position, Up);
+        }
+        if (!boss.BeamActive) return "the boss never fired at a craft overhead";
+        if (boss.BeamDirection.Y <= 0.1f) return $"the beam went out level (dir.y {boss.BeamDirection.Y:F2}), under the flyer";
+
+        var target = new Vector3(player.Position.X, Up + 1f, player.Position.Y);
+        float miss = boss.Lance.Solid.Miss(target, 0f);
+        foreach (var f in boss.Lance.Fragments) miss = MathF.Min(miss, f.Miss(target, 0f));
+        return miss > Entities.PlayerTank.Radius ? $"the beam passes {miss:F1} wide of the flyer" : null;
+    }
+
+    /// <summary>
+    /// The shape of the lance. Laid along the grid it stays one clean shaft; pointed up into
+    /// the sky it comes apart past a break that creeps toward the crystal the longer it
+    /// burns, into thinner splinters and a spark cloud; and either way it is drawn back into
+    /// the gem at the close. The damage tiers follow the pieces: the shaft hurts most, a
+    /// splinter less, the sparks least.
+    /// </summary>
+    private static string? SkyBeamBreaksApart()
+    {
+        var o = new Vector3(0f, 10f, 0f);
+        var ground = Vector3.Normalize(new Vector3(0f, -0.15f, 1f));
+        var sky = Vector3.Normalize(new Vector3(0f, 0.6f, 1f));
+        float L = Entities.CrabCore.BeamLength, R = Entities.CrabCore.BeamRadius;
+
+        var flat = Entities.CrabLance.Build(o, ground, 0.6f, 5, L, R);
+        if (flat.Fragments.Count > 0 || flat.Sparks.Length > 0f) return "a beam along the grid splintered";
+        if (flat.Solid.Length < L * 0.99f) return "a beam along the grid came up short";
+
+        var early = Entities.CrabLance.Build(o, sky, 0.15f, 5, L, R);
+        float earlyLen = early.Solid.Length;
+        var late = Entities.CrabLance.Build(o, sky, 0.7f, 5, L, R);
+        if (late.Fragments.Count < 3) return $"a beam into the sky only shed {late.Fragments.Count} splinters";
+        if (late.Sparks.Length <= 0f) return "a beam into the sky threw no sparks";
+        if (late.Solid.Length >= earlyLen - 1f) return "the break did not creep toward the crystal as it burned";
+        if (late.Solid.RadiusTo <= late.Solid.RadiusFrom * 1.2f) return "the shaft didn't widen where it tears";
+        foreach (var f in late.Fragments)
+            if (f.RadiusFrom >= late.Solid.RadiusFrom) return "a splinter is as thick as the beam it came off";
+
+        var done = Entities.CrabLance.Build(o, sky, 0.999f, 5, L, R);
+        if (done.Solid.Length > 2f) return $"the beam wasn't drawn back into the crystal ({done.Solid.Length:F1} left)";
+
+        // And the same shot splinters identically wherever it is built — a client and the
+        // host must agree on where the light is.
+        var again = Entities.CrabLance.Build(o, sky, 0.7f, 5, L, R);
+        if (again.Fragments.Count != late.Fragments.Count
+            || Vector3.Distance(again.Fragments[0].To, late.Fragments[0].To) > 1e-4f)
+            return "the same shot splintered differently twice";
+        return null;
+    }
+
+    /// <summary>
+    /// The gem is the gauge for the lance: yellow at rest, red the moment before the charge,
+    /// and straight after the shot it vents — spinning down, bleaching back to yellow, and
+    /// starting the climb again from cold.
+    /// </summary>
+    private static string? CoreHeatDrivesTheLance()
+    {
+        var fresh = new Entities.CrabCore(Vector2.Zero);
+        Raylib_cs.Color rest = fresh.Pose.CoreColor;
+        if (rest.R < 200 || rest.G < 150) return $"a fresh core isn't yellow ({rest.R},{rest.G},{rest.B})";
+
+        var (boss, player) = CorneredByBoss();
+        if (boss == null || player == null) return "boss never reached pursuit";
+        var at = new Vector2(0f, 34f);
+        float dt = (float)Config.FixedDt;
+        float heatAtCharge = -1f;
+        for (int i = 0; i < 60 * 30 && !boss.BeamActive; i++)
+        {
+            if (boss.Phase == Entities.CrabCore.State.Pursuit) boss.Position = at;
+            float before = boss.Heat;
+            boss.Update(dt, player.Position);
+            if (boss.Phase == Entities.CrabCore.State.Aiming && heatAtCharge < 0f) heatAtCharge = before;
+        }
+        if (!boss.BeamActive) return "the core never ran hot enough to fire";
+        if (heatAtCharge < 0.999f) return $"it charged with the core only {heatAtCharge:P0} red";
+
+        for (int i = 0; i < 60 * 8 && boss.BeamActive; i++) boss.Update(dt, player.Position);
+        if (boss.BeamActive) return "the beam never ended";
+        if (!boss.Venting || boss.Heat > 0f) return "the core didn't vent after the shot";
+        Raylib_cs.Color vented = boss.Pose.CoreColor;
+        for (int i = 0; i < 60 * 2; i++) boss.Update(dt, player.Position);
+        Raylib_cs.Color settled = boss.Pose.CoreColor;
+        if (settled.G < 140) return $"after the vent the core is ({settled.R},{settled.G},{settled.B}), not back to yellow";
+        return vented.Equals(settled) ? "the vent didn't change the core's colour" : null;
+    }
+
     private static (Entities.CrabCore?, Entities.PlayerTank?) CorneredByBoss()
     {
         var player = new Entities.PlayerTank(Vector2.Zero);

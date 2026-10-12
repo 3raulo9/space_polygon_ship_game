@@ -1305,9 +1305,16 @@ public sealed class EntityRenderer
         if (phase is not (CrabCore.State.Aiming or CrabCore.State.Firing)) return;
 
         var origin = new Vector3(pos.X, CrabRig.CoreWorldY + 3.0f, pos.Y);
-        float cp = MathF.Cos(pose.BodyPitch);
-        var dir = new Vector3(MathF.Sin(showHeading) * cp, -MathF.Sin(pose.BodyPitch),
-                              MathF.Cos(showHeading) * cp);
+        // The turntable shows the anti-air shot: the lance raised into open sky, which is
+        // the one that comes apart. A grounded beam is just its first second.
+        // Turned off into the scene, too, so the camera is looking along it rather than at
+        // a shaft leaving the top of the frame.
+        bool sky = phase == CrabCore.State.Firing;
+        float aim = sky ? -0.22f : pose.BodyPitch;
+        float bearing = sky ? showHeading - 0.9f : showHeading;
+        float cp = MathF.Cos(aim);
+        var dir = new Vector3(MathF.Sin(bearing) * cp, -MathF.Sin(aim),
+                              MathF.Cos(bearing) * cp);
 
         if (phase == CrabCore.State.Aiming)
         {
@@ -1317,7 +1324,11 @@ public sealed class EntityRenderer
         }
         else
         {
-            _crab.DrawLance(origin, dir, 0f, elapsed % CrabCore.BeamTime / CrabCore.BeamTime);
+            float p = elapsed % CrabCore.BeamTime / CrabCore.BeamTime;
+            // Cut short so the whole of it — the break, the splinters, the sparks and the
+            // draw-back — happens inside the turntable's frame rather than off its top edge.
+            _crab.DrawShapedLance(origin, dir, p, (int)(elapsed / CrabCore.BeamTime) * 7919 + 1,
+                length: 70f);
         }
     }
 
