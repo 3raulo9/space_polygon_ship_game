@@ -94,17 +94,27 @@ public sealed class CrabRenderer
             var leg = legs[i];
             if (Flicker(death)) continue;
 
+            // Walking: the leg swings round its hinge and rolls up about its shoulder,
+            // which stays put on the body — see CrabRig.Stride.
             float phase = pose.LegPhase + leg.PhaseOffset;
-            float footLift = MathF.Max(0f, MathF.Sin(phase)) * CrabRig.LegBob;
-            float sweep = MathF.Cos(phase) * 0.12f;
-            float yaw = leg.BaseYaw + sweep;
+            float yaw = CrabRig.StrideYaw(leg, phase, pose.Stride);
+            float legRoll = CrabRig.StrideRoll(phase, pose.Stride);
+            float footLift = 0f;
 
             // Front-right holds the player, front-left clubs them. Both fall back to
-            // ordinary walking legs the moment their channel returns to zero.
+            // ordinary walking legs the moment their channel returns to zero. An arm is
+            // raised whole off the shoulder (the seizure's geometry is solved that way),
+            // so the step's roll is blended out as the limb is taken over.
             if (i == GrabLeg && pose.GrabArm > 0f)
+            {
                 PoseArm(leg, pose.GrabArm, GripYawRight, 0f, ref yaw, ref footLift);
+                legRoll *= 1f - Math.Clamp(pose.GrabArm, 0f, 1f);
+            }
             else if (i == StrikeLeg && pose.StrikeArm > 0f)
+            {
                 PoseStrikeArm(leg, pose.StrikeArm, ref yaw, ref footLift);
+                legRoll *= 1f - Math.Clamp(pose.StrikeArm / CockPoint, 0f, 1f);
+            }
 
             var mount = new Vector3(leg.Mount.X, baseY + leg.Mount.Y + footLift, leg.Mount.Z);
 
@@ -119,7 +129,8 @@ public sealed class CrabRenderer
             // upright, because its foot is on the grid holding the thing up. Tipping
             // the legs too would swing the feet through the floor.
             DrawPart(_leg, mount, yaw + fling * 4f, bodyPos, heading, cameraPos,
-                DeathTint(LegTint, death), offset, pitch, roll, tiltPart: false);
+                DeathTint(LegTint, death), offset, pitch, roll, tiltPart: false,
+                partRoll: legRoll + fling * 3f);
         }
     }
 
@@ -137,9 +148,140 @@ public sealed class CrabRenderer
     /// purpose: light is the one thing out here that isn't built out of polygons.
     /// </summary>
     public void DrawLance(Entities.CrabCore boss, Vector2 wrapShift = default)
-        => DrawLance(boss.BeamOrigin + new Vector3(wrapShift.X, 0f, wrapShift.Y),
-            boss.BeamDirection, boss.ChargeProgress,
-            boss.BeamActive ? boss.BeamProgress : -1f);
+    {
+        var shift = new Vector3(wrapShift.X, 0f, wrapShift.Y);
+        if (boss.ChargeProgress > 0f)
+            DrawLance(boss.BeamOrigin + shift, boss.BeamDirection, boss.ChargeProgress, -1f);
+        if (boss.BeamActive)
+            DrawShapedLance(boss.Lance, boss.BeamProgress, boss.ShotSeed, shift);
+    }
+
+    private readonly Entities.CrabLance.Shape _showShape = new();
+
+    /// <summary>The boss's lance from plain values, splinters and all — for the test screen,
+    /// which has no live boss to ask for its shape.</summary>
+    public void DrawShapedLance(Vector3 origin, Vector3 direction, float progress, int seed,
+        float length = Entities.CrabCore.BeamLength)
+        => DrawShapedLance(Entities.CrabLance.Build(origin, direction, progress, seed,
+            length, Entities.CrabCore.BeamRadius, _showShape), progress, seed, Vector3.Zero);
+
+    /// <summary>
+    /// The Crab-Core's beam, drawn from the same <see cref="Entities.CrabLance.Shape"/> the
+    /// world damages with: the intact shaft flaring where it tears, the splinters fanning off
+    /// the break and thinning to nothing, a shower of sparks round it, and — across the close
+    /// — a bead of light running back down the shaft into the crystal as it is drawn in.
+    /// </summary>
+    private void DrawShapedLance(Entities.CrabLance.Shape shape, float progress, int seed, Vector3 shift)
+    {
+        float t = (float)Raylib.GetTime();
+        float burn = progress * Entities.CrabCore.BeamTime;
+        float flutter = 0.9f + 0.1f * MathF.Sin(t * 37f);
+        var red = Palette.NeonRed;
+
+        var solid = shape.Solid;
+        Vector3 from = solid.From + shift;
+        if (solid.Length > 0.05f && solid.RadiusFrom > 0f)
+        {
+            Vector3 to = solid.To + shift;
+            float r0 = solid.RadiusFrom * flutter, r1 = solid.RadiusTo * flutter;
+            // The white core thins toward the break while the red sheath swells round it: the
+            // energy is visibly coming out of the line and spreading.
+            float core0 = r0 * 0.42f * 1.35f, core1 = r0 * 0.42f * (1f - 0.65f * shape.Breakup);
+            Raylib.DrawCylinderEx(from, to, core0, core1, 10, Color.White);
+            Raylib.DrawCylinderEx(from, to, r0 * 1.4f, r1, 10,
+                new Color(red.R, red.G, red.B, (byte)(130 * solid.AlphaTo + 20)));
+
+            // The muzzle, as before: a blown-out flare where it leaves the crystal.
+            Raylib.DrawSphereEx(from, r0 * 0.95f, 8, 8, new Color((int)255, 120, 120, 150));
+            Raylib.DrawSphereEx(from, core0 * 0.8f, 8, 8, Color.White);
+
+            // Where it tears, a flickering knot of light the splinters burst out of.
+            if (shape.Breakup > 0.02f)
+            {
+                float knot = r1 * (0.8f + 0.3f * MathF.Sin(t * 23f));
+                Raylib.DrawSphereEx(to, knot, 8, 8,
+                    new Color(red.R, (int)red.G + 60, red.B, (int)(110 * shape.Breakup + 40)));
+            }
+
+            // Drawn back in: a white bead rides the shrinking tip home to the crystal.
+            if (shape.Retract > 0f)
+            {
+                float bead = Entities.CrabCore.BeamRadius * (0.7f + 0.8f * shape.Retract)
+                           * (0.85f + 0.15f * MathF.Sin(t * 41f));
+                Raylib.DrawSphereEx(to, bead * 1.6f, 8, 8, new Color(red.R, red.G, red.B, (byte)120));
+                Raylib.DrawSphereEx(to, bead, 8, 8, Color.White);
+            }
+        }
+
+        // The splinters: each a thin laser in its own right, cut into a few pieces so it can
+        // thin and fade along its length and simply stop being there by its far end.
+        const int Pieces = 4;
+        foreach (var f in shape.Fragments)
+        {
+            for (int k = 0; k < Pieces; k++)
+            {
+                float u0 = k / (float)Pieces, u1 = (k + 1) / (float)Pieces;
+                Vector3 a = f.From + f.Dir * (f.Length * u0) + shift;
+                Vector3 b = f.From + f.Dir * (f.Length * u1) + shift;
+                float ra = Lerp(f.RadiusFrom, f.RadiusTo, u0) * flutter;
+                float rb = Lerp(f.RadiusFrom, f.RadiusTo, u1) * flutter;
+                float alpha = Lerp(f.AlphaFrom, f.AlphaTo, (u0 + u1) * 0.5f);
+                if (alpha <= 0.02f) continue;
+                if (k < 2)
+                    Raylib.DrawCylinderEx(a, b, ra * 0.45f, rb * 0.45f, 6,
+                        new Color((byte)255, (byte)230, (byte)230, (byte)(255 * alpha)));
+                Raylib.DrawCylinderEx(a, b, ra, rb, 6,
+                    new Color(red.R, red.G, red.B, (byte)(150 * alpha)));
+            }
+        }
+
+        DrawSparks(shape, burn, seed, shift);
+    }
+
+    /// <summary>
+    /// The shower round the break: short-lived embers thrown off the tear, each living a
+    /// fraction of a second, flying outward and dropping as it cools from white through
+    /// yellow to red. Stateless — each ember is a function of the burn clock and its own
+    /// index — so it costs nothing to keep and a client draws the same shower.
+    /// </summary>
+    private static void DrawSparks(Entities.CrabLance.Shape shape, float burn, int seed, Vector3 shift)
+    {
+        var cloud = shape.Sparks;
+        if (cloud.Length <= 0.5f || shape.Breakup < 0.02f) return;
+
+        int count = (int)(90 * shape.Breakup * (1f - shape.Retract * 0.7f));
+        Vector3 dir = cloud.Dir;
+        Vector3 side = Vector3.Normalize(Vector3.Cross(dir, MathF.Abs(dir.Y) > 0.95f ? Vector3.UnitX : Vector3.UnitY));
+        Vector3 up = Vector3.Cross(side, dir);
+
+        for (int j = 0; j < count; j++)
+        {
+            float life = 0.35f + 0.45f * Entities.CrabLance.Hash(seed, j, 10);
+            float clock = burn / life + Entities.CrabLance.Hash(seed, j, 11);
+            int gen = (int)MathF.Floor(clock);
+            float age = clock - gen;           // 0..1 through this ember's life
+            int key = j * 131 + gen;            // a fresh ember every life
+
+            // Born somewhere along the break, mostly near it.
+            float along = cloud.Length * MathF.Pow(Entities.CrabLance.Hash(seed, key, 12), 1.6f);
+            float ang = Entities.CrabLance.Hash(seed, key, 13) * MathF.Tau;
+            Vector3 radial = side * MathF.Cos(ang) + up * MathF.Sin(ang);
+            Vector3 born = cloud.From + dir * along + radial * cloud.RadiusFrom * 0.4f * Entities.CrabLance.Hash(seed, key, 14);
+            float speed = 6f + 16f * Entities.CrabLance.Hash(seed, key, 15);
+            Vector3 vel = radial * speed + dir * speed * 0.5f;
+            float secs = age * life;
+            Vector3 at = born + vel * secs + new Vector3(0f, -9f * secs * secs, 0f) + shift;
+
+            Color c = age < 0.3f
+                ? GridRenderer.LerpColor(Color.White, Palette.NeonYellow, age / 0.3f)
+                : GridRenderer.LerpColor(Palette.NeonYellow, Palette.NeonRed, (age - 0.3f) / 0.7f);
+            c = new Color(c.R, c.G, c.B, (byte)(255 * (1f - age)));
+            // A streak along its flight, so it reads as moving at a still frame.
+            Vector3 tail = at - (vel + new Vector3(0f, -18f * secs, 0f)) * 0.035f;
+            Raylib.DrawLine3D(tail, at, c);
+            Raylib.DrawCube(at, 0.22f, 0.22f, 0.22f, c);
+        }
+    }
 
     /// <summary>
     /// The lance from plain values rather than a live boss, so the test screen can
@@ -298,7 +440,7 @@ public sealed class CrabRenderer
     /// </summary>
     private void DrawPart(PolyMesh mesh, Vector3 localMount, float localYaw,
         Vector2 bodyPos, float heading, Vector3 cameraPos, Color? tint = null, Vector3 offset = default,
-        float pitch = 0f, float roll = 0f, bool tiltPart = false)
+        float pitch = 0f, float roll = 0f, bool tiltPart = false, float partRoll = 0f)
     {
         Vector3 o = localMount * Scale;
         // The mount point always rides the lean, so every part stays bolted to the
@@ -310,7 +452,7 @@ public sealed class CrabRenderer
         float rz = -o.X * sin + o.Z * cos;
         var worldXZ = new Vector2(bodyPos.X + rx + offset.X, bodyPos.Y + rz + offset.Z);
         mesh.Draw(worldXZ, heading + localYaw, o.Y + offset.Y, cameraPos, Scale, tint,
-            tiltPart ? pitch : 0f, tiltPart ? roll : 0f);
+            tiltPart ? pitch : 0f, tiltPart ? roll : partRoll);
     }
 
     /// <summary>Rolls then pitches a vector in the body's own frame — the same order

@@ -1319,10 +1319,12 @@ public sealed partial class World : IAnchorField
 
     /// <summary>Client-side: install or refresh the host's Crab-Core as a render-only puppet.</summary>
     public void AdoptBoss(Vector2 pos, float heading, CrabCore.State phase, float coreFrac,
-        float grabArm, float strikeArm, float seizureGlow)
+        float grabArm, float strikeArm, float seizureGlow,
+        float heat, float vent, float stateTime, float beamPitch, int shotSeed)
     {
         if (Boss is not { IsPuppet: true } p) { p = CrabCore.Puppet(pos, heading); Boss = p; }
-        p.NetSet(pos, heading, phase, coreFrac, grabArm, strikeArm, seizureGlow);
+        p.NetSet(pos, heading, phase, coreFrac, grabArm, strikeArm, seizureGlow,
+            heat, vent, stateTime, beamPitch, shotSeed);
     }
 
     /// <summary>Client-side: the host no longer reports a Crab-Core — drop the puppet.</summary>
@@ -1884,7 +1886,9 @@ public sealed partial class World : IAnchorField
             // The crab stalks whoever is closest to it. Its footfalls and hum below are
             // still measured against the *local* craft, and deliberately so: those are
             // things this machine's player hears, not things the boss does.
-            if (boss.Update(dt, NearestPlayer(boss.Position).Position))
+            // Its quarry's height too: the lance aims at a flyer where it actually is.
+            PlayerTank quarry = NearestPlayer(boss.Position);
+            if (boss.Update(dt, quarry.Position, quarry.Height))
                 Emit(Cue.Clamp, boss.Position);
             // Every planting foot is voiced on its own — a tripod lands together, so this is
             // three overlapping impacts, each with its own limb's pitch and its own distance
@@ -2769,6 +2773,14 @@ public sealed partial class World : IAnchorField
     /// <summary>What standing in the Crab-Core's beam costs, per damage tick.</summary>
     private const float BeamDamage = 9f;
 
+    /// <summary>What one of a breaking beam's splinters costs — a real laser, just a
+    /// thinner one.</summary>
+    private const float BeamFragmentDamage = 4f;
+
+    /// <summary>What the spark cloud round the break costs: enough that flying through
+    /// it is a mistake, not enough that it is the beam.</summary>
+    private const float BeamSparkDamage = 2f;
+
     /// <summary>
     /// How often the beam bites while the player is inside it. Ticked rather than
     /// applied per-frame for two reasons: the damage stops depending on the frame
@@ -2806,11 +2818,11 @@ public sealed partial class World : IAnchorField
         // integrity rather than felling on the first touch, so it chips a tower for a
         // fraction of a second before it goes — and the moment one falls out of the way, the
         // sweep reaches the next in line and starts on that.
-        CutStructuresAlong(boss.BeamOrigin, boss.BeamDirection, CrabCore.BeamLength,
-            CrabCore.BeamRadius, CrabBeamStructureRate * dt);
-
-        Vector3 from = boss.BeamOrigin;
-        Vector3 dir = boss.BeamDirection;
+        // Only the intact shaft cuts; splinters and sparks scorch, they don't fell towers.
+        CrabLance.Shape lance = boss.Lance;
+        if (lance.Solid.Length > 0.5f)
+            CutStructuresAlong(lance.Solid.From, lance.Solid.Dir, lance.Solid.Length,
+                CrabCore.BeamRadius, CrabBeamStructureRate * dt);
 
         // Every craft the shaft passes through, not just the one at this keyboard. A beam is
         // a line burning across the world and anybody standing in it should be burning too —
@@ -2829,17 +2841,29 @@ public sealed partial class World : IAnchorField
             Vector2 near = Torus.NearestImage(mark.Position, boss.Position);
             var target = new Vector3(near.X, mark.Height + 1f, near.Y);
 
-            // Distance from the craft to the beam's axis, clamped to the shaft's own
-            // length so the ray doesn't reach backwards out of the emitter.
-            float along = Math.Clamp(Vector3.Dot(target - from, dir), 0f, CrabCore.BeamLength);
-            float miss = Vector3.Distance(target, from + dir * along);
-
-            if (miss > CrabCore.BeamRadius + PlayerTank.Radius) continue;
+            // The worst thing the craft is inside: the shaft, a splinter, or the sparks.
+            // Each test is the same point-to-segment distance the renderer draws to, so
+            // what looks like standing in the light is standing in the light.
+            float bite = LanceBite(lance, target);
+            if (bite <= 0f) continue;
             if (_beamTick[seat] > 0f) continue;
 
             _beamTick[seat] = BeamTickInterval;
-            DamagePlayer(BeamDamage, mark);
+            DamagePlayer(bite, mark);
         }
+    }
+
+    /// <summary>What a craft centred at <paramref name="target"/> takes from the lance as it
+    /// stands — zero when it is clear of every part of it.</summary>
+    private static float LanceBite(CrabLance.Shape lance, Vector3 target)
+    {
+        if (lance.Solid.Length > 0f && lance.Solid.Miss(target, PlayerTank.Radius) <= 0f)
+            return BeamDamage;
+        foreach (var f in lance.Fragments)
+            if (f.Miss(target, PlayerTank.Radius) <= 0f) return BeamFragmentDamage;
+        if (lance.Sparks.Length > 0f && lance.Sparks.Miss(target, 0f) <= 0f)
+            return BeamSparkDamage;
+        return 0f;
     }
 
     /// <summary>

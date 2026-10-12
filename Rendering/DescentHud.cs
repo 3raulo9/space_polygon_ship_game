@@ -39,8 +39,14 @@ internal static class DescentHud
     /// free.</summary>
     private const int Mid = Margin + BarW / 2;
 
+    /// <summary>The first free row under whatever this drew in the band — where the HUD can
+    /// hang a smaller readout of its own, like the Crab-Core's bar. The top of the band when
+    /// nothing was drawn there this frame.</summary>
+    public static int BandBottom { get; private set; } = Top;
+
     public static void Draw(World.World world)
     {
+        BandBottom = Top;
         if (world.Run is not { } run) return;
 
         switch (run.Phase)
@@ -156,6 +162,7 @@ internal static class DescentHud
             left <= total / 5 ? Palette.Flag : Scale(Palette.HudChrome, 0.8f));
 
         int y = Top + 10, h = 5;
+        BandBottom = y + h + 5;
         Raylib.DrawRectangle(Margin - 1, y - 1, BarW + 2, h + 2, new Color(5, 7, 10, 200));
 
         // The colour warms as the crowd thins, so the last few contacts of a wave of fifty read

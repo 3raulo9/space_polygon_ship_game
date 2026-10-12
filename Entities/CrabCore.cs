@@ -41,7 +41,7 @@ public sealed class CrabCore
     // Only the exposed neon core takes damage, and only an airborne shot rides high
     // enough to reach it: the whole fight is timing a jump so a level bolt threads
     // the raised gem. Its chassis, legs and claws are inert armour.
-    public const float CoreMaxHealth = 4f;
+    public const float CoreMaxHealth = 40f;
     private float _coreHealth = CoreMaxHealth;
 
     /// <summary>The core's strike zone, in world space. Anchored a little up into the
@@ -92,7 +92,7 @@ public sealed class CrabCore
         ? Math.Clamp(_deathTime / DeathDuration, 0f, 1f)
         : (Phase == State.Dead ? 1f : 0f);
 
-    /// <summary>0..1 remaining core integrity, for a HUD boss bar later if wanted.</summary>
+    /// <summary>0..1 remaining core integrity — what the HUD's boss bar shows.</summary>
     public float CoreFraction => Math.Clamp(_coreHealth / CoreMaxHealth, 0f, 1f);
 
     // --- Protocol tuning ------------------------------------------------------
@@ -120,12 +120,13 @@ public sealed class CrabCore
     // a fast loop-synchronous scuttle in pursuit.
     private const float IdleLeg = 0.9f;
     private const float ShuffleLeg = 3.0f;
-    private const float PursuitLeg = 13.0f;
+    public const float PursuitLeg = 13.0f;
 
     // --- Live animation accumulators ---
     private float _stateTime;
     private float _coreSpin;
     private float _legPhase;
+    private float _stride = CrabRig.TreadStride; // eased toward StrideFor(Phase)
     private float _clawOpen;
     private float _flash;               // 0..1 white-hot pop on a clamp snap, decays
     private bool _jawWasOpen;           // edge-detect the open→shut snap
@@ -177,8 +178,19 @@ public sealed class CrabCore
     /// stored as a target Animate eases toward (snapped on first sight); phase and core health
     /// are display state and taken outright.</summary>
     public void NetSet(Vector2 pos, float heading, State phase, float coreFrac,
-        float grabArm, float strikeArm, float seizureGlow)
+        float grabArm, float strikeArm, float seizureGlow,
+        float heat = 0f, float vent = 1f, float stateTime = 0f, float beamPitch = 0f, int shotSeed = 0)
     {
+        // The lance and the gem, so a client sees the core redden, the beam go where the
+        // host aimed it and come apart the way the host's does. The state clock is taken
+        // outright on a change of phase and otherwise only when it has drifted, so Animate
+        // can run it smoothly between packets.
+        if (phase != Phase || MathF.Abs(stateTime - _stateTime) > 0.25f) _stateTime = stateTime;
+        _heat = heat;
+        if (MathF.Abs(vent * VentTime - _vent) > 0.25f) _vent = vent * VentTime;
+        _lockPitch = beamPitch;
+        _lockHeading = heading;
+        _shotSeed = shotSeed;
         if (!_hasNet) { Position = pos; Heading = heading; _hasNet = true; }
         _netPos = pos;
         _netHeading = heading;
@@ -194,6 +206,9 @@ public sealed class CrabCore
     public void Animate(float dt)
     {
         _puppetClock += dt;
+        _stateTime += dt;
+        if (_vent < VentTime) _vent += dt;
+        _coreSpin += CoreSpinRate * dt;
         if (_hasNet)
         {
             float k = 1f - MathF.Exp(-NetEaseRate * dt);
@@ -220,10 +235,13 @@ public sealed class CrabCore
     /// <summary>
     /// Advances the protocol one tick against the player's position. Returns true on
     /// the exact tick a claw-plate snaps shut, so the caller can fire the CLANG.
+    /// <paramref name="playerHeight"/> is how far off the grid the quarry is — a fish or a
+    /// soldier up in the air — which is what the lance aims at.
     /// </summary>
-    public bool Update(float dt, Vector2 playerPos)
+    public bool Update(float dt, Vector2 playerPos, float playerHeight = 0f)
     {
         _stateTime += dt;
+        _aimHeight = playerHeight + 1f;   // the middle of a craft, as the beam damages it
         _footfalls.Clear();
         _cues.Clear();
         bool snapped = false;
@@ -242,6 +260,7 @@ public sealed class CrabCore
         if (Seizing && Phase is not (State.Dying or State.Dead))
         {
             _legPhase += IdleLeg * 0.35f * dt;      // the barest brace-and-shift
+            _stride += (CrabRig.TreadStride - _stride) * Math.Clamp(dt * 6f, 0f, 1f);
             _clawOpen = 0f;
             _coreSpin += AgitatedSpin * dt;
             if (_flash > 0f) _flash = MathF.Max(0f, _flash - dt * 4f);
@@ -272,6 +291,12 @@ public sealed class CrabCore
         _coreSpin += CoreSpinRate * dt;
         if (_flash > 0f) _flash = MathF.Max(0f, _flash - dt * 4f);
         if (Phase is not (State.Aiming or State.Firing)) SettleTilt(0f, 0f, dt, TiltRelaxRate);
+        UpdateHeat(dt);
+
+        // Lengthen into a full stride as the hunt starts and shorten back to a tread when
+        // it stops, over a few steps rather than in one frame — a leg that changes its
+        // reach mid-swing visibly jumps.
+        _stride += (StrideFor(Phase) - _stride) * Math.Clamp(dt * 6f, 0f, 1f);
 
         DetectFootfalls();
         return snapped;
@@ -327,14 +352,22 @@ public sealed class CrabCore
         var legs = CrabRig.Legs;
         for (int i = 0; i < legs.Length; i++)
         {
-            float s = MathF.Sin(_legPhase + legs[i].PhaseOffset);
+            float phase = _legPhase + legs[i].PhaseOffset;
+            float s = MathF.Sin(phase);
+            // Where the foot actually sets down: forward of its rest spot, at the far
+            // end of its swing (see CrabRig.Stride).
             if (_legSinLast[i] > 0f && s <= 0f)
-                _footfalls.Add(new Footfall(i, CrabRig.FootWorldXZ(legs[i], Position, Heading)));
+                _footfalls.Add(new Footfall(i, CrabRig.TipWorldXZ(
+                    legs[i], CrabRig.StrideYaw(legs[i], phase, _stride), Position, Heading)));
             _legSinLast[i] = s;
         }
     }
 
-    private float CoreSpinRate => Phase switch
+    private float CoreSpinRate => Venting
+        // Just fired: the crystal is still whirling from the burn and unwinds, kicking back
+        // the other way for a beat as it sheds the heat, then settles to its hunting spin.
+        ? FiringSpin * MathF.Cos(MathF.PI * VentProgress) * (1f - VentProgress) + AgitatedSpin * VentProgress
+        : Phase switch
     {
         State.Idle => IdleSpin,
         // The crystal winds up hard as it charges and is still tearing round while
@@ -447,8 +480,11 @@ public sealed class CrabCore
         // Only from out here: inside BeamMinRange it already has the player within
         // reach of its claws, and charging a beam at something it could simply grab
         // would read as the boss forgetting what it was doing.
-        _beamCooldown -= dt;
-        if (_beamCooldown <= 0f && dist >= BeamMinRange && dist <= BeamMaxRange)
+        // The crystal decides. Once it has burned all the way from yellow to red it lines up
+        // a shot as soon as it has one — and a quarry up in the air is a shot from any range
+        // under the reach, since there is no grabbing something it cannot get a claw on.
+        bool aloft = _aimHeight - 1f > AloftHeight;
+        if (_heat >= 1f && !Venting && dist <= BeamMaxRange && (dist >= BeamMinRange || aloft))
             BeginCharge(playerPos);
     }
 
@@ -467,10 +503,63 @@ public sealed class CrabCore
     /// <summary>Past this it can't line the shot up at all and keeps running.</summary>
     public const float BeamMaxRange = 70f;
 
-    /// <summary>Bounds on the wait between lance shots, re-rolled each time so the
-    /// player can never count the beats between them.</summary>
-    private const float BeamCooldownMin = 5f;
-    private const float BeamCooldownMax = 10f;
+    // --- The core's heat -------------------------------------------------------
+    // The crystal is a gauge. It rests yellow and, while the boss is awake, reddens in
+    // uneven bursts — some stretches it barely moves, some it races — so the player can
+    // read the next shot coming without ever being able to count it. Fully red, it fires.
+    // After the shot it vents: the gem whirls down and bleaches back to yellow, and the
+    // climb starts again from nothing.
+
+    /// <summary>How hot the core is, 0 yellow to 1 red — the next lance, as a colour.</summary>
+    public float Heat => _heat;
+    private float _heat;
+    private float _heatRate;            // this stretch's climb, per second
+    private float _heatStretch;         // seconds left on it
+
+    /// <summary>The average climb works out a little under the old fixed wait, but no two
+    /// climbs are the same: each stretch rolls its own rate between nothing and this.</summary>
+    private const float HeatRateMax = 0.36f;
+
+    /// <summary>The cool-down after a shot: the gem spins down and fades back to yellow.</summary>
+    public const float VentTime = 1.4f;
+    private float _vent = VentTime;     // seconds since the last shot ended; ≥ VentTime when done
+
+    public bool Venting => _vent < VentTime;
+    public float VentProgress => Math.Clamp(_vent / VentTime, 0f, 1f);
+
+    /// <summary>How high off the grid a quarry has to be to count as flying — at that point
+    /// the lance will take it from inside its usual minimum range.</summary>
+    public const float AloftHeight = 4f;
+
+    private float _aimHeight = 1f;      // height of the quarry's middle this tick
+
+    private void UpdateHeat(float dt)
+    {
+        if (Venting)
+        {
+            _vent += dt;
+            _heat = 0f;
+            return;
+        }
+        switch (Phase)
+        {
+            case State.Idle:
+                _heat = MathF.Max(0f, _heat - 0.05f * dt);   // dormant, it cools off
+                return;
+            case State.Aiming or State.Firing or State.Dying or State.Dead:
+                return;
+        }
+
+        _heatStretch -= dt;
+        if (_heatStretch <= 0f)
+        {
+            _heatStretch = 0.3f + (float)_rng.NextDouble() * 1.1f;
+            // Squared, so most stretches creep and the odd one surges.
+            float r = (float)_rng.NextDouble();
+            _heatRate = r * r * HeatRateMax * 1.8f;
+        }
+        _heat = MathF.Min(1f, _heat + _heatRate * dt);
+    }
 
     /// <summary>How long the charge runs — the window the player has to get out of
     /// the line of fire. Three warnings are spaced across it.</summary>
@@ -506,11 +595,17 @@ public sealed class CrabCore
     private const float MaxTiltPitch = 0.42f;
     private const float MaxTiltRoll = 0.30f;
 
-    private float _beamCooldown = BeamCooldownMin;
     private float _tiltPitch, _tiltRoll;    // live chassis lean, radians
     private float _braceRoll;               // the side it braced onto, rolled per shot
     private float _lockHeading;             // planar bearing frozen at the lock
-    private float _lockPitch;               // and the elevation with it
+    private float _lockPitch;               // and the elevation with it (negative: up)
+    private int _shotSeed;                  // how this shot splinters, rolled at the lock
+    private readonly CrabLance.Shape _lance = new();
+
+    /// <summary>The beam's shape this frame — the shaft, its splinters and its sparks. Only
+    /// meaningful while <see cref="BeamActive"/>.</summary>
+    public CrabLance.Shape Lance
+        => CrabLance.Build(BeamOrigin, BeamDirection, BeamProgress, _shotSeed, BeamLength, BeamRadius, _lance);
     private int _warnStep;                  // how many of the three have sounded
     private readonly Random _rng = new();
 
@@ -518,6 +613,13 @@ public sealed class CrabCore
     /// glare on this and the world can telegraph it however it likes.</summary>
     public float ChargeProgress => Phase == State.Aiming
         ? Math.Clamp(_stateTime / ChargeTime, 0f, 1f) : 0f;
+
+    /// <summary>Seconds into the current phase — for the snapshot, so a client's lance runs
+    /// on the host's clock.</summary>
+    public float StateTime => _stateTime;
+    /// <summary>The locked elevation and splinter seed, for the snapshot.</summary>
+    public float LockPitch => _lockPitch;
+    public int ShotSeed => _shotSeed;
 
     /// <summary>True for the five seconds the beam is actually burning.</summary>
     public bool BeamActive => Phase == State.Firing;
@@ -589,7 +691,7 @@ public sealed class CrabCore
         // the rig's own geometry rather than picked: the crystal sits CoreWorldY up,
         // the craft is on the grid, so this is the true angle between them — which is
         // what makes the tilt read as aiming rather than as a posing animation.
-        float drop = MathF.Atan2(CrabRig.CoreWorldY + 3.0f, MathF.Max(dist, 1f));
+        float drop = MathF.Atan2(CrabRig.CoreWorldY + 3.0f - _aimHeight, MathF.Max(dist, 1f));
 
         // A slow organic sway on top, at two unrelated rates, so the hold never
         // freezes into a still frame — something this heavy braced against its own
@@ -612,7 +714,8 @@ public sealed class CrabCore
             // The lock. Bearing and elevation are frozen here, off the last position
             // the player was seen in, and the beam rides them for its whole life.
             _lockHeading = Heading;
-            _lockPitch = MathF.Atan2(CrabRig.CoreWorldY + 3.0f, MathF.Max(dist, 1f));
+            _lockPitch = MathF.Atan2(CrabRig.CoreWorldY + 3.0f - _aimHeight, MathF.Max(dist, 1f));
+            _shotSeed = _rng.Next();
             Enter(State.Firing);
             _cues.Add((Cue.BeamFire, 0f));
         }
@@ -632,14 +735,16 @@ public sealed class CrabCore
         // Held on the locked attitude, with a fine tremor of recoil through it — the
         // sway of the charge is gone, because it has stopped adjusting.
         float shudder = MathF.Sin(_stateTime * 31f) * 0.012f;
-        SettleTilt(_lockPitch + shudder, _braceRoll + shudder * 0.5f, dt, TiltAimRate * 2f);
+        SettleTilt(Math.Clamp(_lockPitch, -MaxTiltPitch, MaxTiltPitch) + shudder,
+            _braceRoll + shudder * 0.5f, dt, TiltAimRate * 2f);
 
         if (_stateTime >= BeamTime)
         {
             // Spent — back to running the player down, with a fresh wait before it
             // can do this again.
-            _beamCooldown = BeamCooldownMin
-                + (float)_rng.NextDouble() * (BeamCooldownMax - BeamCooldownMin);
+            // The heat is spent with the shot; the vent plays out over the next beat.
+            _heat = 0f;
+            _vent = 0f;
             Enter(State.Pursuit);
         }
     }
@@ -687,8 +792,32 @@ public sealed class CrabCore
     public CrabPose Pose => IsPuppet
         ? PuppetPose()
         : new(_coreSpin, _clawOpen, _legPhase,
-            CoreColorFor(Hostility, MathF.Max(MathF.Max(_flash, SeizureGlow), LanceGlare)),
-            Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll);
+            LiveCoreColor(), Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll, _stride);
+
+    /// <summary>
+    /// The gem's colour now: its heat from yellow to red, white-hot through the lance, and
+    /// through the vent a sweep from the burn's white back down through red to yellow.
+    /// </summary>
+    private Color LiveCoreColor()
+    {
+        float glow = MathF.Max(MathF.Max(_flash, SeizureGlow), LanceGlare);
+        if (Venting)
+        {
+            float v = VentProgress;
+            Color c = v < 0.25f
+                ? LerpColor(Color.White, Palette.NeonRed, v / 0.25f)
+                : LerpColor(Palette.NeonRed, Palette.NeonYellow, Smooth01((v - 0.25f) / 0.75f));
+            return LerpColor(c, Color.White, Math.Clamp(glow, 0f, 1f) * 0.75f);
+        }
+        float heat = Phase is State.Aiming or State.Firing ? 1f : _heat;
+        return CoreColorFor(heat, glow);
+    }
+
+    private static float Smooth01(float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return t * t * (3f - 2f * t);
+    }
 
     /// <summary>A puppet borrows the bestiary's phase-and-clock pose — but when the host has a
     /// player in its claw it lays the synced grab and strike arms and the seizure blaze over the
@@ -696,18 +825,21 @@ public sealed class CrabCore
     /// floating in mid-air. Zero arms the rest of the time means the plain showcase pose.</summary>
     private CrabPose PuppetPose()
     {
-        CrabPose show = ShowcasePose(Phase, _puppetClock);
+        // The host's heat and vent ride the snapshot, so the gem reddens and bleaches on
+        // a client exactly as it does on the machine that owns the fight.
+        CrabPose show = ShowcasePose(Phase, _puppetClock) with
+        {
+            CoreColor = LiveCoreColor(),
+            CoreSpin = _coreSpin,
+        };
         if (_netGrabArm <= 0.001f && _netStrikeArm <= 0.001f) return show;
         return show with
         {
             GrabArm = _netGrabArm,
             StrikeArm = _netStrikeArm,
-            CoreColor = CoreColorFor(1f, _netSeizureGlow),
         };
     }
 
-    private float Hostility => Phase is State.Clamping or State.Pursuit
-                                     or State.Aiming or State.Firing ? 1f : 0f;
 
     /// <summary>
     /// How white-hot the gem is running for the lance: it swells across the charge —
@@ -778,13 +910,13 @@ public sealed class CrabCore
     // --- Shared visual mapping ------------------------------------------------
 
     /// <summary>
-    /// The core's colour for a given hostility (0 = calm magenta, 1 = hunting red)
+    /// The core's colour for a given heat (0 = resting yellow, 1 = red, ready to fire)
     /// with a white-hot flash mixed on top. Kept here so the live brain and the
     /// test-screen loop tint the gem the same way.
     /// </summary>
-    public static Color CoreColorFor(float hostility, float flash)
+    public static Color CoreColorFor(float heat, float flash)
     {
-        Color baseC = LerpColor(Palette.NeonMagenta, Palette.NeonRed, hostility);
+        Color baseC = LerpColor(Palette.NeonYellow, Palette.NeonRed, Math.Clamp(heat, 0f, 1f));
         return LerpColor(baseC, Color.White, Math.Clamp(flash, 0f, 1f) * 0.75f);
     }
 
@@ -794,6 +926,14 @@ public sealed class CrabCore
     /// eyeballed. <paramref name="t"/> is free-running seconds.
     /// </summary>
     public static CrabPose ShowcasePose(State phase, float t)
+        => RawShowcasePose(phase, t) with { Stride = StrideFor(phase) };
+
+    /// <summary>How long a step the legs take in each phase: only the pursuit actually
+    /// walks anywhere; every other phase treads on the spot.</summary>
+    public static float StrideFor(State phase)
+        => phase == State.Pursuit ? 1f : CrabRig.TreadStride;
+
+    private static CrabPose RawShowcasePose(State phase, float t)
     {
         switch (phase)
         {
@@ -805,7 +945,7 @@ public sealed class CrabCore
                 float lt = t % (loop + 0.4f);
                 float slide = ThreatSlideAmount(lt);
                 return new CrabPose(t * IdleSpin, 0f, t * ShuffleLeg,
-                    CoreColorFor(0f, 0f), new Vector2(slide, 0f));
+                    CoreColorFor(0.2f, 0f), new Vector2(slide, 0f));
             }
             case State.Clamping:
             {
@@ -822,15 +962,17 @@ public sealed class CrabCore
                     if (sinceSnap >= 0f) flash = MathF.Max(0f, 1f - sinceSnap * 6f);
                 }
                 return new CrabPose(t * AgitatedSpin, open, t * ShuffleLeg * 0.3f,
-                    CoreColorFor(1f, flash), Vector2.Zero);
+                    CoreColorFor(0.55f, flash), Vector2.Zero);
             }
             case State.Pursuit:
             {
                 // A little fore/aft surge sells the relentless skitter in place.
                 float surge = MathF.Sin(t * 4f) * 0.4f;
                 float pulse = 0.5f + 0.5f * MathF.Sin(t * 8f);
+                // The heat climbing and dropping on a loop, so the reddening reads on the turntable.
+                float heat = 0.5f - 0.5f * MathF.Cos(t * 0.8f);
                 return new CrabPose(t * AgitatedSpin, 0f, t * PursuitLeg,
-                    CoreColorFor(1f, pulse * 0.25f), new Vector2(0f, surge));
+                    CoreColorFor(heat, pulse * 0.25f), new Vector2(0f, surge));
             }
             case State.Aiming:
             {
@@ -916,4 +1058,7 @@ public readonly record struct CrabPose(
     // braced onto one side. Zero for every other phase, so the rig sits flat on its
     // legs exactly as it always has unless it is actually aiming.
     float BodyPitch = 0f,
-    float BodyRoll = 0f);
+    float BodyRoll = 0f,
+    // How much of a full stride the legs take, 1 walking to CrabRig.TreadStride
+    // treading on the spot — see CrabRig.Stride.
+    float Stride = 1f);

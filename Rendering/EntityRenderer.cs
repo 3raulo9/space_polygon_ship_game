@@ -1053,7 +1053,9 @@ public sealed class EntityRenderer
         Rlgl.Translatef(pos.X, craft.Height, pos.Y);
         Rlgl.Scalef(s, s, s);
         Rlgl.Translatef(-pos.X, 0f, -pos.Y);
-        DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed);
+        if (craft.Class == PlayerClass.Spider) _spiderGaitOverride = StepSpider(craft, pos, elapsed);
+        try { DrawLoadoutShowcase(craft.Build, pos, craft.Heading, cameraPos, elapsed); }
+        finally { _spiderGaitOverride = null; }
         Rlgl.PopMatrix();
     }
 
@@ -1112,7 +1114,8 @@ public sealed class EntityRenderer
                     ClawOpen: 0f,
                     LegPhase: elapsed * 1.8f,
                     CoreColor: GridRenderer.LerpColor(payload, veins, corruption),
-                    SlideOffset: Vector2.Zero);
+                    SlideOffset: Vector2.Zero,
+                    Stride: CrabRig.TreadStride);
                 _crab.Draw(pose, pos, heading, cameraPos);
                 coreY = CrabRig.CoreWorldY;
                 break;
@@ -1165,6 +1168,72 @@ public sealed class EntityRenderer
         _ => 1f,
     };
 
+    /// <summary>
+    /// The SPIDER chassis on a given step of its walk: the boss's own rig at the player's
+    /// size, painted from the loadout. One draw for the hangar, the world and the creator's
+    /// copy of the walk, so all three step exactly the way the Crab-Core does.
+    /// </summary>
+    public void DrawSpider(Loadout loadout, Vector2 pos, float heading, Vector3 cameraPos,
+        float coreSpin, float legPhase, float stride)
+    {
+        _spiderRig.UpperTint = loadout.PartColor(PlayerClass.Spider, 0);
+        _spiderRig.LowerTint = loadout.PartColor(PlayerClass.Spider, 1);
+        _spiderRig.LegTint = loadout.PartColor(PlayerClass.Spider, 2);
+        var pose = new CrabPose(
+            CoreSpin: coreSpin,
+            ClawOpen: 0f,
+            LegPhase: legPhase,
+            CoreColor: loadout.PartColor(PlayerClass.Spider, 3),
+            SlideOffset: Vector2.Zero,
+            Stride: stride);
+        _spiderRig.Draw(pose, pos, heading, cameraPos);
+    }
+
+    /// <summary>A spider's walk in the world, kept per craft between frames: the legs
+    /// advance with the ground the craft actually covers, so they step faster the faster
+    /// it goes and settle into a tread when it stops — the boss's gait, not a loop.</summary>
+    private sealed class SpiderGait
+    {
+        public Vector2 LastPos;
+        public float LastTime = float.NaN;
+        public float Phase;
+        public float Stride = CrabRig.TreadStride;
+    }
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<PlayerTank, SpiderGait> _spiderGaits = new();
+
+    /// <summary>Set for the length of one world draw of a walking spider, and read by the
+    /// turntable draw in place of its idle tread.</summary>
+    private (float Phase, float Stride)? _spiderGaitOverride;
+
+    /// <summary>Radians of leg cycle per world unit covered, on the player-sized rig. The
+    /// boss takes one full step per <c>τ / PursuitLeg × RunSpeed</c> units; a rig this much
+    /// smaller takes proportionally shorter steps, so it cycles proportionally faster.</summary>
+    private static readonly float SpiderStepPerUnit =
+        CrabCore.PursuitLeg / CrabCore.RunSpeed
+        * CrabRig.Scale / (CrabRig.PlayerScale * WorldScale(PlayerClass.Spider));
+
+    private (float Phase, float Stride) StepSpider(PlayerTank craft, Vector2 pos, float elapsed)
+    {
+        var g = _spiderGaits.GetOrCreateValue(craft);
+        float dt = float.IsNaN(g.LastTime) ? 0f : Math.Clamp(elapsed - g.LastTime, 0f, 0.1f);
+        float moved = float.IsNaN(g.LastTime) ? 0f : Torus.Delta(g.LastPos, pos).Length();
+        // A respawn or a long jump across the map is not a step.
+        if (moved > 8f) moved = 0f;
+        float speed = dt > 1e-4f ? moved / dt : 0f;
+
+        // Cap the cadence: past this the legs blur into a shimmer rather than a gait, and
+        // a little skating at a sprint reads far better than that.
+        float rate = Math.Clamp(speed * SpiderStepPerUnit, 1.8f, 20f);
+        g.Phase += rate * dt;
+        float target = Math.Clamp(speed / (CrabCore.RunSpeed * 0.5f), CrabRig.TreadStride, 1f);
+        g.Stride += (target - g.Stride) * Math.Clamp(dt * 8f, 0f, 1f);
+
+        g.LastPos = pos;
+        g.LastTime = elapsed;
+        return (g.Phase, g.Stride);
+    }
+
     public void DrawLoadoutShowcase(Loadout loadout, Vector2 pos, float heading,
         Vector3 cameraPos, float elapsed)
     {
@@ -1180,19 +1249,13 @@ public sealed class EntityRenderer
                 break;
 
             case PlayerClass.Spider:
-                _spiderRig.UpperTint = loadout.PartColor(PlayerClass.Spider, 0);
-                _spiderRig.LowerTint = loadout.PartColor(PlayerClass.Spider, 1);
-                _spiderRig.LegTint = loadout.PartColor(PlayerClass.Spider, 2);
                 // A slow idle rather than a pose lifted off the boss's protocol: the
-                // gem turns, the legs breathe, and the carapace stays shut. Nothing the
-                // hangar shows should look like the thing is winding up to do something.
-                var pose = new CrabPose(
-                    CoreSpin: elapsed * 1.3f,
-                    ClawOpen: 0f,
-                    LegPhase: elapsed * 1.8f,
-                    CoreColor: loadout.PartColor(PlayerClass.Spider, 3),
-                    SlideOffset: Vector2.Zero);
-                _spiderRig.Draw(pose, pos, heading, cameraPos);
+                // gem turns, the legs tread on the spot, and the carapace stays shut.
+                // Nothing the hangar shows should look like the thing is winding up to
+                // do something. Out in the world a moving spider overrides the legs with
+                // a real walk — see DrawSpiderCraft.
+                var gait = _spiderGaitOverride ?? (elapsed * 1.8f, CrabRig.TreadStride);
+                DrawSpider(loadout, pos, heading, cameraPos, elapsed * 1.3f, gait.Phase, gait.Stride);
                 break;
 
             case PlayerClass.Soldier:
@@ -1242,9 +1305,16 @@ public sealed class EntityRenderer
         if (phase is not (CrabCore.State.Aiming or CrabCore.State.Firing)) return;
 
         var origin = new Vector3(pos.X, CrabRig.CoreWorldY + 3.0f, pos.Y);
-        float cp = MathF.Cos(pose.BodyPitch);
-        var dir = new Vector3(MathF.Sin(showHeading) * cp, -MathF.Sin(pose.BodyPitch),
-                              MathF.Cos(showHeading) * cp);
+        // The turntable shows the anti-air shot: the lance raised into open sky, which is
+        // the one that comes apart. A grounded beam is just its first second.
+        // Turned off into the scene, too, so the camera is looking along it rather than at
+        // a shaft leaving the top of the frame.
+        bool sky = phase == CrabCore.State.Firing;
+        float aim = sky ? -0.22f : pose.BodyPitch;
+        float bearing = sky ? showHeading - 0.9f : showHeading;
+        float cp = MathF.Cos(aim);
+        var dir = new Vector3(MathF.Sin(bearing) * cp, -MathF.Sin(aim),
+                              MathF.Cos(bearing) * cp);
 
         if (phase == CrabCore.State.Aiming)
         {
@@ -1254,7 +1324,11 @@ public sealed class EntityRenderer
         }
         else
         {
-            _crab.DrawLance(origin, dir, 0f, elapsed % CrabCore.BeamTime / CrabCore.BeamTime);
+            float p = elapsed % CrabCore.BeamTime / CrabCore.BeamTime;
+            // Cut short so the whole of it — the break, the splinters, the sparks and the
+            // draw-back — happens inside the turntable's frame rather than off its top edge.
+            _crab.DrawShapedLance(origin, dir, p, (int)(elapsed / CrabCore.BeamTime) * 7919 + 1,
+                length: 70f);
         }
     }
 
