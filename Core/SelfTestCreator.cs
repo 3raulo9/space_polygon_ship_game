@@ -18,6 +18,7 @@ public static partial class SelfTest
         int failures = 0;
         failures += Check("every game character copies into the creator exactly", CreatorCopiesGameModelsExactly);
         failures += Check("a copied character idles exactly as the game's does", CreatorCopiesGameIdle);
+        failures += Check("the copied spider walks exactly as the Crab-Core does", CreatorCopiesSpiderWalk);
         failures += Check("a design survives saving with its edited animations", CreatorRoundTripsEditedAnimation);
         failures += Check("saving a copy never overwrites another file", CreatorSaveNeverClobbers);
         failures += Check("the spine grows when pulled and shrinks when pushed", CreatorSpineGrowsAndShrinks);
@@ -122,6 +123,37 @@ public static partial class SelfTest
             }
         }
         return null;
+    }
+
+    private static string? CreatorCopiesSpiderWalk()
+    {
+        var e = GameCapture.All.First(x => x.Id == "spider");
+        if (e.Move is not { } walk) return "the spider has no walk to copy";
+        var d = CopyOf(e);
+        var move = d.Clips.FirstOrDefault(c => c.Name == "MOVE" && !c.BuiltIn);
+        if (move == null) return "the copy walks with a made-up gait instead of the game's";
+
+        // At each sample instant the copy must be where the game drew it, and that includes
+        // the seam: the last sample has to run on into the first, gem and all.
+        var run = GameCapture.RunWalk(walk, CaptureSource);
+        foreach (int k in new[] { 0, 7, 19, 30, GameCapture.WalkSamples - 1 })
+        {
+            float t = (float)k / GameCapture.WalkSamples;
+            var game = GameTriangles(run[k]);
+            var mine = DesignTriangles(d, move, t);
+            float gap = WorstGap(game, mine);
+            if (gap > 0.01f) return $"at {t:F2} of its walk the copy is {gap:F3} off the game";
+        }
+
+        // And it really walks: a foot at the top of its step stands clear of where it plants.
+        float lift = 0f;
+        var rest = DesignTriangles(d, null, 0f);
+        foreach (var shots in run)
+        {
+            var at = GameTriangles(shots);
+            for (int i = 0; i < at.Count && i < rest.Count; i++) lift = MathF.Max(lift, at[i].Y - rest[i].Y);
+        }
+        return lift < 0.1f ? $"the walking legs only rise {lift:F2}" : null;
     }
 
     private static string? CreatorRoundTripsEditedAnimation()

@@ -94,17 +94,27 @@ public sealed class CrabRenderer
             var leg = legs[i];
             if (Flicker(death)) continue;
 
+            // Walking: the leg swings round its hinge and rolls up about its shoulder,
+            // which stays put on the body — see CrabRig.Stride.
             float phase = pose.LegPhase + leg.PhaseOffset;
-            float footLift = MathF.Max(0f, MathF.Sin(phase)) * CrabRig.LegBob;
-            float sweep = MathF.Cos(phase) * 0.12f;
-            float yaw = leg.BaseYaw + sweep;
+            float yaw = CrabRig.StrideYaw(leg, phase, pose.Stride);
+            float legRoll = CrabRig.StrideRoll(phase, pose.Stride);
+            float footLift = 0f;
 
             // Front-right holds the player, front-left clubs them. Both fall back to
-            // ordinary walking legs the moment their channel returns to zero.
+            // ordinary walking legs the moment their channel returns to zero. An arm is
+            // raised whole off the shoulder (the seizure's geometry is solved that way),
+            // so the step's roll is blended out as the limb is taken over.
             if (i == GrabLeg && pose.GrabArm > 0f)
+            {
                 PoseArm(leg, pose.GrabArm, GripYawRight, 0f, ref yaw, ref footLift);
+                legRoll *= 1f - Math.Clamp(pose.GrabArm, 0f, 1f);
+            }
             else if (i == StrikeLeg && pose.StrikeArm > 0f)
+            {
                 PoseStrikeArm(leg, pose.StrikeArm, ref yaw, ref footLift);
+                legRoll *= 1f - Math.Clamp(pose.StrikeArm / CockPoint, 0f, 1f);
+            }
 
             var mount = new Vector3(leg.Mount.X, baseY + leg.Mount.Y + footLift, leg.Mount.Z);
 
@@ -119,7 +129,8 @@ public sealed class CrabRenderer
             // upright, because its foot is on the grid holding the thing up. Tipping
             // the legs too would swing the feet through the floor.
             DrawPart(_leg, mount, yaw + fling * 4f, bodyPos, heading, cameraPos,
-                DeathTint(LegTint, death), offset, pitch, roll, tiltPart: false);
+                DeathTint(LegTint, death), offset, pitch, roll, tiltPart: false,
+                partRoll: legRoll + fling * 3f);
         }
     }
 
@@ -298,7 +309,7 @@ public sealed class CrabRenderer
     /// </summary>
     private void DrawPart(PolyMesh mesh, Vector3 localMount, float localYaw,
         Vector2 bodyPos, float heading, Vector3 cameraPos, Color? tint = null, Vector3 offset = default,
-        float pitch = 0f, float roll = 0f, bool tiltPart = false)
+        float pitch = 0f, float roll = 0f, bool tiltPart = false, float partRoll = 0f)
     {
         Vector3 o = localMount * Scale;
         // The mount point always rides the lean, so every part stays bolted to the
@@ -310,7 +321,7 @@ public sealed class CrabRenderer
         float rz = -o.X * sin + o.Z * cos;
         var worldXZ = new Vector2(bodyPos.X + rx + offset.X, bodyPos.Y + rz + offset.Z);
         mesh.Draw(worldXZ, heading + localYaw, o.Y + offset.Y, cameraPos, Scale, tint,
-            tiltPart ? pitch : 0f, tiltPart ? roll : 0f);
+            tiltPart ? pitch : 0f, tiltPart ? roll : partRoll);
     }
 
     /// <summary>Rolls then pitches a vector in the body's own frame — the same order

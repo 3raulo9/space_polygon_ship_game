@@ -164,6 +164,7 @@ internal static class HudRenderer
         // everything a chassis adds, so a SOLDIER's or a FISH's own overlay still wins the
         // pixels it needs. Draws nothing at all in SANDBOX.
         if (world.IsDescent) DescentHud.Draw(world);
+        DrawCrabBossBar(world);
         DrawWeaponSlots(world.InventoryOf(world.ViewSeat));
         if (world.Spectating) DrawSpectating(world);
         DrawRadar(world, p);
@@ -200,6 +201,85 @@ internal static class HudRenderer
         // and the dashboard's centre sight above is skipped for it. See VirusHud.
         if (p.Virus is { } virus) VirusHud.DrawOverlay(world, virus, p);
     }
+
+    // --- The Crab-Core's integrity bar ---
+    // Centred under the strip whenever the boss is awake and near: the core takes a lot
+    // of punishment, and without a bar a fight that long gives the player no way to tell
+    // if any of their air shots are doing anything.
+
+    private const int BossBarW = 168;
+    private const int BossBarH = 4;
+
+    /// <summary>The trailing chip: the part of the bar a hit just knocked off, left on
+    /// screen in white for a beat and then drained away, so each landed shot is a visible
+    /// bite rather than a pixel quietly going missing.</summary>
+    private static float _crabGhost = 1f;
+    private static float _crabGhostHold;
+    private static float _crabShown;   // 0..1 fade in/out of the whole bar
+    private static float _crabLast = 1f;
+    private static float _crabFlash;   // seconds of white left on the fill after a hit
+
+    private static void DrawCrabBossBar(World.World world)
+    {
+        float dt = Raylib.GetFrameTime();
+        var boss = world.Boss;
+        // The Descent's own boss stack owns this band while a headline is up.
+        bool descentBoss = world.IsDescent && world.Headline is not null;
+        bool engaged = boss is not null && !boss.Dead && !descentBoss
+            && (boss.Agitation > 0f || !boss.Alive || _crabGhost > boss.CoreFraction + 0.001f)
+            && Torus.Distance(world.Eye.Position, boss.Position) < CrabCore.GiveUpRadius * 1.3f;
+
+        _crabShown = Math.Clamp(_crabShown + (engaged ? dt * 4f : -dt * 2f), 0f, 1f);
+        if (boss is null || _crabShown <= 0f)
+        {
+            _crabGhost = 1f;
+            return;
+        }
+
+        float f = boss.CoreFraction;
+        if (f < _crabLast - 0.0005f) _crabFlash = 0.08f;
+        _crabLast = f;
+        _crabFlash = MathF.Max(0f, _crabFlash - dt);
+        if (f > _crabGhost) _crabGhost = f;          // a fresh boss, or one healed by sync
+        else if (f < _crabGhost - 0.0005f)
+        {
+            // Hold the chip a moment, then drain it at a steady rate.
+            if (_crabGhostHold <= 0f) _crabGhostHold = 0.45f;
+            _crabGhostHold -= dt;
+            if (_crabGhostHold <= 0f) _crabGhost = MathF.Max(f, _crabGhost - dt * 0.6f);
+        }
+        else _crabGhostHold = 0f;
+
+        int x = (W - BossBarW) / 2;
+        // Clear of the SPECTATING caption, which uses the top of this band.
+        int y = StripH + (world.Spectating ? 26 : 6);
+        float a = _crabShown;
+
+        PixelFont.DrawCentered("VECTOR.CRAB-CORE", W / 2, y, 1, Fade(Palette.NeonRed, a));
+        y += 9;
+
+        Raylib.DrawRectangle(x - 1, y - 1, BossBarW + 2, BossBarH + 2, Fade(new Color(5, 7, 10, 220), a));
+        int ghostW = (int)MathF.Round(BossBarW * _crabGhost);
+        int liveW = (int)MathF.Round(BossBarW * f);
+        if (ghostW > liveW)
+            Raylib.DrawRectangle(x + liveW, y, ghostW - liveW, BossBarH, Fade(Color.White, a));
+        if (liveW > 0)
+        {
+            // The core's own colours: hunting red, running toward its calm magenta as it
+            // empties — the crystal is burning out — and flaring white for the frame of a hit.
+            Color fill = Lerp(Palette.NeonMagenta, Palette.NeonRed, f);
+            if (_crabFlash > 0f) fill = Color.White;
+            Raylib.DrawRectangle(x, y, liveW, BossBarH, Fade(fill, a));
+            // A brighter top row, so the bar reads as a lit tube rather than a flat strip.
+            Raylib.DrawRectangle(x, y, liveW, 1, Fade(Lerp(fill, Color.White, 0.45f), a));
+        }
+
+        // Tenths, so how many bites are left is countable at a glance.
+        for (int i = 1; i < 10; i++)
+            Raylib.DrawRectangle(x + BossBarW * i / 10, y, 1, BossBarH, Fade(new Color(5, 7, 10, 255), a * 0.7f));
+    }
+
+    private static Color Fade(Color c, float a) => new(c.R, c.G, c.B, (byte)(c.A * Math.Clamp(a, 0f, 1f)));
 
     /// <summary>
     /// Says whose eyes these are. A player out of revives is no longer in the match but is

@@ -1223,7 +1223,8 @@ public static partial class SelfTest
     /// The mortar is the tank's indirect answer to a boss it can no longer leap up to hit: a lob
     /// that comes down on or arcs across the Crab-Core's raised gem strikes it directly, for a
     /// couple of good drops rather than one. A dormant boss is planted a mortar's throw ahead and
-    /// shelled until its core gives out.
+    /// shelled until its core has visibly given ground. Not to the death: the core is built to
+    /// soak a long fight, and what matters here is that the lob reaches it, again and again.
     /// </summary>
     private static string? MortarBitesTheCrabCore()
     {
@@ -1232,13 +1233,16 @@ public static partial class SelfTest
         world.Player.Ammo = world.Player.MaxAmmo;
         world.SpawnCrabAhead();   // a dormant Crab-Core out along the player's heading
 
-        for (int i = 0; i < 60 * 20 && world.Boss is { Alive: true }; i++)
+        // Two mortar hits' worth (each is a couple of points), short of a hair for rounding.
+        float target = 1f - 3.9f / Entities.CrabCore.CoreMaxHealth;
+        for (int i = 0; i < 60 * 20 && world.Boss is { Alive: true } b && b.CoreFraction > target; i++)
         {
             if (!AnyGrenadeAloft(world)) world.FirePlayerGrenade();
             StepWithoutInput(world);
         }
-        return world.Boss is null or { Alive: false }
-            ? null : "mortars never brought the Crab-Core down";
+        return world.Boss is null or { Alive: false } || world.Boss.CoreFraction <= target
+            ? null
+            : $"mortars only took the Crab-Core's core to {world.Boss.CoreFraction:P0}";
     }
 
     /// <summary>The same, against the Maw-Core's hovering crystal — the weak point every other

@@ -54,6 +54,67 @@ public static class CrabRig
     /// <summary>Peak lift of a skittering foot (raw units, before Scale).</summary>
     public const float LegBob = 0.9f;
 
+    // --- The stride ------------------------------------------------------------
+    // One leg's walk cycle, shared by everything that animates the rig — the boss, the
+    // player's SPIDER and the creator's copy of it — so they all step the same way.
+    //
+    // The cycle is split exactly in half on the sign of sin(phase): while it is positive
+    // the foot is in the air (the swing), and while it is not the foot is on the grid
+    // (the stance). The entity's footfall dust keys off that same sign change, so dust
+    // lands on the frame the foot does.
+
+    /// <summary>How far a foot travels fore/aft about its rest yaw, in radians either
+    /// way. Sized so a foot planted while the boss pursues slides back across the grid
+    /// at about the speed the body moves over it — a planted foot that skates reads as
+    /// the legs being for show.</summary>
+    public const float StrideSweep = 0.17f;
+
+    /// <summary>How far the leg rolls up about its own shoulder at the top of a step, in
+    /// radians. The leg pivots at the hip instead of lifting off the body whole, so the
+    /// shoulder stays bolted on while the foot rises by roughly <see cref="LegBob"/>.</summary>
+    public const float StrideLift = 0.21f;
+
+    /// <summary>
+    /// Where one leg is in its step: how far forward its foot is (−1 fully back, +1 fully
+    /// forward) and how far it is raised (0 planted, 1 at the top of the step).
+    ///
+    /// <para>The swing eases forward and arcs up and over; the stance drags back at a
+    /// constant rate, because a foot that is planted moves at the speed of the ground
+    /// under a body sliding at constant velocity, and anything eased there skates.</para>
+    /// </summary>
+    public static (float Forward, float Raise) Stride(float phase)
+    {
+        float p = phase % MathF.Tau;
+        if (p < 0f) p += MathF.Tau;
+        if (p < MathF.PI)
+        {
+            float u = p / MathF.PI;
+            // Up quickly, a hang at the top, then set down: sin's arc, sharpened so the
+            // foot clears the grid early and does not drag its toes on the way out.
+            float raise = MathF.Pow(MathF.Sin(p), 0.7f);
+            return (-MathF.Cos(u * MathF.PI), raise);
+        }
+        return (1f - 2f * (p - MathF.PI) / MathF.PI, 0f);
+    }
+
+    /// <summary>The hinge yaw a walking leg takes at <paramref name="phase"/>. A left and
+    /// a right leg swing opposite ways about their own base yaw to both step forward,
+    /// since the same turn of the hinge carries a right foot backward and a left one
+    /// forward. <paramref name="stride"/> scales the step: 1 is a full walking stride,
+    /// and anything less is a tread on the spot, the feet barely leaving their marks.</summary>
+    public static float StrideYaw(in Leg leg, float phase, float stride = 1f)
+        => leg.BaseYaw - MathF.Sign(leg.Mount.X) * Stride(phase).Forward * StrideSweep * stride;
+
+    /// <summary>The roll about the shoulder that raises a walking leg's foot at
+    /// <paramref name="phase"/>. Treading in place still lifts each foot clear — just
+    /// not as high as a stride does.</summary>
+    public static float StrideRoll(float phase, float stride = 1f)
+        => Stride(phase).Raise * StrideLift * (0.45f + 0.55f * stride);
+
+    /// <summary>How much of a full stride the rig takes while standing its ground rather
+    /// than walking — idling, bracing, displaying.</summary>
+    public const float TreadStride = 0.3f;
+
     // --- The seizure's hands ---------------------------------------------------
     // During a seizure the two front legs stop walking and become arms. Where a claw
     // actually ends up is pure rig geometry, and it has to be solved rather than

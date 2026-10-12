@@ -23,7 +23,17 @@ public static class GameCapture
     /// needs it because the models live on it.</summary>
     public static EntityRenderer? Entities { get; set; }
 
-    public sealed record Entry(string Id, string Label, DesignKind Kind, PlayerClass Class, Action<EntityRenderer, float> Draw);
+    public sealed record Entry(string Id, string Label, DesignKind Kind, PlayerClass Class,
+        Action<EntityRenderer, float> Draw, Walk? Move = null);
+
+    /// <summary>
+    /// A character's walk, for the ones whose walk the game draws as a pure function of
+    /// where in the stride it is. <see cref="Draw"/> takes the fraction of the way round the
+    /// loop, 0..1, and <see cref="Seconds"/> is how long one loop lasts in play. Copied the
+    /// same way the idle is, into the MOVE clip, so the copy walks as the game does instead
+    /// of with a gait the creator made up for a body it doesn't understand.
+    /// </summary>
+    public sealed record Walk(float Seconds, Action<EntityRenderer, float> Draw);
 
     /// <summary>Everything in the game that can be opened in the creator.</summary>
     public static readonly IReadOnlyList<Entry> All = new Entry[]
@@ -33,7 +43,7 @@ public static class GameCapture
             (er, t) => er.DrawShowcase(EnemyKind.StandardTank, Vector2.Zero, 0f, Eye, t)),
         new("revenant", "REVENANT TANK", DesignKind.Vehicle, PlayerClass.Tank,
             (er, t) => er.DrawShowcase(EnemyKind.EliteTank, Vector2.Zero, 0f, Eye, t)),
-        Player("spider", "SPIDER", DesignKind.Creature, PlayerClass.Spider),
+        Player("spider", "SPIDER", DesignKind.Creature, PlayerClass.Spider) with { Move = SpiderWalk() },
         Player("virus", "VIRUS", DesignKind.Creature, PlayerClass.Virus),
         Player("fish", "FISH", DesignKind.Creature, PlayerClass.Fish),
         Player("soldier", "SOLDIER", DesignKind.Creature, PlayerClass.Soldier),
@@ -41,6 +51,38 @@ public static class GameCapture
     };
 
     private static readonly Vector3 Eye = new(0f, 3f, 8f);
+
+    /// <summary>How many strides one copied walk loop holds. Three, because the gem turns
+    /// once a loop and at the Crab-Core's hunting cadence three strides is the turn closest
+    /// to its own agitated spin.</summary>
+    private const int WalkStrides = 3;
+
+    /// <summary>The SPIDER at full stride, hunting pace: exactly the Crab-Core's pursuit,
+    /// since it is the same rig.</summary>
+    private static Walk SpiderWalk()
+    {
+        float seconds = WalkStrides * MathF.Tau / CrabCore.PursuitLeg;
+        var loadout = new Loadout { Class = PlayerClass.Spider };
+        return new Walk(seconds, (er, u) =>
+            er.DrawSpider(loadout, Vector2.Zero, 0f, Eye,
+                coreSpin: u * MathF.Tau, legPhase: u * WalkStrides * MathF.Tau, stride: 1f));
+    }
+
+    /// <summary>How many times a walk loop is sampled. Denser than the idle: a stride is a
+    /// quick, sharp motion, and the swing's lift has to survive being drawn through a curve.</summary>
+    public const int WalkSamples = 48;
+
+    /// <summary>The walk's draws, one per sample of the loop.</summary>
+    public static List<List<MeshRecorder.Shot>> RunWalk(Walk walk, EntityRenderer er)
+    {
+        var samples = new List<List<MeshRecorder.Shot>>();
+        for (int k = 0; k < WalkSamples; k++)
+        {
+            float u = (float)k / WalkSamples;
+            samples.Add(MeshRecorder.Record(() => walk.Draw(er, u)));
+        }
+        return samples;
+    }
 
     private static Entry Player(string id, string label, DesignKind kind, PlayerClass cls)
         => new(id, label, kind, cls, (er, t) =>
@@ -130,7 +172,13 @@ public static class GameCapture
             p.Name = $"PIECE {p.Id + 1} {(p.Side < 0 ? "L" : "R")}";
 
         // ---- the idle, from the samples -----------------------------------------------------
-        d.Clips.Add(Idle(d, samples, parent, scale0, extent0));
+        d.Clips.Add(Record("IDLE", IdleSeconds, d, samples, shots, parent, scale0, extent0, wholeTurns: false));
+
+        // The walk, measured against the same rest pose. The gem's turn is a whole number of
+        // revolutions a loop, so it is written as a spin rather than keys: keys would wind it
+        // back round the long way at the seam.
+        if (e.Move is { } walk)
+            d.Clips.Add(Record("MOVE", walk.Seconds, d, RunWalk(walk, er), shots, parent, scale0, extent0, wholeTurns: true));
 
         // The creator's own built-ins (MOVE, ATTACK...) join it; the game's idle keeps its name
         // and wins over the generated one.
@@ -175,16 +223,31 @@ public static class GameCapture
     public static float SampleTime(int k) => FrameTime(SampleFrame(k));
     public const int SampleCount = Samples;
 
-    private static Clip Idle(Design d, List<List<MeshRecorder.Shot>> samples, int[] parent, Vector3[] scale0, Vector3[] extent0)
+    /// <summary>
+    /// Writes a run of samples down as a looping clip: each part's motion relative to where
+    /// it sits in <paramref name="rest"/>, the draw the design's rest pose was taken from.
+    /// </summary>
+    private static Clip Record(string name, float seconds, Design d, List<List<MeshRecorder.Shot>> samples,
+        List<MeshRecorder.Shot> rest, int[] parent, Vector3[] scale0, Vector3[] extent0, bool wholeTurns)
     {
-        var clip = new Clip { Name = "IDLE", Duration = IdleSeconds, Loop = true };
+        var clip = new Clip { Name = name, Duration = seconds, Loop = true };
         int n = d.Parts.Count;
+        int count = samples.Count;
+        var restSplit = rest.Select(s => Split(s.World)).ToArray();
+        var rot0 = new Vector3[n];
+        var move0 = new Vector3[n];
+        for (int i = 0; i < n; i++)
+        {
+            var local = Relative(restSplit[i].Rot, parent[i] >= 0 ? restSplit[parent[i]].Rot : Matrix4x4.Identity);
+            rot0[i] = DesignPose.ToEuler(local);
+            move0[i] = local.Translation;
+        }
         var rot = new Vector3[n][];
         var move = new Vector3[n][];
         var stretch = new Vector3[n][];
-        for (int i = 0; i < n; i++) { rot[i] = new Vector3[Samples]; move[i] = new Vector3[Samples]; stretch[i] = new Vector3[Samples]; }
+        for (int i = 0; i < n; i++) { rot[i] = new Vector3[count]; move[i] = new Vector3[count]; stretch[i] = new Vector3[count]; }
 
-        for (int k = 0; k < Samples; k++)
+        for (int k = 0; k < count; k++)
         {
             var shots = samples[k];
             // A draw with a different number of meshes (something blinked in for a moment)
@@ -193,8 +256,8 @@ public static class GameCapture
             {
                 for (int i = 0; i < n; i++)
                 {
-                    rot[i][k] = k > 0 ? rot[i][k - 1] : d.Parts[i].Rest;
-                    move[i][k] = k > 0 ? move[i][k - 1] : d.Parts[i].Pivot;
+                    rot[i][k] = k > 0 ? rot[i][k - 1] : rot0[i];
+                    move[i][k] = k > 0 ? move[i][k - 1] : move0[i];
                     stretch[i][k] = k > 0 ? stretch[i][k - 1] : Vector3.One;
                 }
                 continue;
@@ -206,7 +269,7 @@ public static class GameCapture
                 var euler = DesignPose.ToEuler(local);
                 // Unwrap, so a part spinning through half a turn reads as turning on rather
                 // than jumping back round.
-                if (k > 0) euler = Unwrap(euler, rot[i][k - 1]);
+                euler = Unwrap(euler, k > 0 ? rot[i][k - 1] : rot0[i]);
                 rot[i][k] = euler;
                 move[i][k] = local.Translation;
                 // How much bigger the piece is than in the first sample, along each of its own
@@ -218,10 +281,10 @@ public static class GameCapture
         for (int i = 0; i < n; i++)
         {
             var p = d.Parts[i];
-            Vector3 r0 = rot[i][0], m0 = move[i][0];
-            AddChannel(clip, p.Id, Channel.Pitch, rot[i].Select(v => v.X - r0.X).ToArray(), 0.004f);
-            AddChannel(clip, p.Id, Channel.Yaw, rot[i].Select(v => v.Y - r0.Y).ToArray(), 0.004f);
-            AddChannel(clip, p.Id, Channel.Roll, rot[i].Select(v => v.Z - r0.Z).ToArray(), 0.004f);
+            Vector3 r0 = rot0[i], m0 = move0[i];
+            AddTurn(clip, p.Id, Channel.Pitch, rot[i].Select(v => v.X - r0.X).ToArray(), wholeTurns);
+            AddTurn(clip, p.Id, Channel.Yaw, rot[i].Select(v => v.Y - r0.Y).ToArray(), wholeTurns);
+            AddTurn(clip, p.Id, Channel.Roll, rot[i].Select(v => v.Z - r0.Z).ToArray(), wholeTurns);
             AddChannel(clip, p.Id, Channel.MoveX, move[i].Select(v => v.X - m0.X).ToArray(), 0.002f);
             AddChannel(clip, p.Id, Channel.MoveY, move[i].Select(v => v.Y - m0.Y).ToArray(), 0.002f);
             AddChannel(clip, p.Id, Channel.MoveZ, move[i].Select(v => v.Z - m0.Z).ToArray(), 0.002f);
@@ -248,6 +311,32 @@ public static class GameCapture
     {
         static float R(float x, float y) => MathF.Abs(y) < 1e-5f ? 1f : MathF.Abs(x / y);
         return new Vector3(R(a.X, b.X), R(a.Y, b.Y), R(a.Z, b.Z));
+    }
+
+    /// <summary>
+    /// A rotation channel. With <paramref name="wholeTurns"/>, one that comes all the way
+    /// round over the loop (a part spinning a whole number of turns) is written as a spin,
+    /// which carries on round at the seam instead of unwinding back to where it started.
+    /// </summary>
+    private static void AddTurn(Clip clip, int part, Channel ch, float[] values, bool wholeTurns)
+    {
+        if (wholeTurns && values.Length > 1)
+        {
+            // The drift over the whole loop: first to last sample, plus the one more step
+            // that closes it.
+            float drift = values[^1] - values[0] + (values[^1] - values[^2]);
+            float turns = MathF.Round(drift / MathF.Tau);
+            if (turns != 0f && MathF.Abs(drift - turns * MathF.Tau) < 0.35f)
+            {
+                clip.Tracks.Add(new Track
+                {
+                    Part = part, Channel = ch, Mode = TrackMode.Spin, Amp = turns, Cycles = 1,
+                    Offset = values[0],
+                });
+                return;
+            }
+        }
+        AddChannel(clip, part, ch, values, 0.004f);
     }
 
     private static void AddChannel(Clip clip, int part, Channel ch, float[] values, float still)

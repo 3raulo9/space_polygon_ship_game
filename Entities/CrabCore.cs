@@ -41,7 +41,7 @@ public sealed class CrabCore
     // Only the exposed neon core takes damage, and only an airborne shot rides high
     // enough to reach it: the whole fight is timing a jump so a level bolt threads
     // the raised gem. Its chassis, legs and claws are inert armour.
-    public const float CoreMaxHealth = 4f;
+    public const float CoreMaxHealth = 40f;
     private float _coreHealth = CoreMaxHealth;
 
     /// <summary>The core's strike zone, in world space. Anchored a little up into the
@@ -92,7 +92,7 @@ public sealed class CrabCore
         ? Math.Clamp(_deathTime / DeathDuration, 0f, 1f)
         : (Phase == State.Dead ? 1f : 0f);
 
-    /// <summary>0..1 remaining core integrity, for a HUD boss bar later if wanted.</summary>
+    /// <summary>0..1 remaining core integrity — what the HUD's boss bar shows.</summary>
     public float CoreFraction => Math.Clamp(_coreHealth / CoreMaxHealth, 0f, 1f);
 
     // --- Protocol tuning ------------------------------------------------------
@@ -120,12 +120,13 @@ public sealed class CrabCore
     // a fast loop-synchronous scuttle in pursuit.
     private const float IdleLeg = 0.9f;
     private const float ShuffleLeg = 3.0f;
-    private const float PursuitLeg = 13.0f;
+    public const float PursuitLeg = 13.0f;
 
     // --- Live animation accumulators ---
     private float _stateTime;
     private float _coreSpin;
     private float _legPhase;
+    private float _stride = CrabRig.TreadStride; // eased toward StrideFor(Phase)
     private float _clawOpen;
     private float _flash;               // 0..1 white-hot pop on a clamp snap, decays
     private bool _jawWasOpen;           // edge-detect the open→shut snap
@@ -242,6 +243,7 @@ public sealed class CrabCore
         if (Seizing && Phase is not (State.Dying or State.Dead))
         {
             _legPhase += IdleLeg * 0.35f * dt;      // the barest brace-and-shift
+            _stride += (CrabRig.TreadStride - _stride) * Math.Clamp(dt * 6f, 0f, 1f);
             _clawOpen = 0f;
             _coreSpin += AgitatedSpin * dt;
             if (_flash > 0f) _flash = MathF.Max(0f, _flash - dt * 4f);
@@ -272,6 +274,11 @@ public sealed class CrabCore
         _coreSpin += CoreSpinRate * dt;
         if (_flash > 0f) _flash = MathF.Max(0f, _flash - dt * 4f);
         if (Phase is not (State.Aiming or State.Firing)) SettleTilt(0f, 0f, dt, TiltRelaxRate);
+
+        // Lengthen into a full stride as the hunt starts and shorten back to a tread when
+        // it stops, over a few steps rather than in one frame — a leg that changes its
+        // reach mid-swing visibly jumps.
+        _stride += (StrideFor(Phase) - _stride) * Math.Clamp(dt * 6f, 0f, 1f);
 
         DetectFootfalls();
         return snapped;
@@ -327,9 +334,13 @@ public sealed class CrabCore
         var legs = CrabRig.Legs;
         for (int i = 0; i < legs.Length; i++)
         {
-            float s = MathF.Sin(_legPhase + legs[i].PhaseOffset);
+            float phase = _legPhase + legs[i].PhaseOffset;
+            float s = MathF.Sin(phase);
+            // Where the foot actually sets down: forward of its rest spot, at the far
+            // end of its swing (see CrabRig.Stride).
             if (_legSinLast[i] > 0f && s <= 0f)
-                _footfalls.Add(new Footfall(i, CrabRig.FootWorldXZ(legs[i], Position, Heading)));
+                _footfalls.Add(new Footfall(i, CrabRig.TipWorldXZ(
+                    legs[i], CrabRig.StrideYaw(legs[i], phase, _stride), Position, Heading)));
             _legSinLast[i] = s;
         }
     }
@@ -688,7 +699,7 @@ public sealed class CrabCore
         ? PuppetPose()
         : new(_coreSpin, _clawOpen, _legPhase,
             CoreColorFor(Hostility, MathF.Max(MathF.Max(_flash, SeizureGlow), LanceGlare)),
-            Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll);
+            Vector2.Zero, GrabArm, StrikeArm, _tiltPitch, _tiltRoll, _stride);
 
     /// <summary>A puppet borrows the bestiary's phase-and-clock pose — but when the host has a
     /// player in its claw it lays the synced grab and strike arms and the seizure blaze over the
@@ -794,6 +805,14 @@ public sealed class CrabCore
     /// eyeballed. <paramref name="t"/> is free-running seconds.
     /// </summary>
     public static CrabPose ShowcasePose(State phase, float t)
+        => RawShowcasePose(phase, t) with { Stride = StrideFor(phase) };
+
+    /// <summary>How long a step the legs take in each phase: only the pursuit actually
+    /// walks anywhere; every other phase treads on the spot.</summary>
+    public static float StrideFor(State phase)
+        => phase == State.Pursuit ? 1f : CrabRig.TreadStride;
+
+    private static CrabPose RawShowcasePose(State phase, float t)
     {
         switch (phase)
         {
@@ -916,4 +935,7 @@ public readonly record struct CrabPose(
     // braced onto one side. Zero for every other phase, so the rig sits flat on its
     // legs exactly as it always has unless it is actually aiming.
     float BodyPitch = 0f,
-    float BodyRoll = 0f);
+    float BodyRoll = 0f,
+    // How much of a full stride the legs take, 1 walking to CrabRig.TreadStride
+    // treading on the spot — see CrabRig.Stride.
+    float Stride = 1f);
