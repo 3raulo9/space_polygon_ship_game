@@ -26,6 +26,7 @@ public sealed class Game : IDisposable
     private bool _inventoryOpen;
     private readonly SettingsScreen _settingsScreen;
     private readonly TestScreen _testScreen = new();
+    private readonly CreatorScreen _creator = new();
 
     // The hangar's build. Held here rather than on the screen so it survives a run:
     // dying and coming back to the menu should not silently un-paint your craft or
@@ -115,7 +116,8 @@ public sealed class Game : IDisposable
         Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_MENU");
     private bool _captureMenu =>
         _captureScreen is "1" or "menu" or "settings" or "controls" or "sound"
-                       or "test" or "class" or "lobby" or "room" or "starmap";
+                       or "test" or "class" or "lobby" or "room" or "starmap"
+                       or "creator";
     private int _frame;
 
     /// <summary>Capture-only: the harness is holding the SPIDER's lance charge, so no
@@ -301,6 +303,13 @@ public sealed class Game : IDisposable
             {
                 UpdateTest();
                 DrawTest();
+                continue;
+            }
+
+            if (_state == GameState.Creator)
+            {
+                UpdateCreator();
+                if (_state == GameState.Creator) DrawCreator();
                 continue;
             }
 
@@ -637,6 +646,12 @@ public sealed class Game : IDisposable
             case Menu.Action.OpenTestScreen:
                 // Secret keybind ('L' position): drop into the hidden bestiary.
                 _state = GameState.Test;
+                break;
+            case Menu.Action.OpenCreator:
+                // F4 three times: the creature and vehicle creator. Rescans the saved designs
+                // on the way in, so a file dropped into Creations/ by hand shows up.
+                _creator.Reset();
+                _state = GameState.Creator;
                 break;
             case Menu.Action.Quit:
                 return true;
@@ -1679,6 +1694,7 @@ public sealed class Game : IDisposable
                 }
                 else if (_captureScreen == "class") _renderer.DrawClassSelect(_classSelect, _menuTime);
                 else if (_captureScreen == "test") _renderer.DrawTest(_testScreen, _menuTime);
+                else if (_captureScreen == "creator") { _creator.Update((float)Config.FixedDt); _renderer.DrawCreator(_creator, _menuTime); }
                 else _renderer.DrawMenu(_menu, _menuTime);
                 _renderer.ApplyPixelDissolve(fa);
                 _renderer.Present();
@@ -2301,6 +2317,22 @@ public sealed class Game : IDisposable
     private void DrawTest()
     {
         _renderer.DrawTest(_testScreen, _menuTime);
+        _renderer.Present();
+    }
+
+    /// <summary>Advances the creator. Escape from its library is the only way back to the
+    /// title; Escape inside a design returns to the library first.</summary>
+    private void UpdateCreator()
+    {
+        float dt = Raylib.GetFrameTime();
+        _menuTime += dt;
+        if (_creator.Update(dt) == CreatorScreen.Action.Back)
+            _state = GameState.Menu;
+    }
+
+    private void DrawCreator()
+    {
+        _renderer.DrawCreator(_creator, _menuTime);
         _renderer.Present();
     }
 

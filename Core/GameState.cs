@@ -14,6 +14,7 @@ public enum GameState
     Lobby,       // the multiplayer front door: host and read out a code, or type one
     Settings,
     Test,        // hidden bestiary reached by the secret 'L' hatch
+    Creator,     // the creature/vehicle creator, F4 three times on the title — a dev bench
     LevelIntro,
     Playing,     // the inventory/crafting panel (E) is a live overlay on this state, not its own
     Paused,      // the pause panel is up over a dimmed world — frozen in single player,

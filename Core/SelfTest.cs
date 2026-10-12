@@ -300,6 +300,9 @@ public static partial class SelfTest
         // can tell apart from a broken one. Its own block, same reasoning as above.
         failures += RunFlowerChecks();
 
+        // The creator: designs saved and read back, gaits, mirroring. No world needed.
+        failures += RunCreatorChecks();
+
         // And whether the six chassis can fight each other at all, which is the one thing a
         // solo run can never show and a room shows immediately. Its own block, last, because
         // it stands up a fresh two-seat world per attack and is the slowest thing in the file.
