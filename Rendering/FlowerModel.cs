@@ -233,12 +233,10 @@ public sealed class FlowerModel
     /// to a size the shared camera can actually frame.</summary>
     public void Draw(Loadout loadout, Vector2 pos, float heading, Vector3 cameraPos, float elapsed)
     {
-        Rlgl.PushMatrix();
-        Rlgl.Translatef(pos.X, 0f, pos.Y);
-        Rlgl.Scalef(HangarScale, HangarScale, HangarScale);
-        Rlgl.Translatef(-pos.X, 0f, -pos.Y);
+        // Through the recorder, so the creator's copy of the plant is the size it is shown at.
+        MeshRecorder.PushScale(pos, HangarScale);
         DrawPosed(loadout, pos, heading, 0f, cameraPos, Idle(elapsed, heading));
-        Rlgl.PopMatrix();
+        MeshRecorder.Pop();
     }
 
     /// <summary>

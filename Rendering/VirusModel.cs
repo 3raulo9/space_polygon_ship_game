@@ -129,9 +129,11 @@ public sealed class VirusModel
             float len = (0.55f + 0.45f * corruption) * (0.6f + 0.7f * beat);
             Vector3 tip = centre + VeinDirs[i] * len;
 
-            Raylib.DrawCylinderEx(centre, tip, 0.05f, 0.004f, 5, root);
+            if (!MeshRecorder.Cylinder(centre, tip, 0.05f, 0.004f, root))
+                Raylib.DrawCylinderEx(centre, tip, 0.05f, 0.004f, 5, root);
             // A bright node at the tip where the infection is groping — the one warm fleck.
-            Raylib.DrawSphereEx(tip, 0.03f + 0.02f * beat, 4, 4, veins);
+            if (!MeshRecorder.Sphere(tip, 0.03f + 0.02f * beat, veins))
+                Raylib.DrawSphereEx(tip, 0.03f + 0.02f * beat, 4, 4, veins);
         }
     }
 
@@ -162,6 +164,9 @@ public sealed class VirusModel
         float halo = 0.26f * pulse;
         float core = 0.11f * pulse;
 
+        // The creator records the payload as one solid pip in its own colour: the halo and the
+        // eye-facing white core are a lighting trick for a camera, not a shape.
+        if (MeshRecorder.Sphere(centre, core * 1.6f, payload)) return;
         Raylib.DrawSphereEx(centre, halo, 8, 8, new Color(payload.R, payload.G, payload.B, (byte)150));
 
         // The white core pulled toward the eye so it clears the halo's near surface rather

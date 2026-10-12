@@ -99,8 +99,18 @@ public sealed class EntityRenderer
     /// <summary>Stable keys for the two figures that are not entities — the hangar's and the
     /// bestiary's — so each keeps its own animator across frames instead of being rebuilt
     /// mid-breath.</summary>
-    private readonly object _hangarFigure = new();
+    private object _hangarFigure = new();
     private readonly object _bestiaryFigure = new();
+
+    /// <summary>
+    /// For the creator copying the hangar figure: a fixed step for the idle animator in place
+    /// of the frame time, and a fresh figure to step. The soldier's idle is a live animator
+    /// that eases toward where it is going, so a copy has to run it the way the game does —
+    /// frame after frame from a known start — or it records something the game never shows.
+    /// </summary>
+    internal float? ShowcaseStep { get; set; }
+
+    internal void ResetShowcaseFigure() => _hangarFigure = new object();
 
     /// <summary>The soldier's cables and hooks in the live world — drawn from the rig's
     /// own state, not from a mesh, because a cable's shape is decided every frame by
@@ -813,7 +823,7 @@ public sealed class EntityRenderer
             LeftHook: Vector3.Zero, RightHook: Vector3.Zero,
             Bank: 0f, Stagger: 0f, Blades: false,
             LookYaw: 0f, LookPitch: 0f, GroundY: 0f, Scale: 1f, Time: elapsed),
-            Raylib.GetFrameTime());
+            ShowcaseStep ?? Raylib.GetFrameTime());
         return anim.Pose;
     }
 

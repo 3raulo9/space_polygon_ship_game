@@ -25,6 +25,9 @@ public sealed class Menu
         StartMultiplayer,
         OpenSettings,
         OpenTestScreen, // the secret hatch — wired, but goes nowhere yet
+        /// <summary>F4 three times: the creature and vehicle creator. A developer's bench,
+        /// so it is knocked for rather than listed.</summary>
+        OpenCreator,
         Quit,
     }
 
@@ -43,6 +46,9 @@ public sealed class Menu
 
     public Item Selected { get; private set; } = Item.Descent;
 
+    private double _f4First = double.NegativeInfinity;
+    private int _f4Count;
+
     /// <summary>
     /// Reads input and returns the action the loop should take. Movement skips
     /// the disabled Multiplayer entry so the cursor never rests on a dead option.
@@ -53,6 +59,20 @@ public sealed class Menu
 
         // Secret keybind ('L' position) — undocumented test screen.
         if (InputMap.SecretTestPressed) return Action.OpenTestScreen;
+
+        // Three F4s inside a second and a half. Each press has to land within the window of
+        // the first, so three slow taps spread over a minute do not add up to a knock.
+        if (Raylib_cs.Raylib.IsKeyPressed(Raylib_cs.KeyboardKey.F4))
+        {
+            double now = Raylib_cs.Raylib.GetTime();
+            if (now - _f4First > 1.5) { _f4First = now; _f4Count = 0; }
+            if (++_f4Count >= 3)
+            {
+                _f4Count = 0;
+                _f4First = double.NegativeInfinity;
+                return Action.OpenCreator;
+            }
+        }
 
         if (InputMap.MenuUp) MoveSelection(-1);
         if (InputMap.MenuDown) MoveSelection(+1);

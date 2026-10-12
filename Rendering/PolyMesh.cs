@@ -21,6 +21,11 @@ public sealed class PolyMesh
 
     private readonly List<Face> _faces = new();
 
+    /// <summary>The triangles, in the mesh's own frame, with their baked colours. Read by the
+    /// creator to copy a game model exactly.</summary>
+    public IEnumerable<(Vector3 A, Vector3 B, Vector3 C, Color Color)> Triangles
+        => _faces.Select(f => (f.A, f.B, f.C, f.BaseColor));
+
     /// <summary>
     /// Add a convex polygon (>=3 coplanar verts, wound counter-clockwise when
     /// viewed from outside) as a fan of triangles sharing one flat colour.
@@ -98,6 +103,12 @@ public sealed class PolyMesh
     public void Draw(Vector2 position, float heading, float height, Vector3 cameraPos,
         float scale = 1f, Color? tint = null, float pitch = 0f, float roll = 0f)
     {
+        if (MeshRecorder.Active is { } rec)
+        {
+            rec.Add(this, Basis(position, heading, height, scale, pitch, roll), tint);
+            return;
+        }
+
         float cos = MathF.Cos(heading);
         float sin = MathF.Sin(heading);
 
@@ -124,6 +135,28 @@ public sealed class PolyMesh
     }
 
     /// <summary>
+    /// Draws the mesh through a full transform rather than a heading and a tilt — for the
+    /// creator, whose parts hang off one another at any angle. Same shading, same fog.
+    /// </summary>
+    public void Draw(in Matrix4x4 world, Vector3 cameraPos, Color? tint = null)
+    {
+        if (MeshRecorder.Active is { } rec) { rec.Add(this, world, tint); return; }
+
+        var origin = new Vector2(world.M41, world.M43);
+        float fog = GridRenderer.FogFactor(Vector2.Distance(origin, new Vector2(cameraPos.X, cameraPos.Z)));
+        if (fog >= 0.99f) return;
+
+        foreach (var f in _faces)
+        {
+            Vector3 a = Vector3.Transform(f.A, world);
+            Vector3 b = Vector3.Transform(f.B, world);
+            Vector3 c = Vector3.Transform(f.C, world);
+            Color shaded = ShadeFace(a, b, c, tint ?? f.BaseColor, cameraPos);
+            Raylib.DrawTriangle3D(a, b, c, GridRenderer.LerpColor(shaded, Atmosphere.FogColor, fog));
+        }
+    }
+
+    /// <summary>
     /// Draws the mesh as an <em>outline</em>: the solid filled in the void's own near-black
     /// so it occludes whatever is behind it, and every edge stroked in
     /// <paramref name="edge"/> over the top.
@@ -141,6 +174,12 @@ public sealed class PolyMesh
     public void DrawWire(Vector2 position, float heading, float height, Vector3 cameraPos,
         float scale, Color edge, float pitch = 0f, float roll = 0f)
     {
+        if (MeshRecorder.Active is { } rec)
+        {
+            rec.Add(this, Basis(position, heading, height, scale, pitch, roll), edge);
+            return;
+        }
+
         var cameraXZ = new Vector2(cameraPos.X, cameraPos.Z);
         if (Vector2.Distance(position, cameraXZ) > UnseenRange) return;
 
@@ -181,6 +220,18 @@ public sealed class PolyMesh
     /// zero for everything but the Crab-Core lining up its lance, so every other
     /// caller transforms exactly as it always has.
     /// </summary>
+    /// <summary><see cref="Transform"/> as a matrix: the images of the three axes and the
+    /// origin, which is exact because the transform is affine.</summary>
+    private static Matrix4x4 Basis(Vector2 pos, float heading, float height, float scale, float pitch, float roll)
+    {
+        float cos = MathF.Cos(heading), sin = MathF.Sin(heading);
+        Vector3 o = Transform(Vector3.Zero, cos, sin, pos, height, scale, pitch, roll);
+        Vector3 x = Transform(Vector3.UnitX, cos, sin, pos, height, scale, pitch, roll) - o;
+        Vector3 y = Transform(Vector3.UnitY, cos, sin, pos, height, scale, pitch, roll) - o;
+        Vector3 z = Transform(Vector3.UnitZ, cos, sin, pos, height, scale, pitch, roll) - o;
+        return new Matrix4x4(x.X, x.Y, x.Z, 0, y.X, y.Y, y.Z, 0, z.X, z.Y, z.Z, 0, o.X, o.Y, o.Z, 1);
+    }
+
     private static Vector3 Transform(Vector3 v, float cos, float sin, Vector2 pos,
         float height, float scale, float pitch = 0f, float roll = 0f)
     {

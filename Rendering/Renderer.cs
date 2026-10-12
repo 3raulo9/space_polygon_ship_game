@@ -42,6 +42,8 @@ public sealed class Renderer : IDisposable
 
     public Renderer()
     {
+        // The creator copies the game's characters by recording these very models drawing.
+        GameCapture.Entities = _entities;
         _target = Raylib.LoadRenderTexture(Config.InternalWidth, Config.InternalHeight);
         _scratch = Raylib.LoadRenderTexture(BlurW, BlurH);
         // Nearest-neighbor: hard, chunky pixels. No filtering, ever.
@@ -845,6 +847,39 @@ public sealed class Renderer : IDisposable
 
         TestRenderer.Draw(screen, elapsed);
 
+        Raylib.EndTextureMode();
+    }
+
+    /// <summary>
+    /// The creator (F4 three times on the title). Its own orbit camera onto the design at the
+    /// origin, on the same grid and sky as the test turntable, with the editing panels over it.
+    /// </summary>
+    public void DrawCreator(UI.CreatorScreen screen, float elapsed)
+    {
+        bool library = screen.Current == UI.CreatorScreen.Page.Library;
+        var preview = library ? screen.LibraryPreview : null;
+        var cam = library ? CreatorRenderer.LibraryCamera(preview, elapsed) : screen.Camera;
+        _camera.Position = cam.Position;
+        _camera.Target = cam.Target;
+        _camera.Up = Vector3.UnitY;
+        _camera.FovY = cam.FovY;
+
+        // The shapes bar's little 3D icons are rendered into their own textures first — a
+        // texture cannot be drawn into while the main target is open.
+        if (!library) CreatorRenderer.PrepareIcons();
+
+        Raylib.BeginTextureMode(_target);
+        Raylib.ClearBackground(Palette.Void);
+        SkyRenderer.Draw(_camera, elapsed);
+
+        Raylib.BeginMode3D(_camera);
+        // On a test drive the grid follows the creature, so walking reads as walking.
+        GridRenderer.Draw(screen.Current == UI.CreatorScreen.Page.Play ? screen.PlayPos : Vector2.Zero);
+        if (library) { if (preview != null) CreatorRenderer.DrawLibraryModel(preview, elapsed, cam.Position); }
+        else CreatorRenderer.DrawScene(screen, cam.Position, elapsed);
+        Raylib.EndMode3D();
+
+        CreatorRenderer.DrawHud(screen, elapsed);
         Raylib.EndTextureMode();
     }
 
