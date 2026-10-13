@@ -251,6 +251,42 @@ public static partial class SelfTest
         float before = mid.Blocks[0].Size.X;
         Spine.Girth(d, mid, 1.5f);
         if (!(mid.Blocks[0].Size.X > before)) return "the wheel did not fatten the vertebra";
+        return CreatorGirthSpreads();
+    }
+
+    /// <summary>The wheel eases into the neighbours — one each way on a short spine, two on
+    /// a long one, each less than the one in hand — and Ctrl keeps it to the one.</summary>
+    private static string? CreatorGirthSpreads()
+    {
+        foreach (int length in new[] { 4, 9 })
+        {
+            var d = Spine.NewCreature();
+            for (int i = 0; i < 20 && Spine.Vertebrae(d).Count < length; i++)
+            {
+                var v = Spine.Vertebrae(d);
+                Spine.Drag(d, v[^1], v[^1].Pivot + new Vector3(0, 0, 0.2f));
+            }
+            var vs = Spine.Vertebrae(d);
+            if (vs.Count != length) return $"could not grow a spine of {length}";
+            int at = vs.Count / 2;
+            var was = vs.Select(p => p.Blocks[0].Size.X).ToArray();
+            Spine.Girth(d, vs[at], 1.5f, spread: true);
+            var grew = vs.Select((p, i) => p.Blocks[0].Size.X / was[i]).ToArray();
+            int reach = length >= Spine.LongSpine ? 2 : 1;
+            for (int i = 0; i < vs.Count; i++)
+            {
+                int dist = Math.Abs(i - at);
+                bool should = dist <= reach;
+                if (should != grew[i] > 1.0001f) return $"on a spine of {length}, vertebra {dist} away {(should ? "did not grow" : "grew")}";
+                if (dist > 0 && should && !(grew[i] < grew[i - Math.Sign(i - at)])) return $"on a spine of {length}, the swell does not ease off";
+            }
+
+            var only = Spine.Vertebrae(d);
+            var before = only.Select(p => p.Blocks[0].Size.X).ToArray();
+            Spine.Girth(d, only[at], 1.5f, spread: false);
+            for (int i = 0; i < only.Count; i++)
+                if (i != at && only[i].Blocks[0].Size.X != before[i]) return "Ctrl's single fattening spread anyway";
+        }
         return null;
     }
 

@@ -21,7 +21,8 @@ namespace Unrendered.UI;
 /// <item>Roll the wheel over a part to grow or shrink it. Drag its handles to stretch it, the
 /// gold one to pinch or flare its top, its ring to turn it — Tab for the other two rings.</item>
 /// <item>The spine: drag an end vertebra out to grow the body, in to shorten it; drag a middle
-/// one to bend it; roll the wheel over one to fatten or thin that stretch.</item>
+/// one to bend it; roll the wheel over one to fatten or thin that stretch, easing into its
+/// neighbours — hold Ctrl to change just the one.</item>
 /// <item>Drag on empty space (or with the right button anywhere) to turn the camera round the
 /// creature; the wheel over empty space zooms; the middle button pans.</item>
 /// <item>PAINT: a base colour, a mark colour and a pattern to lay the mark in, brushed onto
@@ -923,7 +924,9 @@ public sealed class CreatorScreen
         var d = Design!;
         Edit();
         float f = MathF.Pow(1.08f, wheel);
-        if (p.Role == PartRole.Spine) Spine.Girth(d, p, f);
+        // Ctrl keeps the change to the one vertebra under the cursor.
+        bool ctrl = Raylib.IsKeyDown(KeyboardKey.LeftControl) || Raylib.IsKeyDown(KeyboardKey.RightControl);
+        if (p.Role == PartRole.Spine) Spine.Girth(d, p, f, spread: !ctrl);
         else
         {
             p.Scale = Math.Clamp(p.Scale * f, 0.1f, 8f);
@@ -980,11 +983,12 @@ public sealed class CreatorScreen
         int before = Spine.Vertebrae(d).Count;
         Spine.Drag(d, v, local);
         int after = Spine.Vertebrae(d).Count;
-        // The spine pulls like taffy: a rubbery stretch for every vertebra it grows, the same
-        // run played back down as it is pushed in, and a creak while it is only bent.
+        // The spine pulls like taffy: a rubbery stretch for every vertebra it grows, and the
+        // same run played back down as it is pushed in.
+        // Only the moments it changes length make a sound; a plain bend is silent, or a
+        // long drag would creak the whole way.
         if (after > before) Sound(SfxSynth.BenchSound.Grow, after, gap: 0f);
         else if (after < before) Sound(SfxSynth.BenchSound.Shrink, after, gap: 0f);
-        else Sound(SfxSynth.BenchSound.Bend, gap: 0.11f);
     }
 
     // ---- joints ----------------------------------------------------------------------------
@@ -1971,7 +1975,7 @@ public sealed class CreatorScreen
             var hover = Hover >= 0 ? Design?.Find(Hover) : null;
             return Current switch
             {
-                Page.Build => hover?.Role == PartRole.Spine ? "DRAG TO BEND - WHEEL TO FATTEN"
+                Page.Build => hover?.Role == PartRole.Spine ? "DRAG TO BEND - WHEEL FATTENS - CTRL: JUST ONE"
                     : hover is { Fixed: true } ? "DRAG BENDS IT - WHEEL SIZES - HANDLES SHAPE"
                     : hover != null && hover.Parent >= 0 ? "DRAG MOVES - WHEEL SIZES - ALT COPIES"
                     : "DRAG SHAPES ONTO THE BODY",

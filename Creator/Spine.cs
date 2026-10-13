@@ -262,14 +262,34 @@ public static class Spine
         for (int k = 0; k < order.Count; k++) order[k].Vertebra = k;
     }
 
-    /// <summary>The wheel over a vertebra: that stretch of body fattens or thins.</summary>
-    public static void Girth(Design d, Part vertebra, float factor)
+    /// <summary>A spine this long or longer spreads a fattening two vertebrae each way;
+    /// a shorter one spreads it one.</summary>
+    public const int LongSpine = 7;
+
+    /// <summary>
+    /// The wheel over a vertebra: that stretch of body fattens or thins. With
+    /// <paramref name="spread"/> the change eases out into the neighbours — half as much one
+    /// vertebra away, a quarter two away on a long spine — so the body swells like flesh
+    /// rather than growing a single ring. Without it, only the one vertebra changes.
+    /// </summary>
+    public static void Girth(Design d, Part vertebra, float factor, bool spread = false)
     {
-        foreach (var b in vertebra.Blocks)
+        var v = Vertebrae(d);
+        int at = v.IndexOf(vertebra);
+        int reach = !spread || at < 0 ? 0 : v.Count >= LongSpine ? 2 : 1;
+        for (int k = -reach; k <= reach; k++)
         {
-            float x = Math.Clamp(b.Size.X * factor, 0.12f, 4f);
-            float y = Math.Clamp(b.Size.Y * factor, 0.12f, 4f);
-            b.Size = b.Size with { X = x, Y = y };
+            int j = at + k;
+            if (at >= 0 ? j < 0 || j >= v.Count : k != 0) continue;
+            var target = at >= 0 ? v[j] : vertebra;
+            // The share in the exponent, so a step and its undo cancel exactly.
+            float f = MathF.Pow(factor, MathF.Pow(0.5f, Math.Abs(k)));
+            foreach (var b in target.Blocks)
+            {
+                float x = Math.Clamp(b.Size.X * f, 0.12f, 4f);
+                float y = Math.Clamp(b.Size.Y * f, 0.12f, 4f);
+                b.Size = b.Size with { X = x, Y = y };
+            }
         }
         Layout(d);
     }
