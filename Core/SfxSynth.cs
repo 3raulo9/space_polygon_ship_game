@@ -2929,4 +2929,196 @@ public static class SfxSynth
     {
         b[at] = (byte)v; b[at + 1] = (byte)(v >> 8);
     }
+
+    // --- The creator's bench -----------------------------------------------------------
+    // The one corner of the bank with nothing to fight. Everything here is small, round and
+    // a little wet — bloops, squeaks, rubbery stretches — the way Spore's creator sounds,
+    // because building a creature should feel like modelling clay rather than operating a
+    // weapon. All of it is short enough to fire on every snap without piling up.
+
+    /// <summary>What happened on the bench.</summary>
+    public enum BenchSound
+    {
+        /// <summary>A part lifted off the bar or off the body.</summary>
+        Pick,
+        /// <summary>A part settling onto the body.</summary>
+        Snap,
+        /// <summary>A part thrown away.</summary>
+        Toss,
+        /// <summary>The spine growing a vertebra (param = how many it has now).</summary>
+        Grow,
+        /// <summary>The spine absorbing one (param = how many it has now).</summary>
+        Shrink,
+        /// <summary>A joint or the back creaking as it is bent.</summary>
+        Bend,
+        /// <summary>The wheel growing a part.</summary>
+        Bigger,
+        /// <summary>The wheel shrinking a part.</summary>
+        Smaller,
+        /// <summary>A ring turned a notch.</summary>
+        Turn,
+        /// <summary>A handle pulled.</summary>
+        Stretch,
+        /// <summary>Paint landing.</summary>
+        Paint,
+        /// <summary>A colour, pattern or tab picked.</summary>
+        Click,
+        /// <summary>A step back or forward through history.</summary>
+        Undo,
+    }
+
+    public static Params Bench(Random rng, BenchSound sound, float param = 0f)
+    {
+        float Range(float lo, float hi) => lo + (float)rng.NextDouble() * (hi - lo);
+
+        switch (sound)
+        {
+            case BenchSound.Pick:
+            {
+                // A soft lift: a short rising pluck.
+                float f = Range(520f, 580f);
+                return new Params
+                {
+                    Wave = Osc.Sine, Length = Range(0.06f, 0.075f),
+                    StartFreq = f, EndFreq = f * Range(1.35f, 1.5f),
+                    Attack = 0.05f, Sustain = 0.2f, Decay = 0.75f,
+                    Detune = 2f, DetuneGain = 0.2f,
+                    Volume = 0.42f, Seed = rng.Next(),
+                };
+            }
+            case BenchSound.Snap:
+            {
+                // The bloop of something sticking: a quick fall in pitch with a little body
+                // under it, as if pressed into clay.
+                float f = Range(760f, 880f);
+                return new Params
+                {
+                    Wave = Osc.Sine, Length = Range(0.1f, 0.13f),
+                    StartFreq = f, EndFreq = f * Range(0.38f, 0.45f),
+                    Attack = 0.02f, Sustain = 0.25f, Decay = 0.73f,
+                    Detune = 1.5f, DetuneGain = 0.28f,
+                    LpCutoff = 0.8f, LpResonance = 0.3f,
+                    Volume = 0.55f, Seed = rng.Next(),
+                };
+            }
+            case BenchSound.Toss:
+                // Flung over the shoulder: a falling, wobbling slide away.
+                return new Params
+                {
+                    Wave = Osc.Saw, Length = Range(0.24f, 0.3f),
+                    StartFreq = Range(560f, 640f), EndFreq = Range(80f, 100f),
+                    Attack = 0.02f, Sustain = 0.2f, Decay = 0.78f,
+                    VibratoDepth = 0.06f, VibratoSpeed = Range(16f, 20f),
+                    LpCutoff = 0.5f, LpSweep = 0.99985f,
+                    Volume = 0.38f, Seed = rng.Next(),
+                };
+            case BenchSound.Grow or BenchSound.Shrink:
+            {
+                // The spine pulled like taffy: a rubbery, wobbling glide through a resonant
+                // filter that opens as it stretches. Each new vertebra sits a little higher
+                // than the last, so pulling a long neck out plays as a rising run; pushing it
+                // back plays the run down.
+                float n = Math.Clamp(param, 2f, 24f);
+                float baseF = 150f * MathF.Pow(1.06f, n) * Range(0.97f, 1.03f);
+                bool grow = sound == BenchSound.Grow;
+                return new Params
+                {
+                    Wave = Osc.Saw, Length = Range(0.17f, 0.21f),
+                    StartFreq = grow ? baseF : baseF * 1.55f,
+                    EndFreq = grow ? baseF * 1.55f : baseF,
+                    Attack = 0.06f, Sustain = 0.4f, Decay = 0.54f,
+                    VibratoDepth = 0.07f, VibratoSpeed = Range(20f, 26f),
+                    Detune = 1.01f, DetuneGain = 0.6f,
+                    LpCutoff = 0.42f, LpResonance = 0.6f, LpSweep = grow ? 1.0002f : 0.9998f,
+                    HpCutoff = 0.05f,
+                    Volume = 0.5f, Seed = rng.Next(),
+                };
+            }
+            case BenchSound.Bend:
+            {
+                // A creak, gristle rather than hinge: low, thin and a little crushed.
+                float f = Range(105f, 140f);
+                return new Params
+                {
+                    Wave = Osc.Square, Length = Range(0.05f, 0.07f),
+                    StartFreq = f, EndFreq = f * Range(0.8f, 0.9f),
+                    Attack = 0.1f, Sustain = 0.3f, Decay = 0.6f,
+                    Duty = 0.15f, DutySweep = Range(1.5f, 3f),
+                    LpCutoff = 0.5f, LpResonance = 0.4f,
+                    CrushBits = 5,
+                    Volume = 0.28f, Seed = rng.Next(),
+                };
+            }
+            case BenchSound.Bigger or BenchSound.Smaller:
+            {
+                // A tick per notch of the wheel, up when it grows and down when it shrinks.
+                bool up = sound == BenchSound.Bigger;
+                float f = Range(620f, 680f);
+                return new Params
+                {
+                    Wave = Osc.Sine, Length = Range(0.04f, 0.05f),
+                    StartFreq = f, EndFreq = up ? f * 1.4f : f * 0.72f,
+                    Attack = 0.05f, Sustain = 0.3f, Decay = 0.65f,
+                    Detune = 2f, DetuneGain = 0.15f,
+                    Volume = 0.3f, Seed = rng.Next(),
+                };
+            }
+            case BenchSound.Turn:
+                return new Params
+                {
+                    Wave = Osc.Square, Length = 0.025f,
+                    StartFreq = Range(1400f, 1600f), EndFreq = Range(1200f, 1300f),
+                    Attack = 0.02f, Sustain = 0.2f, Decay = 0.78f,
+                    Duty = 0.2f, LpCutoff = 0.7f,
+                    Volume = 0.18f, Seed = rng.Next(),
+                };
+            case BenchSound.Stretch:
+            {
+                float f = Range(200f, 240f) * (param > 0f ? 1.15f : 0.88f);
+                return new Params
+                {
+                    Wave = Osc.Saw, Length = Range(0.06f, 0.08f),
+                    StartFreq = f, EndFreq = f * (param > 0f ? 1.3f : 0.75f),
+                    Attack = 0.1f, Sustain = 0.35f, Decay = 0.55f,
+                    VibratoDepth = 0.05f, VibratoSpeed = 24f,
+                    LpCutoff = 0.4f, LpResonance = 0.5f,
+                    Volume = 0.26f, Seed = rng.Next(),
+                };
+            }
+            case BenchSound.Paint:
+                // A wet slap of colour: a burst of noise closing down fast.
+                return new Params
+                {
+                    Wave = Osc.Noise, Length = Range(0.12f, 0.16f),
+                    StartFreq = 300f, EndFreq = 300f,
+                    Attack = 0.01f, Sustain = 0.15f, Decay = 0.84f,
+                    LpCutoff = Range(0.42f, 0.5f), LpResonance = 0.5f, LpSweep = 0.9994f,
+                    HpCutoff = 0.08f,
+                    Volume = 0.36f, Seed = rng.Next(),
+                };
+            case BenchSound.Undo:
+            {
+                float f = Range(860f, 940f);
+                return new Params
+                {
+                    Wave = Osc.Sine, Length = 0.08f,
+                    StartFreq = param > 0f ? f * 0.55f : f, EndFreq = param > 0f ? f : f * 0.55f,
+                    Attack = 0.03f, Sustain = 0.3f, Decay = 0.67f,
+                    Detune = 1.5f, DetuneGain = 0.2f,
+                    Volume = 0.32f, Seed = rng.Next(),
+                };
+            }
+            default:
+            {
+                float f = Range(1150f, 1250f);
+                return new Params
+                {
+                    Wave = Osc.Sine, Length = 0.04f,
+                    StartFreq = f, EndFreq = f * 1.18f,
+                    Attack = 0.03f, Sustain = 0.3f, Decay = 0.67f,
+                    Volume = 0.28f, Seed = rng.Next(),
+                };
+            }
+        }
+    }
 }

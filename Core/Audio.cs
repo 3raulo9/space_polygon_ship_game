@@ -259,6 +259,11 @@ public static class Audio
     /// <summary>Menu cursor stepping to a new option.</summary>
     public static void PlayBlip() => Flat(Cue.Pickup, _blip);
 
+    /// <summary>Something happening on the creator's bench. Synthesised fresh each time, so a
+    /// row of snaps never sounds sampled.</summary>
+    public static void PlayBench(SfxSynth.BenchSound sound, float param = 0f)
+        => FlatSynth(Cue.CreatorBench, SfxSynth.Bench(_sfxRng, sound, param));
+
     /// <summary>A shot leaving a barrel — player or enemy.</summary>
     public static void PlayDetonation(Vector2 at) => Post(Cue.Detonation, _detonation, at);
 

@@ -129,6 +129,10 @@ public enum Cue : byte
     PortalCharge,   // a bed: the span winding up once all five are in (param = 0..1)
     PortalOpen,     // the boom
     PortalEnter,    // one craft stepping through
+
+    /// <summary>The creator's bench: parts snapping on, the spine stretching, paint landing.
+    /// Never raised by the world and never on the wire — it lives here only to own a row.</summary>
+    CreatorBench,
 }
 
 /// <summary>
@@ -440,6 +444,11 @@ public static class CueBank
         // is the sound of the count moving without you.
         t.Set((int)Cue.PortalEnter, "PortalEnter",
             S(Bus.Player, 0.85f, 240f, 0.85f, 230, 6, reverb: 0.6f, air: 0.45f, jitter: 0f, min: 15f));
+
+        // The creator. A panel noise like any other menu sound, but allowed a few at once: a
+        // drop snaps a part and its mirrored twin on together, and a wheel turned fast ticks
+        // over itself.
+        t.Set((int)Cue.CreatorBench, "CreatorBench", Panel(0.6f, 150) with { MaxInstances = 4 });
 
         return t;
     }

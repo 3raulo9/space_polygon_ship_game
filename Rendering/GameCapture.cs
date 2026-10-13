@@ -151,6 +151,10 @@ public static class GameCapture
         }
         d.Parts[root].Role = PartRole.Body;
         d.Parts[root].Name = "BODY";
+        // The game's model is one piece of anatomy. Every mesh in it can be bent at its joint,
+        // sized, stretched and painted, but none of it comes off — a forearm does not leave
+        // the soldier's elbow because it was dragged.
+        foreach (var p in d.Parts) p.Fixed = p.Parent >= 0;
 
         // ---- twins: mirror images across the centre line ----------------------------------
         for (int i = 0; i < n; i++)

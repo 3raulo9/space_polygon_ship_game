@@ -23,7 +23,8 @@ internal static class CreatorRenderer
     private static Color Dim => Scale(Palette.HudChrome, 0.45f);
     private static Color Mid => Scale(Palette.HudChrome, 0.7f);
     private static Color Bright => Palette.HudChrome;
-    private static readonly Color[] RingColors = { new(230, 70, 70, 255), new(90, 230, 200, 255), new(90, 140, 255, 255) };
+    /// <summary>X, Y, Z — and the gold of the taper handle.</summary>
+    private static readonly Color[] RingColors = { new(230, 70, 70, 255), new(90, 230, 200, 255), new(90, 140, 255, 255), new(235, 190, 60, 255) };
 
     // =====================================================================================
     //  Meshes
@@ -119,11 +120,19 @@ internal static class CreatorRenderer
         // What the cursor is over glows faintly; in PAINT it shows the colour about to land.
         if (s.Hover >= 0 && d.Find(s.Hover) is { } hover && s.Hover != s.Selected)
         {
-            Color c = s.Current == CreatorScreen.Page.Paint
-                ? ClassCatalog.SwatchColor(s.CarriedSwatch >= 0 ? s.CarriedSwatch : Math.Max(0, s.Brush))
-                : Scale(Palette.HudChrome, 0.55f);
-            Outline(d, hover, s.Pose, c);
-            if (hover.Twin >= 0 && d.Find(hover.Twin) is { } ht) Outline(d, ht, s.Pose, Scale(c, 0.5f));
+            if (s.Current == CreatorScreen.Page.Paint)
+            {
+                // Everything the dab will land on, in the colour about to land.
+                Color c = Paints.Color(s.CarriedSwatch >= 0 ? s.CarriedSwatch : Math.Max(0, s.Brush));
+                bool all = Raylib.IsKeyDown(KeyboardKey.LeftShift) || Raylib.IsKeyDown(KeyboardKey.RightShift);
+                foreach (var part in s.PaintTargets(hover, all)) Outline(d, part, s.Pose, part == hover ? c : Scale(c, 0.55f));
+            }
+            else
+            {
+                Color c = Scale(Palette.HudChrome, 0.55f);
+                Outline(d, hover, s.Pose, c);
+                if (hover.Twin >= 0 && d.Find(hover.Twin) is { } ht) Outline(d, ht, s.Pose, Scale(c, 0.5f));
+            }
         }
 
         // The spine's handles, as Spore shows them when the cursor is on the torso: a line down
@@ -150,6 +159,25 @@ internal static class CreatorRenderer
         Outline(d, sel, s.Pose, Scale(Select, pulse));
         if (sel.Twin >= 0 && d.Find(sel.Twin) is { } twin) Outline(d, twin, s.Pose, Scale(Select, 0.35f));
 
+        // The joints of the limb the selection belongs to, as Spore marks them: a knuckle at
+        // every bend, bright on the one being worked, so it is plain the limb flexes there
+        // and holds together there.
+        if (s.Current == CreatorScreen.Page.Build && s.Carried < 0)
+        {
+            var limb = d.LimbRoot(sel);
+            if (limb.Parent >= 0 && d.Subtree(limb.Id).Count > 1)
+                foreach (var seg in d.Subtree(limb.Id))
+                {
+                    if (!s.Pose.TryGetValue(seg.Id, out var jm)) continue;
+                    var at = jm.Translation;
+                    bool on = seg.Id == sel.Id || seg.Id == s.Bending;
+                    float g = MathF.Max(0.04f, Vector3.Distance(eye, at) * (on ? 0.012f : 0.008f));
+                    Raylib.DrawCube(at, g, g, g, on ? Palette.HudChrome : Scale(Select, 0.8f));
+                    if (seg != limb && s.Pose.TryGetValue(seg.Parent, out var up))
+                        Raylib.DrawLine3D(up.Translation, at, Scale(Select, 0.5f));
+                }
+        }
+
         if (s.Carried >= 0) return;
 
         // The rings, as Spore draws them round a selected part.
@@ -171,7 +199,17 @@ internal static class CreatorRenderer
             for (int i = 0; i < hs.Length; i++)
             {
                 Raylib.DrawLine3D(mid, hs[i], Scale(RingColors[i], 0.6f));
-                Raylib.DrawCube(hs[i], size, size, size, RingColors[i]);
+                if (i == CreatorScreen.TaperHandle)
+                {
+                    // A diamond rather than a cube: it does not stretch, it shapes.
+                    float h = size * 0.85f;
+                    Raylib.DrawLine3D(hs[i] + new Vector3(0, h, 0), hs[i] + new Vector3(h, 0, 0), RingColors[i]);
+                    Raylib.DrawLine3D(hs[i] + new Vector3(h, 0, 0), hs[i] - new Vector3(0, h, 0), RingColors[i]);
+                    Raylib.DrawLine3D(hs[i] - new Vector3(0, h, 0), hs[i] - new Vector3(h, 0, 0), RingColors[i]);
+                    Raylib.DrawLine3D(hs[i] - new Vector3(h, 0, 0), hs[i] + new Vector3(0, h, 0), RingColors[i]);
+                    Raylib.DrawCube(hs[i], size * 0.7f, size * 0.7f, size * 0.7f, RingColors[i]);
+                }
+                else Raylib.DrawCube(hs[i], size, size, size, RingColors[i]);
             }
         }
     }
@@ -274,6 +312,7 @@ internal static class CreatorRenderer
         }
         DrawBottomBar(s);
         DrawStatus(s);
+        if (s.CategoryMenu) DrawCategoryMenu(s);
         if (s.CarriedSwatch > -2) DrawCarriedSwatch(s);
         if (s.TextEntry != null) DrawTextEntry(s, elapsed);
     }
@@ -303,8 +342,11 @@ internal static class CreatorRenderer
     private static void DrawShapes(CreatorScreen s)
     {
         string cat = PartCatalog.Categories[s.Category];
-        Text("<", 3, CreatorScreen.TopH + 4, Mid);
-        Text(">", CreatorScreen.PalW - 8, CreatorScreen.TopH + 4, Mid);
+        bool inHead = s.Mouse.X < CreatorScreen.PalW && s.Mouse.Y >= CreatorScreen.TopH && s.Mouse.Y < CreatorScreen.PalTop;
+        bool onName = inHead && s.Mouse.X >= 11 && s.Mouse.X < CreatorScreen.PalW - 11;
+        if (onName || s.CategoryMenu) Raylib.DrawRectangle(11, CreatorScreen.TopH + 2, CreatorScreen.PalW - 22, 10, Scale(Palette.HudChrome, 0.15f));
+        Text("<", 3, CreatorScreen.TopH + 4, inHead && s.Mouse.X < 11 ? Bright : Mid);
+        Text(">", CreatorScreen.PalW - 8, CreatorScreen.TopH + 4, inHead && s.Mouse.X >= CreatorScreen.PalW - 11 ? Bright : Mid);
         Centered(cat, CreatorScreen.PalW / 2, CreatorScreen.TopH + 4, Bright);
 
         var items = s.PaletteItems;
@@ -330,31 +372,127 @@ internal static class CreatorRenderer
         }
     }
 
+    private static void DrawCategoryMenu(CreatorScreen s)
+    {
+        int n = PartCatalog.Categories.Length;
+        int x = CreatorScreen.CatMenuX, y = CreatorScreen.CatMenuY, w = CreatorScreen.CatMenuW;
+        Raylib.DrawRectangle(x - 1, y - 2, w + 2, n * CreatorScreen.RowH + 3, new Color(5, 7, 10, 240));
+        Raylib.DrawRectangleLines(x - 1, y - 2, w + 2, n * CreatorScreen.RowH + 3, Scale(Select, 0.7f));
+        int hot = s.CategoryRowAt(s.Mouse);
+        for (int i = 0; i < n; i++)
+        {
+            int ry = y + i * CreatorScreen.RowH;
+            bool on = i == s.Category;
+            if (i == hot) Raylib.DrawRectangle(x, ry - 1, w, CreatorScreen.RowH, Scale(Palette.HudChrome, 0.18f));
+            else if (on) Raylib.DrawRectangle(x, ry - 1, w, CreatorScreen.RowH, Scale(Select, 0.3f));
+            Text(PartCatalog.Categories[i], x + 3, ry + 1, on || i == hot ? Bright : Mid);
+            string count = PartCatalog.In(PartCatalog.Categories[i]).Count.ToString();
+            Text(count, x + w - 3 - Measure(count), ry + 1, Dim);
+        }
+    }
+
     private static void DrawSwatches(CreatorScreen s)
     {
-        Centered("COLOURS", CreatorScreen.PalW / 2, CreatorScreen.TopH + 4, Bright);
+        // The two colour slots: the one a swatch will set is outlined.
+        string[] slotNames = { "BASE", "MARK" };
+        int[] slotColours = { s.Brush, s.BrushMark };
+        for (int i = 0; i < 2; i++)
+        {
+            int x = 2 + i * (CreatorScreen.SlotW + 2), y = CreatorScreen.SlotY;
+            if (slotColours[i] < 0) DrawOriginalTile(x, y, CreatorScreen.SlotW, CreatorScreen.SlotH);
+            else Raylib.DrawRectangle(x, y, CreatorScreen.SlotW, CreatorScreen.SlotH, Paints.Color(slotColours[i]));
+            Raylib.DrawRectangle(x + 1, y + 3, Measure(slotNames[i]) + 3, 7, new Color(5, 7, 10, 200));
+            Text(slotNames[i], x + 2, y + 4, s.PaintSlot == i ? Bright : Mid);
+            Raylib.DrawRectangleLines(x - 1, y - 1, CreatorScreen.SlotW + 2, CreatorScreen.SlotH + 2, s.PaintSlot == i ? Bright : Dim);
+        }
+
+        int hotSwatch = s.Mouse.X < CreatorScreen.PalW ? CreatorScreen.SwatchAt(s.Mouse) : -1;
+        int active = s.PaintSlot == 0 ? s.Brush : s.BrushMark;
         for (int i = 0; i < CreatorScreen.SwatchCount; i++)
         {
-            int x = 2 + (i % CreatorScreen.PalCols) * CreatorScreen.Icon;
-            int y = CreatorScreen.SwatchTop + (i / CreatorScreen.PalCols) * CreatorScreen.Icon;
-            bool original = i == ClassCatalog.Swatches.Length;
-            int swatch = original ? -1 : i;
-            if (original)
-            {
-                // The game's own colours: a little split tile.
-                Raylib.DrawRectangle(x + 2, y + 2, 11, 22, Palette.PlayerFill);
-                Raylib.DrawRectangle(x + 13, y + 2, 11, 11, Palette.NeonRed);
-                Raylib.DrawRectangle(x + 13, y + 13, 11, 11, Palette.Flag);
-            }
-            else Raylib.DrawRectangle(x + 2, y + 2, CreatorScreen.Icon - 4, CreatorScreen.Icon - 4, ClassCatalog.SwatchColor(i));
-            if (s.Brush == swatch) Raylib.DrawRectangleLines(x, y, CreatorScreen.Icon, CreatorScreen.Icon, Bright);
+            int x = 2 + (i % CreatorScreen.SwatchCols) * CreatorScreen.SwatchTile;
+            int y = CreatorScreen.SwatchTop + (i / CreatorScreen.SwatchCols) * CreatorScreen.SwatchTile;
+            int value = CreatorScreen.SwatchValue(i);
+            if (value < 0) DrawOriginalTile(x + 1, y + 1, CreatorScreen.SwatchTile - 2, CreatorScreen.SwatchTile - 2);
+            else Raylib.DrawRectangle(x + 1, y + 1, CreatorScreen.SwatchTile - 2, CreatorScreen.SwatchTile - 2, Paints.Color(value));
+            if (active == value) Raylib.DrawRectangleLines(x, y, CreatorScreen.SwatchTile, CreatorScreen.SwatchTile, Bright);
+            else if (i == hotSwatch) Raylib.DrawRectangleLines(x, y, CreatorScreen.SwatchTile, CreatorScreen.SwatchTile, Mid);
         }
+
+        Text("PATTERN", 3, CreatorScreen.PatternLabelY, Mid);
+        int hotPattern = s.Mouse.X < CreatorScreen.PalW ? CreatorScreen.PatternAt(s.Mouse) : -1;
+        for (int i = 0; i < Paints.Patterns.Length; i++)
+        {
+            int x = 2 + (i % CreatorScreen.PatternCols) * CreatorScreen.PatternTile;
+            int y = CreatorScreen.PatternTop + (i / CreatorScreen.PatternCols) * CreatorScreen.PatternTile;
+            DrawPatternTile(Paints.Patterns[i], x + 1, y + 1, CreatorScreen.PatternTile - 2, s.Brush, s.BrushMark);
+            if (Paints.Patterns[i] == s.BrushPattern) Raylib.DrawRectangleLines(x, y, CreatorScreen.PatternTile, CreatorScreen.PatternTile, Bright);
+            else if (i == hotPattern) Raylib.DrawRectangleLines(x, y, CreatorScreen.PatternTile, CreatorScreen.PatternTile, Mid);
+        }
+
+        Text("BRUSH", 3, CreatorScreen.ScopeY - 8, Mid);
+        for (int i = 0; i < CreatorScreen.ScopeNames.Length; i++)
+        {
+            int x = 2, y = CreatorScreen.ScopeY + i * CreatorScreen.ScopeH;
+            bool on = (int)s.PaintScope == i;
+            bool hot = s.Mouse.Y >= y && s.Mouse.Y < y + CreatorScreen.ScopeH && s.Mouse.X >= x && s.Mouse.X < x + CreatorScreen.ScopeW;
+            if (on) Raylib.DrawRectangle(x, y, CreatorScreen.ScopeW, CreatorScreen.ScopeH - 1, Scale(Select, 0.35f));
+            else if (hot) Raylib.DrawRectangle(x, y, CreatorScreen.ScopeW, CreatorScreen.ScopeH - 1, Scale(Palette.HudChrome, 0.15f));
+            Text(CreatorScreen.ScopeNames[i], x + 2, y + 1, on || hot ? Bright : Mid);
+        }
+
+        // What the cursor is over, by name.
+        string? label = hotSwatch >= 0
+            ? (CreatorScreen.SwatchValue(hotSwatch) < 0 ? "ORIGINAL" : Paints.Name(CreatorScreen.SwatchValue(hotSwatch)))
+            : hotPattern >= 0 ? Paints.Patterns[hotPattern].ToString().ToUpperInvariant() : null;
+        if (label != null)
+        {
+            int w = Measure(label) + 6;
+            int y = (int)s.Mouse.Y - 12;
+            Raylib.DrawRectangle(CreatorScreen.PalW + 2, y, w, 10, new Color(5, 7, 10, 235));
+            Text(label, CreatorScreen.PalW + 5, y + 2, Bright);
+        }
+    }
+
+    /// <summary>The game's own colours: a little split tile.</summary>
+    private static void DrawOriginalTile(int x, int y, int w, int h)
+    {
+        Raylib.DrawRectangle(x, y, w / 2, h, Palette.PlayerFill);
+        Raylib.DrawRectangle(x + w / 2, y, w - w / 2, h / 2, Palette.NeonRed);
+        Raylib.DrawRectangle(x + w / 2, y + h / 2, w - w / 2, h - h / 2, Palette.Flag);
+    }
+
+    /// <summary>
+    /// A pattern as it lands, in the brush's own two colours: a side-on view of a block,
+    /// cell by cell, worked out by the same rule the paint uses — except the dorsal stripe,
+    /// which only shows from above.
+    /// </summary>
+    private static void DrawPatternTile(PaintPattern pattern, int x, int y, int size, int baseSwatch, int markSwatch)
+    {
+        Color baseC = baseSwatch < 0 ? Palette.PlayerFill : Paints.Color(baseSwatch);
+        Color markC = Paints.Color(markSwatch);
+        const int cells = 6;
+        for (int cy = 0; cy < cells; cy++)
+            for (int cx = 0; cx < cells; cx++)
+            {
+                float a = (cx + 0.5f) / cells, b = 1f - (cy + 0.5f) / cells;
+                Vector3 u, n;
+                if (pattern == PaintPattern.Dorsal) { u = new Vector3(a, 1f, b); n = Vector3.UnitY; }
+                else { u = new Vector3(1f, b, a); n = Vector3.UnitX; }
+                // The bottom row of the side view stands for the underside.
+                if (pattern == PaintPattern.Belly && cy == cells - 1) n = -Vector3.UnitY;
+                Color c = Paints.Marked(pattern, u, n, new Vector3(0.6f, 0.6f, 1f)) ? markC : baseC;
+                int x0 = x + cx * size / cells, x1 = x + (cx + 1) * size / cells;
+                int y0 = y + cy * size / cells, y1 = y + (cy + 1) * size / cells;
+                Raylib.DrawRectangle(x0, y0, x1 - x0, y1 - y0, c);
+            }
     }
 
     private static void DrawCarriedSwatch(CreatorScreen s)
     {
         int x = (int)s.Mouse.X + 3, y = (int)s.Mouse.Y + 3;
-        Raylib.DrawRectangle(x, y, 9, 9, s.CarriedSwatch >= 0 ? ClassCatalog.SwatchColor(s.CarriedSwatch) : Palette.PlayerFill);
+        if (s.CarriedSwatch >= 0) Raylib.DrawRectangle(x, y, 9, 9, Paints.Color(s.CarriedSwatch));
+        else DrawOriginalTile(x, y, 9, 9);
         Raylib.DrawRectangleLines(x, y, 9, 9, Bright);
     }
 

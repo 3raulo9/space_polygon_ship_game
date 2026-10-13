@@ -313,6 +313,14 @@ public static class AutoAnim
                 case PartRole.Decor:
                     t.Add(Wave(p, Channel.Pitch, 0.08f, 0.17f * p.Id, 2));
                     break;
+                case PartRole.Eye:
+                    // A glance about, each eye a little out of step so a cluster looks alive.
+                    t.Add(Wave(p, Channel.Yaw, 0.12f, 0.13f * p.Id));
+                    break;
+                case PartRole.Mouth when p.Fixed:
+                    // A jaw breathing.
+                    t.Add(Wave(p, Channel.Pitch, 0.05f, 0.1f, 2));
+                    break;
             }
         }
         return clip;
@@ -341,6 +349,17 @@ public static class AutoAnim
                 t.Add(Keys(p, Channel.Pitch, (0f, 0f), (0.3f, -0.25f), (0.5f, 0.35f), (1f, 0f)));
             else if (p.Role == PartRole.Petal)
                 t.Add(Keys(p, Channel.Pitch, (0f, 0f), (0.3f, -0.3f), (0.5f, 0.4f), (1f, 0f)));
+            else if (p.Role == PartRole.Mouth && p.Fixed)
+            {
+                // Gape on the wind-up, snap shut on the lunge. A jaw off to one side — a
+                // mandible — closes sideways, toward the middle.
+                if (MathF.Abs(p.Pivot.X) > 0.03f)
+                {
+                    float s = MathF.Sign(p.Pivot.X);
+                    t.Add(Keys(p, Channel.Yaw, (0f, 0f), (0.3f, s * 0.45f), (0.5f, -s * 0.3f), (1f, 0f)));
+                }
+                else t.Add(Keys(p, Channel.Pitch, (0f, 0f), (0.3f, 0.6f), (0.5f, -0.25f), (1f, 0f)));
+            }
         }
         return clip;
     }
