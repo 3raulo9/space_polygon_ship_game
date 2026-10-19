@@ -1235,6 +1235,22 @@ public sealed class PlayerTank
     public int FlinchSeq;
 
     /// <summary>
+    /// The modded weapon in this craft's hand, as an index into
+    /// <see cref="Modding.Mods.Weapons"/>, or -1 for none. Only a SOLDIER ever holds one.
+    /// The host's to decide — a client never predicts a pickup or a drop, it is told — and it
+    /// crosses the wire beside the flinch so every machine can draw the blade in the hand.
+    /// </summary>
+    public int HeldWeapon = -1;
+
+    /// <summary>Ticks once per swing, so whatever draws the body plays each swing exactly once
+    /// however its frame rate compares to the tick rate. Same arrangement as
+    /// <see cref="FlinchSeq"/>, for the same reason.</summary>
+    public int SwingSeq;
+
+    /// <summary>Seconds until the held weapon may swing again.</summary>
+    public float SwingCooldown;
+
+    /// <summary>
     /// The two throttles: W/S along the heading, A/D across it. The heading itself is the
     /// mouse's now, so nothing here turns the craft — A and D that used to steer step the
     /// hull sideways instead. Both carry momentum, so the craft leans into a move and

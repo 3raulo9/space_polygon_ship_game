@@ -22,6 +22,36 @@ public enum PartRole
     /// <summary>One vertebra of a Spore-style spine: dragged to bend and lengthen the torso,
     /// wheeled to fatten it. See <see cref="Spine"/>.</summary>
     Spine,
+    /// <summary>Looks about while idle; holds still while walking.</summary>
+    Eye,
+    /// <summary>A jaw, beak or mandible: gapes on the attack and works a little at rest.</summary>
+    Mouth,
+    /// <summary>A rigid detail — a horn, a plate, a spike — that moves only with what it is
+    /// stuck to. Unlike <see cref="Decor"/>, it does not writhe.</summary>
+    Detail,
+}
+
+/// <summary>
+/// How a block's two colours are laid over it, the way Spore lays a coat and a detail over a
+/// base. Worked out per facet: a patterned block is cut into smaller triangles and each one
+/// takes the base or the mark, so a pattern is a few more hard-edged flats rather than a
+/// texture.
+/// </summary>
+public enum PaintPattern
+{
+    Solid,
+    /// <summary>The underside in the mark colour: countershading.</summary>
+    Belly,
+    /// <summary>Bands across the length.</summary>
+    Stripes,
+    /// <summary>Bands round the height.</summary>
+    Rings,
+    Spots,
+    /// <summary>The ends and edges in the mark colour.</summary>
+    Tips,
+    /// <summary>A stripe down the middle of the back.</summary>
+    Dorsal,
+    Checker,
 }
 
 /// <summary>The shape a block is cut to. Everything stays a hard-edged solid — these are
@@ -53,6 +83,9 @@ public sealed class Block
     /// <summary>Index into <see cref="ClassCatalog.Swatches"/>, the game's closed palette. -1
     /// keeps a mesh block's own colours.</summary>
     public int Swatch;
+    /// <summary>The second colour, which <see cref="Pattern"/> lays over the first.</summary>
+    public int Swatch2 = 9;
+    public PaintPattern Pattern;
 
     /// <summary>Mesh blocks only: nine floats per triangle, in the block's own frame.</summary>
     public float[]? Tris;
@@ -151,6 +184,10 @@ public sealed class Part
     /// <summary>For a spine vertebra, its place along the spine from the tail (0) forward;
     /// -1 for anything else.</summary>
     public int Vertebra = -1;
+    /// <summary>A segment of something bigger — a shin, a forearm, a piece of a game model.
+    /// It bends at its joint, sizes and paints like anything else, but it never comes off:
+    /// dragging it swings it, and only the limb it belongs to can be moved or thrown away.</summary>
+    public bool Fixed;
     public List<Block> Blocks = new();
 
     public Part Clone()
@@ -508,6 +545,25 @@ public sealed class Design
         foreach (var c in Clips) c.Tracks.RemoveAll(t => doomed.Contains(t.Part));
     }
 
+    /// <summary>Whether a part of role <paramref name="child"/> hung from one of role
+    /// <paramref name="parent"/> is a further segment of the same limb.</summary>
+    public static bool IsSegmentOf(PartRole child, PartRole parent) => (parent, child) switch
+    {
+        (PartRole.Leg, PartRole.Leg or PartRole.Foot) => true,
+        (PartRole.Arm, PartRole.Arm or PartRole.Hand) => true,
+        (PartRole.Tail or PartRole.Wing or PartRole.Stalk or PartRole.Neck, _) => child == parent,
+        _ => false,
+    };
+
+    /// <summary>The top of the limb a part belongs to: walks up through
+    /// <see cref="Part.Fixed"/> segments to the first part that is free to move.</summary>
+    public Part LimbRoot(Part p)
+    {
+        var cur = p;
+        for (int guard = 0; cur.Fixed && guard < 64 && Find(cur.Parent) is { } up; guard++) cur = up;
+        return cur;
+    }
+
     /// <summary>"ARM L" becomes "ARM R", and "WHEEL L2" becomes "WHEEL R2": the side letter
     /// is the last word, optionally numbered.</summary>
     public static string SwapSide(string name)
@@ -534,6 +590,9 @@ public sealed class Design
         foreach (var p in Parts)
         {
             if (p.Parent == p.Id || (p.Parent >= 0 && Find(p.Parent) == null)) p.Parent = -1;
+            // Files from before limbs held together: a knee under a thigh, a hand under an
+            // arm, is a segment whatever the file says.
+            if (Find(p.Parent) is { } up && IsSegmentOf(p.Role, up.Role)) p.Fixed = true;
             if (p.Twin >= 0 && Find(p.Twin) == null) p.Twin = -1;
             if (p.Mount.LengthSquared() < 1e-6f || !float.IsFinite(p.Mount.X)) p.Mount = Vector3.UnitY;
             p.Mount = Vector3.Normalize(p.Mount);
@@ -543,6 +602,7 @@ public sealed class Design
             {
                 b.Size = Vector3.Max(b.Size, new Vector3(0.02f));
                 b.Taper = Math.Clamp(b.Taper, 0f, 2f);
+                if (!Enum.IsDefined(b.Pattern)) b.Pattern = PaintPattern.Solid;
                 if (b.Shape == BlockShape.Mesh && (b.Tris == null || b.Tris.Length % 9 != 0
                     || b.Colors == null || b.Colors.Length != b.Tris.Length / 9))
                 {

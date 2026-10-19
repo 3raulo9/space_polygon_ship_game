@@ -95,6 +95,36 @@ public static class DesignPose
         return m;
     }
 
+    /// <summary>
+    /// Turns a part about its own joint by <paramref name="turn"/>, a rotation given in the
+    /// world — how a limb is bent by dragging it. The joint itself does not move; the part and
+    /// everything hung from it swing round it. <paramref name="parentWorld"/> is the parent's
+    /// world transform in the pose being edited. Returns false if the frames will not invert.
+    /// </summary>
+    public static bool TurnAtJoint(Part p, Matrix4x4 parentWorld, Matrix4x4 turn)
+    {
+        // The rest angle lives inside the mounting and the parent's frame, so the world turn
+        // is carried across into it: rest' = rest · A · L · turn · L⁻¹ · A⁻¹.
+        var parent = parentWorld;
+        parent.Translation = Vector3.Zero;
+        var align = Align(p.Mount);
+        if (!Matrix4x4.Invert(parent, out var parentInv) || !Matrix4x4.Invert(align, out var alignInv)) return false;
+        var rest = Matrix4x4.CreateFromYawPitchRoll(p.Rest.Y, p.Rest.X, p.Rest.Z);
+        p.Rest = ToEuler(Orthonormal(rest * align * parent * turn * parentInv * alignInv));
+        return true;
+    }
+
+    /// <summary>Squeezes the scale out of a matrix that should be a pure turn but has picked
+    /// up a parent's size on the way through.</summary>
+    private static Matrix4x4 Orthonormal(Matrix4x4 m)
+    {
+        var x = Vector3.Normalize(new Vector3(m.M11, m.M12, m.M13));
+        var y = new Vector3(m.M21, m.M22, m.M23);
+        y = Vector3.Normalize(y - x * Vector3.Dot(x, y));
+        var z = Vector3.Cross(x, y);
+        return new Matrix4x4(x.X, x.Y, x.Z, 0, y.X, y.Y, y.Z, 0, z.X, z.Y, z.Z, 0, 0, 0, 0, 1);
+    }
+
     /// <summary>Breaks a rigid rotation back into the yaw, pitch and roll
     /// <see cref="Matrix4x4.CreateFromYawPitchRoll"/> would build it from.</summary>
     public static Vector3 ToEuler(Matrix4x4 m)
@@ -138,7 +168,7 @@ public static class DesignPose
             foreach (var b in p.Blocks)
             {
                 var bm = BlockMatrix(p, b, pm);
-                foreach (var (a0, b0, c0, _) in BlockGeometry.Triangles(b))
+                foreach (var (a0, b0, c0, _) in BlockGeometry.Solid(b))
                 {
                     Vector3 a = Vector3.Transform(a0, bm), bb = Vector3.Transform(b0, bm), c = Vector3.Transform(c0, bm);
                     if (!RayTriangle(origin, dir, a, bb, c, out float dist)) continue;
@@ -181,7 +211,7 @@ public static class DesignPose
         foreach (var b in p.Blocks)
         {
             var m = BlockMatrix(p, b, Matrix4x4.Identity);
-            foreach (var (a, bb, c, _) in BlockGeometry.Triangles(b))
+            foreach (var (a, bb, c, _) in BlockGeometry.Solid(b))
                 foreach (var v in new[] { a, bb, c })
                 {
                     var w = Vector3.Transform(v, m);
@@ -197,6 +227,11 @@ public static class DesignPose
 /// <summary>
 /// The triangles of one block, in the block's own frame, with their colours. The single
 /// source of a block's shape: the renderer draws these, picking hits these.
+///
+/// <para>Two views of the same block. <see cref="Triangles"/> is what is drawn, cut finer
+/// where a paint pattern needs smaller flats to fall on; <see cref="Solid"/> is the bare
+/// shape, which is all picking and measuring need and is many times cheaper to ray-test.
+/// An unpatterned block is the same list for both.</para>
 /// </summary>
 public static class BlockGeometry
 {
@@ -205,23 +240,29 @@ public static class BlockGeometry
     private sealed class Cache
     {
         public int Key;
-        public List<(Vector3, Vector3, Vector3, Color)> Tris = new();
+        public List<(Vector3, Vector3, Vector3, Color)> Solid = new();
+        public List<(Vector3, Vector3, Vector3, Color)> Painted = new();
     }
 
-    public static List<(Vector3 A, Vector3 B, Vector3 C, Color Color)> Triangles(Block b)
+    public static List<(Vector3 A, Vector3 B, Vector3 C, Color Color)> Triangles(Block b) => Get(b).Painted;
+
+    public static List<(Vector3 A, Vector3 B, Vector3 C, Color Color)> Solid(Block b) => Get(b).Solid;
+
+    private static Cache Get(Block b)
     {
-        int key = HashCode.Combine(b.Shape, b.Size, b.Taper, b.Swatch, b.Tris);
+        int key = HashCode.Combine(b.Shape, b.Size, b.Taper, b.Swatch, b.Tris, b.Swatch2, b.Pattern);
         var cache = _cache.GetOrCreateValue(b);
-        if (cache.Key == key && cache.Tris.Count > 0) return cache.Tris;
+        if (cache.Key == key && cache.Solid.Count > 0) return cache;
         cache.Key = key;
-        cache.Tris = Build(b);
-        return cache.Tris;
+        cache.Solid = Build(b);
+        cache.Painted = b.Pattern == PaintPattern.Solid ? cache.Solid : Paint(b, cache.Solid);
+        return cache;
     }
 
     private static List<(Vector3, Vector3, Vector3, Color)> Build(Block b)
     {
         var list = new List<(Vector3, Vector3, Vector3, Color)>();
-        Color c = b.Swatch >= 0 ? Core.ClassCatalog.SwatchColor(b.Swatch) : Core.Palette.HudChrome;
+        Color c = b.Swatch >= 0 ? Paints.Color(b.Swatch) : Core.Palette.HudChrome;
         float hx = b.Size.X * 0.5f, hy = b.Size.Y * 0.5f, hz = b.Size.Z * 0.5f;
 
         void Quad(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3)
@@ -269,9 +310,88 @@ public static class BlockGeometry
                 Quad(b2, b3, t3, t2);
                 Quad(b3, b0, t0, t3);
                 Quad(b1, b2, t2, t1);
-                break;
+                return list;
             }
         }
+
+        // Every other shape tapers too — a copied game mesh as much as a gem — by pinching
+        // its top toward its middle, the way a box's top face shrinks.
+        if (MathF.Abs(b.Taper - 1f) > 1e-4f && list.Count > 0) Taper(list, b.Taper);
         return list;
+    }
+
+    private static void Taper(List<(Vector3, Vector3, Vector3, Color)> list, float taper)
+    {
+        var (lo, hi) = Bounds(list);
+        Vector3 mid = (lo + hi) * 0.5f;
+        float span = MathF.Max(1e-5f, hi.Y - lo.Y);
+        Vector3 Pinch(Vector3 v)
+        {
+            float k = 1f + (taper - 1f) * Math.Clamp((v.Y - lo.Y) / span, 0f, 1f);
+            return new Vector3(mid.X + (v.X - mid.X) * k, v.Y, mid.Z + (v.Z - mid.Z) * k);
+        }
+        for (int i = 0; i < list.Count; i++)
+        {
+            var (a, bb, c, col) = list[i];
+            list[i] = (Pinch(a), Pinch(bb), Pinch(c), col);
+        }
+    }
+
+    private static (Vector3 Lo, Vector3 Hi) Bounds(List<(Vector3, Vector3, Vector3, Color)> list)
+    {
+        var lo = new Vector3(float.MaxValue);
+        var hi = new Vector3(float.MinValue);
+        foreach (var (a, bb, c, _) in list)
+        {
+            lo = Vector3.Min(lo, Vector3.Min(a, Vector3.Min(bb, c)));
+            hi = Vector3.Max(hi, Vector3.Max(a, Vector3.Max(bb, c)));
+        }
+        return (lo, hi);
+    }
+
+    /// <summary>The finest a pattern cuts a block: a facet is quartered until it is under a
+    /// fifth of the block across, three times at most.</summary>
+    private const int MaxCuts = 3;
+
+    /// <summary>
+    /// Lays the block's pattern over it: each triangle is split into four until it is small
+    /// enough for a band or a spot to land on, and each piece takes the mark or keeps its
+    /// own colour depending on where it sits. The pieces are coplanar with the face they came
+    /// from, so the shape is untouched — only the flats of colour change.
+    /// </summary>
+    private static List<(Vector3, Vector3, Vector3, Color)> Paint(Block b, List<(Vector3, Vector3, Vector3, Color)> solid)
+    {
+        var (lo, hi) = Bounds(solid);
+        Vector3 size = hi - lo;
+        float cell = MathF.Max(size.X, MathF.Max(size.Y, size.Z)) / 5f;
+        Color mark = Paints.Color(b.Swatch2);
+        var result = new List<(Vector3, Vector3, Vector3, Color)>(solid.Count * 16);
+
+        static float U(float v, float l, float s) => s > 1e-4f ? Math.Clamp((v - l) / s, 0f, 1f) : 0.5f;
+
+        void Emit(Vector3 a, Vector3 bb, Vector3 c, Color own, Vector3 n, int depth)
+        {
+            float longest = MathF.Max(Vector3.Distance(a, bb), MathF.Max(Vector3.Distance(bb, c), Vector3.Distance(c, a)));
+            if (depth < MaxCuts && longest > cell)
+            {
+                Vector3 ab = (a + bb) * 0.5f, bc = (bb + c) * 0.5f, ca = (c + a) * 0.5f;
+                Emit(a, ab, ca, own, n, depth + 1);
+                Emit(ab, bb, bc, own, n, depth + 1);
+                Emit(ca, bc, c, own, n, depth + 1);
+                Emit(ab, bc, ca, own, n, depth + 1);
+                return;
+            }
+            Vector3 mid = (a + bb + c) / 3f;
+            var u = new Vector3(U(mid.X, lo.X, size.X), U(mid.Y, lo.Y, size.Y), U(mid.Z, lo.Z, size.Z));
+            result.Add((a, bb, c, Paints.Marked(b.Pattern, u, n, size) ? mark : own));
+        }
+
+        foreach (var (a, bb, c, col) in solid)
+        {
+            var n = Vector3.Cross(bb - a, c - a);
+            n = n.LengthSquared() > 1e-12f ? Vector3.Normalize(n) : Vector3.UnitY;
+            Emit(a, bb, c, col, n, 0);
+        }
+        return result;
     }
 }

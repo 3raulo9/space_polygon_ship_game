@@ -56,6 +56,11 @@ public enum InputAction : byte
     RightHook,
     HighJump,
 
+    /// <summary>Lets go of a modded weapon — a sword out of the mods folder. Its own row
+    /// because while one is held FIRE swings it, and the only way back to the rifle is to
+    /// put the blade down.</summary>
+    DropWeapon,
+
     // --- FISH ------------------------------------------------------------------------
     // The roll is the turn bindings and the spit is FIRE; what is its own is the tail.
     Beat,
@@ -111,7 +116,7 @@ public static class InputActions
         <= InputAction.Ready => InputSection.General,
         <= InputAction.TankSlug => InputSection.Tank,
         <= InputAction.SpiderPounce => InputSection.Spider,
-        <= InputAction.HighJump => InputSection.Soldier,
+        <= InputAction.DropWeapon => InputSection.Soldier,
         <= InputAction.Brake => InputSection.Fish,
         <= InputAction.Replant => InputSection.Flower,
         <= InputAction.Slot4 => InputSection.Virus,
@@ -177,6 +182,7 @@ public static class InputActions
         InputAction.LeftHook => "LEFT HOOK",
         InputAction.RightHook => "RIGHT HOOK",
         InputAction.HighJump => "HIGH JUMP",
+        InputAction.DropWeapon => "DROP WEAPON",
 
         InputAction.Beat => "TAIL BEAT",
         InputAction.Brake => "BRAKE",

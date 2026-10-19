@@ -68,6 +68,7 @@ public static partial class SelfTest
         if (Want(InputAction.LeftHook, KeyboardKey.Q, null, null) is { } e15) return e15;
         if (Want(InputAction.RightHook, KeyboardKey.E, null, null) is { } e16) return e16;
         if (Want(InputAction.HighJump, KeyboardKey.Enter, null, KeyboardKey.Space) is { } e17) return e17;
+        if (Want(InputAction.DropWeapon, KeyboardKey.Z, null, null) is { } e17b) return e17b;
         if (Want(InputAction.Beat, KeyboardKey.W, null, KeyboardKey.Space) is { } e18) return e18;
         if (Want(InputAction.Brake, KeyboardKey.S, null, null) is { } e19) return e19;
         if (Want(InputAction.Slot1, KeyboardKey.R, null, null) is { } e20) return e20;

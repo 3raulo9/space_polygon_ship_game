@@ -76,6 +76,9 @@ public enum Btn : uint
     /// because the whole ability is <em>choosing</em>, and a press would make the most
     /// committing decision in the class the least deliberate input in it.</summary>
     Replant    = 1u << 24,
+
+    /// <summary>The SOLDIER lets go of a modded weapon. Read only while one is in hand.</summary>
+    DropWeapon = 1u << 25,
 }
 
 /// <summary>
@@ -259,6 +262,9 @@ public readonly struct InputFrame
     public bool HighJumpPressed => Hit(Btn.HighJump);
     public bool RifleDown => this[Btn.Fire];
     public bool RocketPressed => Hit(Btn.Secondary);
+    /// <summary>Let go of the modded weapon in hand. While one is held, FIRE swings it
+    /// instead of the rifle — see <see cref="RifleDown"/>'s use in the soldier's triggers.</summary>
+    public bool DropWeaponPressed => Hit(Btn.DropWeapon);
 
     /// <summary>Movement as (strafe, forward), each -1..1. A body, not a vehicle: the turn
     /// bindings step sideways here, since the mouse is already doing the turning.</summary>

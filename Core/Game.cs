@@ -115,7 +115,7 @@ public sealed class Game : IDisposable
     private readonly string? _captureScreen =
         Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_MENU");
     private bool _captureMenu =>
-        _captureScreen is "1" or "menu" or "settings" or "controls" or "sound"
+        _captureScreen is "1" or "menu" or "settings" or "controls" or "sound" or "mods"
                        or "test" or "class" or "lobby" or "room" or "starmap"
                        or "creator";
     private int _frame;
@@ -139,6 +139,10 @@ public sealed class Game : IDisposable
         Audio.ApplySettings(_settings);
         _settingsScreen = new SettingsScreen(_settings);
         _classSelect = new ClassSelectScreen(_loadout);
+
+        // The mods folder, read before any world exists — the opening scatter and every
+        // multiplayer hello read the registry this fills. Rescanned from the MODS page.
+        Modding.Mods.Reload();
 
         // Capture runs the world directly (no menu), so build it now and aim the
         // craft at the seeded enemy. Normal play starts on the menu instead. The
@@ -641,6 +645,7 @@ public sealed class Game : IDisposable
                 // screen is one instance shared by both doors, and arriving on whichever
                 // sub-page somebody was last looking at is disorienting from either.
                 _settingsScreen.Reset();
+                _settingsScreen.InMatch = false;
                 _state = GameState.Settings;
                 break;
             case Menu.Action.OpenTestScreen:
@@ -786,6 +791,8 @@ public sealed class Game : IDisposable
                 break;
             case PauseMenu.Action.OpenSettings:
                 _settingsScreen.Reset();
+                // A match is running under this panel, so its mods stay as they are.
+                _settingsScreen.InMatch = true;
                 _pauseSettings = true;
                 Audio.PlayBlip();
                 break;
@@ -1675,7 +1682,7 @@ public sealed class Game : IDisposable
             {
                 if (_captureScreen == "lobby") _renderer.DrawLobby(_lobby, _menuTime);
                 else if (_captureScreen == "room") _renderer.DrawLobbyRoom(CaptureRoom(), _menuTime);
-                else if (_captureScreen is "settings" or "controls" or "sound")
+                else if (_captureScreen is "settings" or "controls" or "sound" or "mods")
                 {
                     // UNRENDERED_CAPTURE_ROW=<n> scrolls the controls list to a given row
                     // before the grab, so the chassis sections further down the page can be

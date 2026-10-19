@@ -28,6 +28,12 @@ public static partial class SelfTest
         failures += Check("turns survive being taken apart and put back", CreatorEulerRoundTrips);
         failures += Check("a keyed curve passes through every key", CreatorKeysAreExact);
         failures += Check("a broken file is repaired, not trusted", CreatorSanitizesBadFiles);
+        failures += Check("the spine bends like a back and never folds over", CreatorSpineNeverFolds);
+        failures += Check("a limb's segments never come off it", CreatorLimbsHoldTogether);
+        failures += Check("bending a segment turns it about its joint and nowhere else", CreatorBendsAtTheJoint);
+        failures += Check("every part on the bar builds and stands", CreatorCatalogIsSound);
+        failures += Check("a pattern recolours a block without reshaping it", CreatorPatternsKeepShape);
+        failures += Check("every bench sound makes a sound", CreatorBenchSoundsRender);
         return failures;
     }
 
@@ -245,6 +251,42 @@ public static partial class SelfTest
         float before = mid.Blocks[0].Size.X;
         Spine.Girth(d, mid, 1.5f);
         if (!(mid.Blocks[0].Size.X > before)) return "the wheel did not fatten the vertebra";
+        return CreatorGirthSpreads();
+    }
+
+    /// <summary>The wheel eases into the neighbours — one each way on a short spine, two on
+    /// a long one, each less than the one in hand — and Ctrl keeps it to the one.</summary>
+    private static string? CreatorGirthSpreads()
+    {
+        foreach (int length in new[] { 4, 9 })
+        {
+            var d = Spine.NewCreature();
+            for (int i = 0; i < 20 && Spine.Vertebrae(d).Count < length; i++)
+            {
+                var v = Spine.Vertebrae(d);
+                Spine.Drag(d, v[^1], v[^1].Pivot + new Vector3(0, 0, 0.2f));
+            }
+            var vs = Spine.Vertebrae(d);
+            if (vs.Count != length) return $"could not grow a spine of {length}";
+            int at = vs.Count / 2;
+            var was = vs.Select(p => p.Blocks[0].Size.X).ToArray();
+            Spine.Girth(d, vs[at], 1.5f, spread: true);
+            var grew = vs.Select((p, i) => p.Blocks[0].Size.X / was[i]).ToArray();
+            int reach = length >= Spine.LongSpine ? 2 : 1;
+            for (int i = 0; i < vs.Count; i++)
+            {
+                int dist = Math.Abs(i - at);
+                bool should = dist <= reach;
+                if (should != grew[i] > 1.0001f) return $"on a spine of {length}, vertebra {dist} away {(should ? "did not grow" : "grew")}";
+                if (dist > 0 && should && !(grew[i] < grew[i - Math.Sign(i - at)])) return $"on a spine of {length}, the swell does not ease off";
+            }
+
+            var only = Spine.Vertebrae(d);
+            var before = only.Select(p => p.Blocks[0].Size.X).ToArray();
+            Spine.Girth(d, only[at], 1.5f, spread: false);
+            for (int i = 0; i < only.Count; i++)
+                if (i != at && only[i].Blocks[0].Size.X != before[i]) return "Ctrl's single fattening spread anyway";
+        }
         return null;
     }
 
@@ -398,6 +440,256 @@ public static partial class SelfTest
         if (d.Find(1)!.Blocks[0].Size.X <= 0f) return "a negative size was kept";
         if (d.Find(2)!.Blocks[0].Shape != BlockShape.Box) return "a broken mesh was kept";
         if (d.Find(3)!.Mount != Vector3.UnitY) return "a zero mounting was kept";
+        return null;
+    }
+
+    /// <summary>Every stretch of the spine, tail to head: steepness and the turn at each joint.</summary>
+    private static string? SpineShape(Design d, string when)
+    {
+        var v = Spine.Vertebrae(d);
+        const float eps = 2e-3f;
+        for (int i = 1; i < v.Count; i++)
+        {
+            Vector3 seg = v[i].Pivot - v[i - 1].Pivot;
+            if (seg.Z <= 0f) return $"{when}: stretch {i} runs backward";
+            float pitch = MathF.Atan2(seg.Y, seg.Z);
+            if (MathF.Abs(pitch) > Spine.MaxPitch + eps) return $"{when}: stretch {i} stands at {pitch:F2} rad";
+            if (i >= 2)
+            {
+                float bend = Spine.Angle(v[i - 1].Pivot - v[i - 2].Pivot, seg);
+                if (bend > Spine.MaxBend + eps) return $"{when}: joint {i - 1} turns {bend:F2} rad";
+            }
+            if (v[i].Pivot.Y < Spine.Floor - eps) return $"{when}: vertebra {i} is in the floor";
+        }
+        return null;
+    }
+
+    private static string? CreatorSpineNeverFolds()
+    {
+        var d = Spine.NewCreature();
+        // Grow it long enough to be able to tie itself in knots.
+        for (int i = 0; i < 12; i++) { var v = Spine.Vertebrae(d); Spine.Drag(d, v[^1], v[^1].Pivot + new Vector3(0, 0, 0.2f)); }
+        if (Spine.Vertebrae(d).Count < 6) return $"the spine only grew to {Spine.Vertebrae(d).Count}";
+
+        // Swing the middle round in a full circle, far bigger than the body.
+        var mid = Spine.Vertebrae(d)[Spine.Vertebrae(d).Count / 2];
+        Vector3 centre = mid.Pivot;
+        for (int k = 0; k <= 48; k++)
+        {
+            float a = MathF.Tau * k / 48f;
+            Spine.Drag(d, mid, centre + new Vector3(0, MathF.Sin(a), MathF.Cos(a)) * 2.5f);
+            if (SpineShape(d, $"circling the middle at {a:F2}") is { } bad) return bad;
+        }
+
+        // Haul the head back over the tail, and the tail forward under the head.
+        for (int k = 0; k < 30; k++)
+        {
+            var v = Spine.Vertebrae(d);
+            Spine.Drag(d, v[^1], v[0].Pivot + new Vector3(0, 1.5f, -1f));
+            if (SpineShape(d, "pulling the head back over the tail") is { } bad) return bad;
+        }
+        for (int k = 0; k < 30; k++)
+        {
+            var v = Spine.Vertebrae(d);
+            Spine.Drag(d, v[0], v[^1].Pivot + new Vector3(0, -2f, 1f));
+            if (SpineShape(d, "pushing the tail under the head") is { } bad) return bad;
+        }
+
+        // And it still curves when asked to: a pull up on the middle arches it.
+        var e = Spine.NewCreature();
+        for (int i = 0; i < 6; i++) { var v = Spine.Vertebrae(e); Spine.Drag(e, v[^1], v[^1].Pivot + new Vector3(0, 0, 0.2f)); }
+        var vs = Spine.Vertebrae(e);
+        var held = vs[vs.Count / 2];
+        float before = held.Pivot.Y;
+        Spine.Drag(e, held, held.Pivot + new Vector3(0, 0.6f, 0));
+        if (held.Pivot.Y < before + 0.3f) return "a pull up on the middle did not arch the back";
+        var after = Spine.Vertebrae(e);
+        int i0 = after.IndexOf(held);
+        if (!(after[i0 - 1].Pivot.Y > before + 0.05f && after[i0 + 1].Pivot.Y > before + 0.05f))
+            return "the neighbours did not follow the pull - a kink, not a curve";
+        return SpineShape(e, "arching");
+    }
+
+    private static string? CreatorLimbsHoldTogether()
+    {
+        // Off the bar: everything under an assembly's root is a segment of it.
+        foreach (var item in PartCatalog.All)
+        {
+            var d = Spine.NewCreature();
+            var root = PartCatalog.Instantiate(d, item);
+            if (root.Fixed) return $"{item.Label}'s root cannot be moved";
+            foreach (var p in d.Subtree(root.Id).Skip(1))
+            {
+                if (!p.Fixed) return $"{item.Label}: {p.Name} could be pulled off";
+                if (d.LimbRoot(p) != root) return $"{item.Label}: {p.Name} does not lead back to its limb";
+            }
+        }
+
+        // Copied off the game: every piece but the body is anatomy, the soldier's forearm
+        // as much as anything.
+        foreach (var e in GameCapture.All)
+        {
+            var d = CopyOf(e);
+            foreach (var p in d.Parts.Where(p => p.Parent >= 0))
+                if (!p.Fixed) return $"{e.Label}'s {p.Name} could be pulled off";
+            var back = DesignStore.FromJson(DesignStore.ToJson(d));
+            if (back.Parts.Any(p => p.Parent >= 0 && !p.Fixed)) return $"{e.Label} came apart in the file";
+        }
+
+        // A file from before segments held: a leg's shin and foot are still its segments.
+        var old = Spine.NewCreature();
+        var leg = PartCatalog.Instantiate(old, PartCatalog.All.First(i => i.Label == "LEG"));
+        leg.Parent = Spine.Vertebrae(old)[0].Id;
+        foreach (var p in old.Parts) p.Fixed = false;
+        var loaded = DesignStore.FromJson(DesignStore.ToJson(old));
+        var shin = loaded.Parts.First(p => p.Name == "SHIN");
+        var foot = loaded.Parts.First(p => p.Name == "FOOT");
+        if (!shin.Fixed || !foot.Fixed) return "an old file's shin or foot could be pulled off";
+        if (loaded.Parts.First(p => p.Name == "THIGH").Fixed) return "an old file's whole leg got stuck";
+        return null;
+    }
+
+    private static string? CreatorCatalogIsSound()
+    {
+        var labels = new HashSet<string>();
+        foreach (var item in PartCatalog.All)
+        {
+            if (!labels.Add(item.Label)) return $"two items are called {item.Label}";
+            if (!PartCatalog.Categories.Contains(item.Category)) return $"{item.Label} is in no category on the bar";
+            var parts = item.Build();
+            if (parts.Count == 0 || parts[0].Parent != -1) return $"{item.Label} has no root";
+            var ids = parts.Select(p => p.Id).ToHashSet();
+            foreach (var p in parts)
+            {
+                if (p.Blocks.Count == 0) return $"{item.Label}: {p.Name} has nothing to see";
+                if (p != parts[0] && !ids.Contains(p.Parent)) return $"{item.Label}: {p.Name} hangs from nothing";
+                foreach (var b in p.Blocks)
+                    if (b.Size.X <= 0f || b.Size.Y <= 0f || b.Size.Z <= 0f) return $"{item.Label}: a block has no size";
+            }
+            // Two builds are two separate things: painting one never paints the other.
+            var again = item.Build().SelectMany(q => q.Blocks).ToHashSet();
+            if (parts.SelectMany(p => p.Blocks).Any(again.Contains)) return $"{item.Label} hands out the same block twice";
+        }
+        foreach (var cat in PartCatalog.Categories)
+            if (PartCatalog.In(cat).Count == 0) return $"the {cat} tab is empty";
+
+        // A pair of legs dropped on a body walks.
+        foreach (var label in new[] { "LEG", "BIRD LEG", "HOOF LEG", "STOMPER", "INSECT LEG", "TENTACLE", "FROG LEG", "STILT" })
+        {
+            var d = Spine.NewCreature();
+            var root = PartCatalog.Instantiate(d, PartCatalog.All.First(i => i.Label == label));
+            root.Parent = Spine.Vertebrae(d)[1].Id;
+            root.Pivot = new Vector3(-0.3f, -0.2f, 0);
+            root.Side = -1;
+            d.MirrorSubtree(root.Id);
+            AutoAnim.Rebuild(d);
+            int hips = AutoAnim.GaitPhases(d).Count;
+            if (hips != 2) return $"a pair of {label} has {hips} hips";
+            if (!d.Clips.First(c => c.Name == "MOVE").Tracks.Any(t => t.Part == root.Id)) return $"the {label} is not walked";
+        }
+        return null;
+    }
+
+    private static float Area(List<(Vector3 A, Vector3 B, Vector3 C, Raylib_cs.Color Color)> t)
+        => t.Sum(x => Vector3.Cross(x.B - x.A, x.C - x.A).Length() * 0.5f);
+
+    private static (Vector3 Lo, Vector3 Hi) Extent(List<(Vector3 A, Vector3 B, Vector3 C, Raylib_cs.Color Color)> t)
+    {
+        var lo = new Vector3(float.MaxValue);
+        var hi = new Vector3(float.MinValue);
+        foreach (var x in t)
+        {
+            lo = Vector3.Min(lo, Vector3.Min(x.A, Vector3.Min(x.B, x.C)));
+            hi = Vector3.Max(hi, Vector3.Max(x.A, Vector3.Max(x.B, x.C)));
+        }
+        return (lo, hi);
+    }
+
+    private static string? CreatorPatternsKeepShape()
+    {
+        foreach (var shape in new[] { BlockShape.Box, BlockShape.Wedge, BlockShape.Octa })
+            foreach (var pattern in Paints.Patterns.Where(p => p != PaintPattern.Solid))
+            {
+                var b = new Block { Shape = shape, Size = new Vector3(0.8f, 0.6f, 1.4f), Taper = 0.7f, Swatch = 1, Swatch2 = 9, Pattern = pattern };
+                var solid = BlockGeometry.Solid(b);
+                var painted = BlockGeometry.Triangles(b);
+                if (MathF.Abs(Area(solid) - Area(painted)) > 1e-3f * Area(solid)) return $"a {pattern} {shape} changed its surface";
+                var (l0, h0) = Extent(solid);
+                var (l1, h1) = Extent(painted);
+                if (Vector3.Distance(l0, l1) > 1e-4f || Vector3.Distance(h0, h1) > 1e-4f) return $"a {pattern} {shape} changed its size";
+                if (shape == BlockShape.Box && painted.Select(t => t.Color).Distinct().Count() < 2) return $"a {pattern} box shows only one colour";
+            }
+
+        // Tapering reaches the shapes that are not boxes: a gem pinches toward its tip.
+        var gem = new Block { Shape = BlockShape.Octa, Size = Vector3.One, Swatch = 1 };
+        float wide = Extent(BlockGeometry.Solid(gem)).Hi.X;
+        gem.Taper = 0.2f;
+        var pinched = BlockGeometry.Solid(gem);
+        if (!(Extent(pinched).Hi.X < wide - 1e-3f)) return "a tapered gem did not pinch";
+        foreach (var t in pinched)
+            foreach (var v in new[] { t.A, t.B, t.C })
+                if (v.Y > 0.49f && MathF.Abs(v.X) > 1e-3f) return "the gem's tip moved off its axis";
+        return null;
+    }
+
+    private static string? CreatorBenchSoundsRender()
+    {
+        var rng = new Random(3);
+        foreach (var sound in Enum.GetValues<SfxSynth.BenchSound>())
+        {
+            var samples = SfxSynth.Render(SfxSynth.Bench(rng, sound, 6f));
+            float peak = samples.Max(MathF.Abs);
+            if (peak < 0.05f) return $"{sound} is silent";
+            if (samples.Length > SfxSynth.SampleRate * 0.4f) return $"{sound} lasts {samples.Length / (float)SfxSynth.SampleRate:F2}s - too long to fire on every snap";
+        }
+        // The spine's run climbs as it grows.
+        var low = SfxSynth.Bench(new Random(1), SfxSynth.BenchSound.Grow, 3f);
+        var high = SfxSynth.Bench(new Random(1), SfxSynth.BenchSound.Grow, 12f);
+        return high.StartFreq > low.StartFreq ? null : "a longer spine does not stretch higher";
+    }
+
+    private static string? CreatorBendsAtTheJoint()
+    {
+        // Every segment of every game character and of every limb on the bar.
+        var designs = GameCapture.All.Select(e => (e.Label, CopyOf(e))).ToList();
+        foreach (var item in PartCatalog.All.Where(i => i.Build().Count > 1))
+        {
+            var d = Spine.NewCreature();
+            var r = PartCatalog.Instantiate(d, item);
+            r.Parent = Spine.Vertebrae(d)[1].Id;
+            r.Pivot = new Vector3(0.3f, 0.1f, 0f);
+            r.Scale = 1.3f;
+            designs.Add((item.Label, d));
+        }
+
+        var turn = Matrix4x4.CreateFromAxisAngle(Vector3.Normalize(new Vector3(0.3f, 1f, -0.5f)), 0.7f);
+        foreach (var (label, d) in designs)
+            foreach (var seg in d.Parts.Where(p => p.Fixed).Take(12))
+            {
+                var before = DesignPose.Evaluate(d, null, 0f, Matrix4x4.Identity);
+                Vector3 joint = before[seg.Id].Translation;
+                // A point out on the segment, and one out on whatever hangs below it.
+                var (lo, hi) = DesignPose.PartBounds(seg);
+                Vector3 probe = Vector3.Transform(hi, before[seg.Id]);
+                var below = d.Subtree(seg.Id).Skip(1).FirstOrDefault();
+                Vector3? belowProbe = below != null ? before[below.Id].Translation : null;
+
+                if (!DesignPose.TurnAtJoint(seg, before[seg.Parent], turn)) return $"{label}: {seg.Name} would not turn";
+                var after = DesignPose.Evaluate(d, null, 0f, Matrix4x4.Identity);
+
+                if (Vector3.Distance(after[seg.Id].Translation, joint) > 1e-3f)
+                    return $"{label}: bending {seg.Name} moved its joint by {Vector3.Distance(after[seg.Id].Translation, joint):F4}";
+                Vector3 want = joint + Vector3.TransformNormal(probe - joint, turn);
+                Vector3 got = Vector3.Transform(hi, after[seg.Id]);
+                if (Vector3.Distance(want, got) > 2e-3f * MathF.Max(1f, (probe - joint).Length()))
+                    return $"{label}: {seg.Name} turned {Vector3.Distance(want, got):F4} off the drag";
+                if (below != null && belowProbe is { } bp)
+                {
+                    Vector3 wantBelow = joint + Vector3.TransformNormal(bp - joint, turn);
+                    if (Vector3.Distance(after[below.Id].Translation, wantBelow) > 2e-3f * MathF.Max(1f, (bp - joint).Length()))
+                        return $"{label}: {below.Name} came away from {seg.Name} when it bent";
+                }
+            }
         return null;
     }
 }

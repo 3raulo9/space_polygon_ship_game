@@ -193,6 +193,15 @@ public enum Msg : byte
     /// and acts. Nothing about a command's meaning is decided on the machine that typed it.</para>
     /// </summary>
     Chat = 29,
+
+    /// <summary>
+    /// Host → one client, reliable: refused at the door because the two of you are not
+    /// running the same mods. Carries a few words saying what the host has installed, so the
+    /// refusal can tell the guest what they are missing rather than only that something is.
+    /// A modded weapon's index is its byte on the wire, so two machines with different mods
+    /// folders would be handing each other the wrong swords — this is the only safe answer.
+    /// </summary>
+    ModsDiffer = 30,
 }
 
 /// <summary>
@@ -1097,13 +1106,28 @@ public sealed class Session
     private void PushHello()
     {
         byte[] name = Encode(LocalName);
-        Span<byte> p = stackalloc byte[3 + 32];
+        Span<byte> p = stackalloc byte[3 + 32 + 4];
         p[0] = (byte)Msg.Hello;
         p[1] = (byte)_helloChassis;
         p[2] = (byte)name.Length;
         name.CopyTo(p.Slice(3, name.Length));
-        _net.Send(0, p.Slice(0, 3 + name.Length), reliable: true);
+        // The mods this machine is running, as one number, after the name. A hello without it
+        // is read as "no mods", which is what a build from before mods existed was running.
+        BitConverter.TryWriteBytes(p.Slice(3 + name.Length, 4), ModPrint);
+        _net.Send(0, p.Slice(0, 3 + name.Length + 4), reliable: true);
     }
+
+    /// <summary>
+    /// The fingerprint of the mods this end is running — <see cref="Modding.Mods.Fingerprint"/>
+    /// unless something has set it. Settable so a self-test can stand a guest with different
+    /// mods beside a host in one process, where both would otherwise read the same registry.
+    /// </summary>
+    public uint ModPrint
+    {
+        get => _modPrint ?? Modding.Mods.Fingerprint;
+        set => _modPrint = value;
+    }
+    private uint? _modPrint;
 
     private PlayerClass _helloChassis;
     private bool _helloWanted;
@@ -1746,6 +1770,22 @@ public sealed class Session
                 string name = DecodeName(payload.AsSpan(3, nameLen));
                 if (name.Length == 0) name = "A PLAYER";
 
+                // Same mods, or no seat. Checked before anything is handed out — a rejoin
+                // included, since somebody could have changed their mods folder in between.
+                uint theirs = payload.Length >= 3 + nameLen + 4
+                    ? BitConverter.ToUInt32(payload.AsSpan(3 + nameLen, 4))
+                    : 0u;
+                if (theirs != ModPrint)
+                {
+                    byte[] what = Encode(Modding.Mods.Summary);
+                    var no = new byte[2 + what.Length];
+                    no[0] = (byte)Msg.ModsDiffer;
+                    no[1] = (byte)what.Length;
+                    what.CopyTo(no, 2);
+                    _net.Send(from, no, reliable: true);
+                    break;
+                }
+
                 long identity = _net.IdentityOf(from);
 
                 // A known account is a rejoin: hand them back the very seat they left, with the
@@ -2284,6 +2324,16 @@ public sealed class Session
                 Rejected = "THAT MATCH IS FULL";
                 _helloWanted = false;
                 break;
+
+            case Msg.ModsDiffer when !IsHost:
+            {
+                string hosts = payload.Length >= 2 && payload.Length >= 2 + payload[1]
+                    ? DecodeName(payload.AsSpan(2, payload[1]))
+                    : "";
+                Rejected = hosts.Length > 0 ? $"MODS DIFFER - HOST: {hosts}" : "MODS DIFFER FROM HOST";
+                _helloWanted = false;
+                break;
+            }
 
             // Client → host: somebody pointed at something. The host is the only thing that
             // may say which seat did it — a payload naming its own seat is a payload that
