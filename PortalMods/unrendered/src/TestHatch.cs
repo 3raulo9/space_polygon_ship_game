@@ -98,6 +98,13 @@ public static class TestHatch
             w.Player.Heading = MathF.Atan2(to.X, to.Y);
         }
 
+        // Back home: turn to face the Minecraft player standing in UNRENDERED.
+        if (Plan.Contains("lookvisitor") && !Realm.Active && Visitors.FirstIn(w) is { } vp)
+        {
+            var to = Unrendered.Core.Torus.NearestImage(vp, w.Player.Position) - w.Player.Position;
+            if (to.LengthSquared() > 0.01f) w.Player.Heading = MathF.Atan2(to.X, to.Y);
+        }
+
         if (!Realm.Active) { _since = -1; return; }
         double now = Raylib_cs.Raylib.GetTime();
         if (_since < 0) _since = now;

@@ -503,6 +503,10 @@ public static class Visitors
 
     // --- Drawing them, in UNRENDERED --------------------------------------------------
 
+    /// <summary>Where the first visitor in this world stands, for the test hatch to look at.</summary>
+    public static Vector2? FirstIn(GameWorld w)
+        => _all.Values.FirstOrDefault(v => ReferenceEquals(v.World, w))?.Pos;
+
     public static bool AnyLookIn(GameWorld w) => _all.Values.Any(v => ReferenceEquals(v.World, w));
 
     /// <summary>Each visitor exactly as Minecraft draws them (keyed: as the composite's mask).</summary>

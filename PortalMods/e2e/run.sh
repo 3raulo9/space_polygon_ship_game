@@ -56,7 +56,7 @@ done
 # --- UNRENDERED ---------------------------------------------------------------------------
 cd "$ROOT/bin/Release/net10.0"
 UNRENDERED_CAPTURE="$OUT/unr-final.png" UNRENDERED_CAPTURE_FRAME=100000000 \
-RIFT_CONNECT=127.0.0.1:25570 RIFT_TEST=portal,link,enter,tour RIFT_SHOTS="$OUT/unr" RIFT_QUIT_AFTER=140 \
+RIFT_CONNECT=127.0.0.1:25570 RIFT_TEST=portal,link,enter,tour,lookvisitor RIFT_SHOTS="$OUT/unr" RIFT_QUIT_AFTER=140 \
   timeout 200 dotnet Unrendered.dll >"$OUT/unr.log" 2>&1 &
 UNR=$!
 
