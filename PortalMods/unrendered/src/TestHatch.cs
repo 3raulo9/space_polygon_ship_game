@@ -50,6 +50,19 @@ public static class TestHatch
             Environment.Exit(0);
         }
         if (Plan.Length == 0 || Rift.World is not { } w) return;
+
+        // An unattended run is about the rift, not about surviving: the test pilot cannot die.
+        // Whatever would have hurt it is logged instead, so a picture of a game-over screen is
+        // never what a run spends its last minute on.
+        var me = w.Player;
+        float lost = (me.MaxHealth - me.Health) + (me.MaxShield - me.Shield);
+        if (lost > 0.5f)
+        {
+            Rift.Log($"test hatch: the pilot would have taken {lost:0.0} ({(Realm.Active ? "in Minecraft" : "in UNRENDERED")}, " +
+                     $"{w.Enemies.Count} hunters, {w.Soldiers.Count} soldiers near)");
+            me.Health = me.MaxHealth;
+            me.Shield = me.MaxShield;
+        }
         if (Plan.Contains("portal") && !_opened)
         {
             _opened = true;
