@@ -299,6 +299,11 @@ public static partial class SelfTest
         // --- The chat and its console -----------------------------------------------
         failures += RunChatChecks();
 
+        // --- The mods folder, and the swords in it ----------------------------------
+        // Installs exactly what each check needs and leaves the registry empty after, so the
+        // blocks below still run against an unmodded game.
+        failures += RunModChecks();
+
         // The FLOWER: a chassis made almost entirely of refusals, none of which a screenshot
         // can tell apart from a broken one. Its own block, same reasoning as above.
         failures += RunFlowerChecks();

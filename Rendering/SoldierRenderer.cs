@@ -2,6 +2,7 @@ using System.Numerics;
 using Raylib_cs;
 using Unrendered.Core;
 using Unrendered.Entities;
+using Unrendered.Modding;
 
 namespace Unrendered.Rendering;
 
@@ -82,6 +83,12 @@ public sealed class SoldierRenderer
         // them do are then the same motion by construction.
         StepOwnBody(world, p, rig, elapsed);
 
+        // A modded weapon in the right fist, and how far through a swing it is. Worked out
+        // before anything asks where the right hand is, because the swing carries the hand —
+        // and the launcher in it, and the cable leaving that launcher — along with the blade.
+        ModWeapon? held = p.Soldier != null ? Mods.Weapon(p.HeldWeapon) : null;
+        StepSwing(p, held);
+
         // Where the launchers sit in view. The cables leave from here rather than from
         // the body's own hips, so the line the player watches pay out is visibly coming
         // out of the thing in their hands.
@@ -106,7 +113,114 @@ public sealed class SoldierRenderer
             DrawAnchorGhost(ghost, eyeXZ, world.AnchorIsWeak, elapsed);
 
         DrawArms(view, rig);
+        if (held != null) DrawHeldWeapon(view, held);
         DrawMuzzleFlash(view, rig, p, elapsed);
+    }
+
+    // --- A modded weapon in hand ------------------------------------------------------
+
+    /// <summary>How far through the current swing the viewmodel is, 0..1; 1 is at rest.</summary>
+    private float _swingT = 1f;
+    private int _swingSeen = int.MinValue;
+    private float _swingLength = 0.4f;
+
+    /// <summary>Where the swing has carried the right hand this frame, in view space
+    /// (right, up, forward). Zero at rest. Read by <see cref="HandAt"/>.</summary>
+    private Vector3 _handShift;
+
+    /// <summary>Which way the blade points this frame, in view space.</summary>
+    private Vector3 _bladeDir = SwingRest;
+
+    /// <summary>
+    /// How big a held weapon is drawn in view. Under the figure's own size — the hand is
+    /// sixty centimetres from the eye, and a blade at full length from there is a wall of
+    /// steel across half the frame rather than something being held.
+    /// </summary>
+    private const float ViewScale = 0.62f;
+
+    // The swing as four poses of the blade, in view space: at rest, held up and back off the
+    // right shoulder; wound up further out; the strike, straight down the line of sight; and
+    // the follow-through low across to the left. Each with the hand's own travel.
+    private static readonly Vector3 SwingRest = Vector3.Normalize(new(-0.25f, 0.80f, 0.55f));
+    private static readonly Vector3 SwingWind = Vector3.Normalize(new(0.55f, 0.75f, 0.15f));
+    private static readonly Vector3 SwingStrike = Vector3.Normalize(new(-0.35f, -0.05f, 1f));
+    private static readonly Vector3 SwingFollow = Vector3.Normalize(new(-0.85f, -0.45f, 0.30f));
+
+    private static readonly Vector3 ShiftWind = new(0.06f, 0.08f, -0.06f);
+    private static readonly Vector3 ShiftStrike = new(-0.16f, -0.02f, 0.14f);
+    private static readonly Vector3 ShiftFollow = new(-0.34f, -0.12f, 0.04f);
+
+    /// <summary>
+    /// Advances the viewmodel's swing off the craft's counter. Its own clock rather than the
+    /// body's slash: the arms in frame are held at a framing chosen for the picture, and a
+    /// sword swung by the body's wrist at <see cref="ArmGain"/> would barely leave the corner
+    /// of the screen. A swing has to be seen to cross the view, or it reads as nothing.
+    /// </summary>
+    private void StepSwing(PlayerTank p, ModWeapon? held)
+    {
+        if (held == null)
+        {
+            _swingT = 1f;
+            _swingSeen = p.SwingSeq;
+            _handShift = Vector3.Zero;
+            _bladeDir = SwingRest;
+            return;
+        }
+
+        if (_swingSeen == int.MinValue) _swingSeen = p.SwingSeq;
+        else if (_swingSeen != p.SwingSeq)
+        {
+            _swingSeen = p.SwingSeq;
+            _swingT = 0f;
+            // Never longer than the weapon's own pace, so a fast blade's swings do not stack
+            // into one long wave, and never so short a slow one snaps.
+            _swingLength = Math.Clamp(held.Cooldown * 0.8f, 0.18f, 0.5f);
+        }
+
+        if (_swingT < 1f)
+            _swingT = MathF.Min(1f, _swingT + Raylib.GetFrameTime() / _swingLength);
+
+        float t = _swingT;
+        (Vector3 dir, Vector3 shift) = t switch
+        {
+            < 0.22f => Blend(SwingRest, SwingWind, Vector3.Zero, ShiftWind, t / 0.22f),
+            < 0.45f => Blend(SwingWind, SwingStrike, ShiftWind, ShiftStrike, (t - 0.22f) / 0.23f),
+            < 0.62f => Blend(SwingStrike, SwingFollow, ShiftStrike, ShiftFollow, (t - 0.45f) / 0.17f),
+            _ => Blend(SwingFollow, SwingRest, ShiftFollow, Vector3.Zero, (t - 0.62f) / 0.38f),
+        };
+        _bladeDir = dir;
+        _handShift = shift;
+
+        static (Vector3, Vector3) Blend(Vector3 d0, Vector3 d1, Vector3 s0, Vector3 s1, float k)
+        {
+            k = k * k * (3f - 2f * k);
+            return (Vector3.Normalize(Vector3.Lerp(d0, d1, k)), Vector3.Lerp(s0, s1, k));
+        }
+    }
+
+    /// <summary>
+    /// The weapon in the right fist: its own boxes, turned so +Y runs up the blade along
+    /// <see cref="_bladeDir"/> and the flat faces the camera, and placed in the hand.
+    /// </summary>
+    private void DrawHeldWeapon(ViewFrame view, ModWeapon w)
+    {
+        Vector3 blade = Vector3.Normalize(view.Right * _bladeDir.X + view.Up * _bladeDir.Y
+                                        + view.Forward * _bladeDir.Z);
+        // Across the edge: the camera's right, squared off against the blade, so the wide
+        // side of the blade is the side the player sees.
+        Vector3 across = view.Right - blade * Vector3.Dot(view.Right, blade);
+        if (across.LengthSquared() < 1e-4f) across = view.Up - blade * Vector3.Dot(view.Up, blade);
+        across = Vector3.Normalize(across);
+        Vector3 flat = Vector3.Cross(across, blade);
+
+        Vector3 grip = HandAt(view, right: true, forward: 0.06f) + view.Up * 0.02f;
+        float s = ViewScale;
+        var m = new Matrix4x4(
+            across.X * s, across.Y * s, across.Z * s, 0f,
+            blade.X * s, blade.Y * s, blade.Z * s, 0f,
+            flat.X * s, flat.Y * s, flat.Z * s, 0f,
+            grip.X, grip.Y, grip.Z, 1f);
+        ModWeaponRenderer.Mesh(w).Draw(m, view.Eye);
     }
 
     /// <summary>
@@ -507,6 +621,9 @@ public sealed class SoldierRenderer
         float x = (right ? HandX : -HandX) - moved.X * ArmGain;
         float y = HandY + moved.Y * ArmGain;
         float z = HandZ + forward + moved.Z * ArmGain;
+
+        // A modded weapon's swing carries the right hand with it. Zero when nothing is held.
+        if (right) { x += _handShift.X; y += _handShift.Y; z += _handShift.Z; }
 
         return view.At(x, y, z);
     }

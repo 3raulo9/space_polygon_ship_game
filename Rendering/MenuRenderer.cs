@@ -39,8 +39,127 @@ internal static class MenuRenderer
         {
             case SettingsScreen.Page.Controls: DrawControls(screen, elapsed, alpha); break;
             case SettingsScreen.Page.Audio: DrawAudio(screen, elapsed, alpha); break;
+            case SettingsScreen.Page.Mods: DrawMods(screen, elapsed, alpha); break;
             default: DrawSettingsRoot(screen, elapsed, alpha); break;
         }
+    }
+
+    // --- Settings: the mods folder ---
+
+    /// <summary>
+    /// Every file in the mods folder and what became of it: its name and what it adds when it
+    /// loaded, FAILED in the warning colour when it did not, and — for whichever one the cursor
+    /// is on — its description, or the reason it failed, written out under the list. A mod
+    /// that does nothing and says nothing is a mod nobody can fix.
+    /// </summary>
+    private static void DrawMods(SettingsScreen screen, float elapsed, byte alpha)
+    {
+        DrawPanel(alpha);
+        DrawHeading("MODS", elapsed, alpha);
+
+        Font font = Raylib.GetFontDefault();
+        const int size = 10;
+        const int top = 76;
+        const int step = 13;
+        var all = Modding.Mods.All;
+
+        if (all.Count == 0)
+        {
+            DrawCentredText(font, "NO MODS INSTALLED", top + 6, Scale(Palette.HudChrome, 0.6f), alpha);
+            DrawCentredText(font, "ONE .JSON FILE PER MOD", top + 26, Scale(Palette.HudChrome, 0.4f), alpha);
+            DrawCentredText(font, "GOES IN THE MODS FOLDER", top + 38, Scale(Palette.HudChrome, 0.4f), alpha);
+        }
+        else
+        {
+            int last = Math.Min(all.Count, screen.ModScroll + SettingsScreen.ModRowsVisible);
+            int y = top;
+            for (int i = screen.ModScroll; i < last; i++)
+            {
+                Modding.ModInfo m = all[i];
+                bool selected = i == screen.ModRow;
+
+                string label = m.Loaded
+                    ? (m.Name + " " + m.Version).Trim()
+                    : m.File.ToUpperInvariant();
+                string status = !m.Loaded ? "FAILED"
+                    : m.Weapons.Count == 1 ? "1 WEAPON"
+                    : $"{m.Weapons.Count} WEAPONS";
+
+                Color lc = selected ? Palette.HudChrome : Scale(Palette.HudChrome, 0.5f);
+                Color sc = m.Loaded
+                    ? (selected ? Palette.GridNear : Scale(Palette.GridNear, 0.65f))
+                    : (selected ? new Color(220, 90, 70, 255) : Palette.Warning);
+
+                Raylib.DrawTextEx(font, label, new Vector2(ColLeft, y), size, Spacing, Fade(lc, alpha));
+                Vector2 sm = Raylib.MeasureTextEx(font, status, size, Spacing);
+                Raylib.DrawTextEx(font, status, new Vector2(ColRight - sm.X, y), size, Spacing,
+                    Fade(sc, alpha));
+                if (selected)
+                    Raylib.DrawTextEx(font, ">", new Vector2(ColLeft - 10, y), size, Spacing,
+                        Fade(Palette.HudChrome, alpha));
+                y += step;
+            }
+
+            if (screen.ModScroll > 0) DrawTick(font, "^", top - 11, alpha);
+            if (last < all.Count) DrawTick(font, "v", top + step * SettingsScreen.ModRowsVisible - 4, alpha);
+        }
+
+        // What the focused mod is, or why it failed, wrapped under the list.
+        // Three lines: a failure's whole reason, or a description and who made it.
+        if (screen.FocusedMod is { } focus)
+        {
+            bool byLine = focus.Loaded && focus.Author.Length > 0;
+            string text = focus.Loaded ? focus.Description : focus.Error ?? "";
+            Color tc = focus.Loaded ? Scale(Palette.HudChrome, 0.45f) : new Color(220, 90, 70, 255);
+            int ly = 146;
+            foreach (string line in Wrap(font, text.ToUpperInvariant(), ColRight - ColLeft, size,
+                         byLine ? 2 : 3))
+            {
+                Raylib.DrawTextEx(font, line, new Vector2(ColLeft, ly), size, Spacing, Fade(tc, alpha));
+                ly += 11;
+            }
+            if (byLine)
+                Raylib.DrawTextEx(font, "BY " + focus.Author, new Vector2(ColLeft, ly), size, Spacing,
+                    Fade(Scale(Palette.HudChrome, 0.3f), alpha));
+        }
+
+        DrawCentredRow(font, "OPEN FOLDER", screen.ModRow == screen.ModOpenRow, 184, alpha, small: true);
+        DrawCentredRow(font, "RELOAD", screen.ModRow == screen.ModReloadRow, 196, alpha, small: true);
+        DrawCentredRow(font, "BACK", screen.ModRow == screen.ModBackRow, 208, alpha, small: true);
+
+        DrawFooterHint(screen.ModNotice ?? "UP DN MOVE · ENTER SELECT · ESC BACK", alpha, null, 10);
+    }
+
+    private static void DrawCentredText(Font font, string text, int y, Color c, byte alpha)
+    {
+        const int size = 10;
+        Vector2 m = Raylib.MeasureTextEx(font, text, size, Spacing);
+        Raylib.DrawTextEx(font, text, new Vector2((W - m.X) * 0.5f, y), size, Spacing, Fade(c, alpha));
+    }
+
+    /// <summary>Breaks text into at most <paramref name="maxLines"/> lines that fit
+    /// <paramref name="width"/>, the last one cut with an ellipsis if it all would not.</summary>
+    private static List<string> Wrap(Font font, string text, int width, int size, int maxLines)
+    {
+        var lines = new List<string>();
+        string line = "";
+        foreach (string word in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string tryLine = line.Length == 0 ? word : line + " " + word;
+            if (Raylib.MeasureTextEx(font, tryLine, size, Spacing).X <= width) { line = tryLine; continue; }
+            if (line.Length > 0) lines.Add(line);
+            line = word;
+            if (lines.Count == maxLines) break;
+        }
+        if (lines.Count < maxLines && line.Length > 0) lines.Add(line);
+        else if (line.Length > 0 && lines.Count == maxLines)
+        {
+            string tail = lines[^1];
+            while (tail.Length > 0 && Raylib.MeasureTextEx(font, tail + "...", size, Spacing).X > width)
+                tail = tail[..^1];
+            lines[^1] = tail + "...";
+        }
+        return lines;
     }
 
     // --- Title: flickering, occasionally-dropped glyphs ---

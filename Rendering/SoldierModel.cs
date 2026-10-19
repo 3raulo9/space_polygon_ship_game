@@ -231,6 +231,27 @@ public sealed class SoldierModel
     }
 
     /// <summary>
+    /// Something held in one fist, drawn after the figure it belongs to with the same pose,
+    /// scale and height. Placed at the wrist and turned with the forearm, exactly as the
+    /// squads' blades are — so a modded weapon follows every swing, flinch and slash the
+    /// animator puts the arm through. <paramref name="mesh"/> keeps its own colours: it is
+    /// whatever the mod file said it was made of, not part of the figure's paint.
+    /// </summary>
+    public void DrawInHand(PolyMesh mesh, Vector2 pos, float height, float heading,
+        Vector3 cameraPos, in SoldierPose pose, bool right, float scale = 1f)
+    {
+        _scale = scale;
+        _baseY = height;
+
+        bool left = !right;
+        LimbPose arm = left ? pose.LeftArm : pose.RightArm;
+        Vector3 shoulder = SoldierSkeleton.Shoulder(pose, left);
+        Vector3 elbow = shoulder + SoldierSkeleton.Segment(SegLen, arm.UpperPitch, arm.UpperRoll);
+        Vector3 wrist = elbow + SoldierSkeleton.Segment(SegLen, arm.LowerPitch, arm.LowerRoll);
+        DrawPart(mesh, pos, heading, cameraPos, wrist, null, arm.LowerPitch, arm.LowerRoll);
+    }
+
+    /// <summary>
     /// Draws one part at a pivot given in the <em>model's</em> frame, turning that pivot
     /// into a world placement. The mesh's own draw handles the rest, so a part is placed and
     /// posed in one call and nothing here has to know about matrices.
@@ -245,7 +266,7 @@ public sealed class SoldierModel
     /// dozen call sites.
     /// </summary>
     private void DrawPart(PolyMesh mesh, Vector2 pos, float heading, Vector3 cameraPos,
-        Vector3 pivot, Color tint, float pitch = 0f, float roll = 0f, float yaw = 0f)
+        Vector3 pivot, Color? tint, float pitch = 0f, float roll = 0f, float yaw = 0f)
     {
         pivot *= _scale;
 

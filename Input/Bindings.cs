@@ -81,6 +81,9 @@ public sealed class Bindings
             InputAction.LeftHook => One(KeyboardKey.Q),
             InputAction.RightHook => One(KeyboardKey.E),
             InputAction.HighJump => K(KeyboardKey.Enter, KeyboardKey.Space),
+            // Z, which no chassis reads: under the left hand beside the hooks, and far enough
+            // from Q that letting go of a blade is never a hook thrown by mistake.
+            InputAction.DropWeapon => One(KeyboardKey.Z),
 
             InputAction.Beat => K(KeyboardKey.W, KeyboardKey.Space),
             InputAction.Brake => One(KeyboardKey.S),

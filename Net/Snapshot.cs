@@ -67,7 +67,8 @@ public static class Snapshot
     /// pool that decides whether a craft is about to die, every machine draws a bar of it over
     /// every team-mate, and a client that could only be told about its shields would show a
     /// full-health mate a heartbeat before they went down.</para></summary>
-    private const int PlayerBytes = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1;
+    private const int PlayerBytes = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1
+                                  + 2 + 2;   // flinch angle + seq, held weapon + swing seq
     private const int EnemyBytes = 1 + 2 + 2 + 2 + 1;   // id, x, y, heading, elite
     private const int RoundBytes = 2 + 2 + 2 + 2 + 2 + 1 + 1;
 
@@ -89,7 +90,8 @@ public static class Snapshot
 
     /// <summary>Worst case for a field packet: the header, the capped field, and the salvage.</summary>
     public const int MaxFieldSize = 8 + MaxEnemies * EnemyBytes + MaxRounds * RoundBytes
-                                  + 1 + MaxPickups * 5;
+                                  + 1 + MaxPickups * 5
+                                  + 1 + MaxGroundWeapons * GroundWeaponBytes;
 
     /// <summary>The larger of the two, so one buffer serves both.</summary>
     public const int MaxSize = MaxPlayerSize > MaxFieldSize ? MaxPlayerSize : MaxFieldSize;
@@ -148,6 +150,12 @@ public static class Snapshot
             dst[at++] = (byte)Math.Clamp(
                 (p.FlinchAngle + MathF.PI) / MathF.Tau * 255f, 0f, 255f);
             dst[at++] = (byte)(p.FlinchSeq & 0xFF);
+
+            // The modded weapon in their hand (0 for none, otherwise its index plus one) and
+            // a swing counter, so every machine draws the blade and plays each swing once —
+            // the same counter trick as the flinch above.
+            dst[at++] = (byte)(p.HeldWeapon is >= 0 and < 255 ? p.HeldWeapon + 1 : 0);
+            dst[at++] = (byte)(p.SwingSeq & 0xFF);
         }
         return at;
     }
@@ -192,6 +200,8 @@ public static class Snapshot
                 float hostDecay = src[at++] / 255f;
                 float flinchAngle = src[at++] / 255f * MathF.Tau - MathF.PI;
                 int flinchSeq = src[at++];
+                int heldWeapon = src[at++] - 1;
+                int swingSeq = src[at++];
 
                 if (seat < 0) continue;
                 // Grow the roster to cover any seat the host names. A client only builds seats
@@ -220,6 +230,11 @@ public static class Snapshot
                     bool held = (mark & Mark.Captured) != 0;
                     me.Captured = held;
                     me.Away = (mark & Mark.Away) != 0;
+                    // What is in our own hand is the host's to say — a client never predicts
+                    // picking a weapon up or letting it go. The swing counter is ours, though:
+                    // this machine predicts its own swings, and taking the host's count would
+                    // replay every one of them a round trip late.
+                    me.HeldWeapon = heldWeapon;
                     world.ReconcileLocal(Torus.Wrap(new Vector2(x, y)), h, head, pitch,
                         follow: held || me.Away, ackedInputTick: ackedInputTick);
                     continue;
@@ -262,6 +277,11 @@ public static class Snapshot
                 // draws it to notice the counter change.
                 p.FlinchAngle = flinchAngle;
                 if ((p.FlinchSeq & 0xFF) != flinchSeq) p.FlinchSeq = flinchSeq;
+
+                // Their blade and their swings. Only the low byte travels, so the counter is
+                // compared on that and replaced outright when it moves.
+                p.HeldWeapon = heldWeapon;
+                if ((p.SwingSeq & 0xFF) != swingSeq) p.SwingSeq = swingSeq;
             }
             return tick;
         }
@@ -356,7 +376,53 @@ public static class Snapshot
             pk++;
         }
         dst[pkAt] = (byte)pk;
+
+        // The modded weapons lying on the grid — nearest first, like the salvage, and for the
+        // same reason. Height travels because a weapon can still be falling.
+        int gwAt = at++;
+        int gw = 0;
+        foreach (int i in NearestGroundWeapons(world, eye))
+        {
+            GroundWeapon g = world.GroundWeapons[i];
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(g.Position.X, PosScale)); at += 2;
+            BitConverter.TryWriteBytes(dst.Slice(at, 2), Q(g.Position.Y, PosScale)); at += 2;
+            dst[at++] = (byte)Math.Clamp(g.Height * 4f, 0f, 255f);
+            dst[at++] = (byte)Math.Clamp(g.Weapon, 0, 255);
+            gw++;
+        }
+        dst[gwAt] = (byte)gw;
         return at;
+    }
+
+    /// <summary>How many modded weapons a field packet carries, and their size: x, y, height
+    /// in quarter metres, and which weapon.</summary>
+    private const int MaxGroundWeapons = World.World.MaxGroundWeapons;
+    private const int GroundWeaponBytes = 2 + 2 + 1 + 1;
+
+    private static readonly int[] _gwIndex = new int[MaxGroundWeapons];
+    private static readonly float[] _gwDist = new float[MaxGroundWeapons];
+
+    /// <summary>The <see cref="MaxGroundWeapons"/> closest to this recipient, nearest first.
+    /// The same insertion as <see cref="NearestSalvage"/>, on its own scratch.</summary>
+    private static ReadOnlySpan<int> NearestGroundWeapons(World.World world, Vector2 eye)
+    {
+        int n = 0;
+        for (int i = 0; i < world.GroundWeapons.Count; i++)
+        {
+            float d = Torus.DistanceSquared(world.GroundWeapons[i].Position, eye);
+            if (n == MaxGroundWeapons && d >= _gwDist[n - 1]) continue;
+
+            int at = n < MaxGroundWeapons ? n++ : MaxGroundWeapons - 1;
+            while (at > 0 && _gwDist[at - 1] > d)
+            {
+                _gwDist[at] = _gwDist[at - 1];
+                _gwIndex[at] = _gwIndex[at - 1];
+                at--;
+            }
+            _gwDist[at] = d;
+            _gwIndex[at] = i;
+        }
+        return _gwIndex.AsSpan(0, n);
     }
 
     /// <summary>How many pickups a field packet carries. Above the world's own hard ceiling
@@ -1110,6 +1176,24 @@ public static class Snapshot
                 float py = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
                 var kind = (Entities.PickupKind)src[at++];
                 world.Pickups[i].NetSet(Torus.Wrap(new Vector2(px, py)), kind);
+            }
+
+            // The modded weapons, kept between packets like the salvage cells so each one
+            // eases down rather than snapping, and rebuilt only when the count moves.
+            int gw = src[at++];
+            if (gw != world.GroundWeapons.Count)
+            {
+                world.GroundWeapons.Clear();
+                for (int i = 0; i < gw; i++)
+                    world.GroundWeapons.Add(new GroundWeapon(Vector2.Zero, 0));
+            }
+            for (int i = 0; i < gw; i++)
+            {
+                float gx = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+                float gy = BitConverter.ToInt16(src.Slice(at, 2)) / PosScale; at += 2;
+                float gh = src[at++] / 4f;
+                int weapon = src[at++];
+                world.GroundWeapons[i].NetSet(Torus.Wrap(new Vector2(gx, gy)), gh, weapon);
             }
             return tick;
         }

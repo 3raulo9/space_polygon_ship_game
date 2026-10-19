@@ -1109,6 +1109,9 @@ public sealed partial class World : IAnchorField
                 Pickups.Add(new Pickup(RandomPointAroundPlayer(SpawnMinRange, SpawnMaxRange), PickupKind.Ammo));
         }
 
+        // Whatever the mods folder added that lies on the grid from the start — see WorldMods.
+        SeedModWeapons(capture);
+
         // One hunter to open on. Capture drops it in close on-axis so its polygon
         // silhouette can be inspected; play fades it in from a random bearing out in
         // the fog, and the director adds more over time. A host who turned enemies off
@@ -1673,6 +1676,10 @@ public sealed partial class World : IAnchorField
             // what settles whether the core was really there to spend.
             int equip = input.WeaponSlotPressed();
             if (equip >= 0) UseWeaponSlot(equip, who);
+
+            // A modded weapon let go of. Off the input frame like the equip slots, so a remote
+            // player's key reaches the host that actually owns the decision.
+            if (input.DropWeaponPressed) DropHeldWeapon(who);
         }
         else
         {
@@ -1809,6 +1816,7 @@ public sealed partial class World : IAnchorField
             // Salvage the host placed just bobs and turns — a local clock, since the client
             // never collects it (the host does, and drops it from the next packet).
             foreach (var pk in Pickups) pk.Update(dt);
+            AnimateGroundWeapons(dt);
             UpdateSmoke(dt);
             // The skyline ages on the client too. It never *cuts* anything here — the damage
             // arrives from the host — but a building the host has said is coming down has to
@@ -1940,6 +1948,7 @@ public sealed partial class World : IAnchorField
         UpdateStructures(dt);
         SpillFragmentsOfTheDead();
         UpdatePickups(dt);
+        UpdateGroundWeapons(dt);
         // How far off the hunters are willing to sit. Fixed everywhere except SOLUNE after
         // dark, where they come right in — pushed onto the live hulls each tick rather than
         // baked in at spawn, so a hunter that was fading in at dusk closes as the light goes
@@ -5098,6 +5107,9 @@ public sealed partial class World : IAnchorField
         // They share the fire cooldown, and a player holding fire while clicking for a
         // rocket should get the rocket rather than have it eaten by the stream.
         if (input.RocketPressed) FireSoldierRocket(who);
+        // A blade out of the mods folder takes FIRE while it is in hand; the rifle is back the
+        // moment it is put down. See WorldMods.
+        else if (who.HeldWeapon >= 0) { if (input.RifleDown) SwingHeldWeapon(who); }
         else if (input.RifleDown) FireSoldierRifle(who);
     }
 
@@ -6073,6 +6085,8 @@ public sealed partial class World : IAnchorField
         // A soldier is carrying a launcher, a spool and a harness full of machinery, and all
         // of it breaks the same way a hunter's does.
         ScatterMaterials(s.Position);
+        // And sometimes a blade, if a mod has given them one to drop.
+        DropBladeFrom(s);
 
         // One unit off a DESCENT wave. A squad costs the wave four of its roster when it
         // arrives, so it has to give four back as its people fall, or the bar never empties.

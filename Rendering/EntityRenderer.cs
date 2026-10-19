@@ -265,6 +265,9 @@ public sealed class EntityRenderer
         // over the towers they are anchored to rather than under them.
         _squads.Draw(world, cameraPos, (float)Raylib.GetTime());
 
+        // Modded weapons nobody is holding — stood in the grid, or still coming down.
+        ModWeaponRenderer.DrawGround(world, cameraPos);
+
         // Floating pickups: bob at waist height and turn slowly on the spot, so the
         // charge band and bullet tip catch the light as they drift in the fog, and the
         // parts a kill scattered lie turning just off the deck where the body went down.
@@ -860,6 +863,16 @@ public sealed class EntityRenderer
         SoldierAnimator anim = _figures.For(craft);
         _figures.Flinch(craft, craft.FlinchSeq, craft.FlinchAngle, craft.FlinchAmount);
 
+        // A swing of a modded weapon, caught on the counter moving — once per swing, however
+        // the frame rate compares to the snapshot rate. The first sighting only records it, so
+        // a team-mate who comes into view is not seen to swing at nothing.
+        if (!_swingSeen.TryGetValue(craft, out int seenSwing)) _swingSeen[craft] = craft.SwingSeq;
+        else if (seenSwing != craft.SwingSeq)
+        {
+            _swingSeen[craft] = craft.SwingSeq;
+            if (craft.HeldWeapon >= 0) anim.Slash(right: true);
+        }
+
         anim.Step(new SoldierAnimator.Signals(
             Position: craft.Position, Height: craft.Height, Heading: craft.Heading,
             Velocity: vel,
@@ -882,7 +895,15 @@ public sealed class EntityRenderer
             build.PartColor(PlayerClass.Soldier, 2),
             build.PartColor(PlayerClass.Soldier, 3),
             Palette.SoldierBlade, anim.Pose, blades: false, scale);
+
+        // And whatever out of the mods folder is in their right hand.
+        if (Modding.Mods.Weapon(craft.HeldWeapon) is { } held)
+            _soldierModel.DrawInHand(ModWeaponRenderer.HeldMesh(held), pos, craft.Height,
+                craft.Heading, cameraPos, anim.Pose, right: true, scale);
     }
+
+    /// <summary>The last swing counter seen on each craft — see <see cref="DrawSoldierCraft"/>.</summary>
+    private readonly Dictionary<PlayerTank, int> _swingSeen = new();
 
     /// <summary>
     /// Remembers where a body was so its momentum can be recovered. The snapshot carries a

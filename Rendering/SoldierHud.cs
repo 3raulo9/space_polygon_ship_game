@@ -47,7 +47,22 @@ internal static class SoldierHud
         DrawCrosshair(world, rig);
         DrawHookIndicators(rig);
         if (p.Soldier != null) DrawRockets(p);
+        if (p.Soldier != null) DrawHeldWeapon(p);
         DrawRigState(p, rig);
+    }
+
+    /// <summary>
+    /// The modded weapon in hand, by name, under the rocket pips — and the key that puts it
+    /// down, because while it is held FIRE swings it and the rifle is gone until it is.
+    /// A player who picked up a sword by walking over it has to be told how to stop swinging.
+    /// </summary>
+    private static void DrawHeldWeapon(PlayerTank p)
+    {
+        if (Modding.Mods.Weapon(p.HeldWeapon) is not { } w) return;
+        const int y = StripH + 6 + 18;
+        PixelFont.Draw(w.Name, 10, y, 1, Ink);
+        string key = Input.InputMap.Active.Bindings[Input.InputAction.DropWeapon].Primary.Label;
+        if (key.Length > 0) PixelFont.Draw(key + " DROP", 10, y + 9, 1, Dim);
     }
 
     // --- The crosshair ---------------------------------------------------------

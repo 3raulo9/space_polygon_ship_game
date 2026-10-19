@@ -56,6 +56,7 @@ public sealed class InputSampler
         if (b.Down(InputAction.LeftHook)) down |= Btn.LeftHook;
         if (b.Down(InputAction.RightHook)) down |= Btn.RightHook;
         if (b.Down(InputAction.HighJump)) down |= Btn.HighJump;
+        if (b.Down(InputAction.DropWeapon)) down |= Btn.DropWeapon;
 
         if (b.Down(InputAction.Beat)) down |= Btn.Beat;
         if (b.Down(InputAction.Brake)) down |= Btn.Brake;

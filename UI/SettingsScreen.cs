@@ -19,11 +19,11 @@ namespace Unrendered.UI;
 /// </summary>
 public sealed class SettingsScreen
 {
-    public enum Page { Root, Controls, Audio }
+    public enum Page { Root, Controls, Audio, Mods }
     public enum Action { None, Back }
 
-    /// <summary>The two doors on the front page, plus the way out.</summary>
-    public enum RootRow { Controls, Audio, Back }
+    /// <summary>The three doors on the front page, plus the way out.</summary>
+    public enum RootRow { Controls, Audio, Mods, Back }
 
     /// <summary>A row on the mixer page. Walked as an enum so the renderer and the input
     /// handler cannot disagree about what is where.</summary>
@@ -131,6 +131,9 @@ public sealed class SettingsScreen
         ControlScroll = 0;
         Capturing = false;
         LastClash = null;
+        ModRow = 0;
+        ModScroll = 0;
+        ModNotice = null;
     }
 
     /// <summary>
@@ -145,8 +148,12 @@ public sealed class SettingsScreen
         {
             "controls" => Page.Controls,
             "sound" => Page.Audio,
+            "mods" => Page.Mods,
             _ => Page.Root,
         };
+        // The mods page is photographed as it stands — never by opening a file browser on
+        // the machine running the capture.
+        if (At == Page.Mods) { ModRow = 0; ModScroll = 0; ModNotice = null; return; }
         if (At != Page.Controls) return;
 
         ControlRow = 0;
@@ -166,6 +173,7 @@ public sealed class SettingsScreen
         {
             Page.Controls => UpdateControls(),
             Page.Audio => UpdateAudio(),
+            Page.Mods => UpdateMods(),
             _ => UpdateRoot(),
         };
     }
@@ -197,10 +205,112 @@ public sealed class SettingsScreen
                 Audio = AudioRow.Master;
                 Core.Audio.PlayBlip();
                 break;
+            case RootRow.Mods:
+                EnterMods();
+                Core.Audio.PlayBlip();
+                break;
             default:
                 return Action.Back;
         }
         return Action.None;
+    }
+
+    // --- The mods page ----------------------------------------------------------------
+    //
+    // A list of every file in the mods folder and what became of it, and the way to that
+    // folder. Walking in opens the folder in the system's file browser — the page exists so
+    // that a player can put a mod in, and the first thing they need for that is the folder.
+
+    /// <summary>Set by whoever opened the screen: true when it was reached from the pause
+    /// panel of a running match. The registry is never reloaded under a live match — a
+    /// weapon's index is its byte on the wire — so in a match the page lists what the match
+    /// was started with and RELOAD says where to go instead.</summary>
+    public bool InMatch { get; set; }
+
+    /// <summary>The cursor: a mod in the list, or one of the three rows under it.</summary>
+    public int ModRow { get; private set; }
+
+    /// <summary>First mod visible in the list window.</summary>
+    public int ModScroll { get; private set; }
+
+    /// <summary>One line answering the last thing done here — the folder opened, the list
+    /// reloaded — or null.</summary>
+    public string? ModNotice { get; private set; }
+
+    /// <summary>How many mods the list window shows before it scrolls.</summary>
+    public const int ModRowsVisible = 5;
+
+    public int ModCount => Modding.Mods.All.Count;
+    public int ModOpenRow => ModCount;
+    public int ModReloadRow => ModCount + 1;
+    public int ModBackRow => ModCount + 2;
+
+    /// <summary>The mod the cursor is on, or null when it is on one of the rows under the list.</summary>
+    public Modding.ModInfo? FocusedMod
+        => ModRow < ModCount ? Modding.Mods.All[ModRow] : null;
+
+    private void EnterMods()
+    {
+        At = Page.Mods;
+        ModScroll = 0;
+        // Rescan first, so a file put in the folder since boot is listed — then open the
+        // folder, which is where the player is about to go.
+        if (!InMatch) Modding.Mods.Reload();
+        ModRow = ModCount == 0 ? ModOpenRow : 0;
+        ModNotice = Modding.Mods.OpenFolder()
+            ? "OPENED THE MODS FOLDER"
+            : "COULD NOT OPEN THE MODS FOLDER";
+    }
+
+    private Action UpdateMods()
+    {
+        if (InputMap.QuitPressed) { At = Page.Root; return Action.None; }
+
+        int rows = ModCount + 3;
+        if (InputMap.MenuUp) StepModRow(-1, rows);
+        if (InputMap.MenuDown) StepModRow(+1, rows);
+
+        if (!InputMap.MenuConfirm) return Action.None;
+
+        if (ModRow == ModBackRow) { At = Page.Root; Core.Audio.PlayBlip(); return Action.None; }
+
+        if (ModRow == ModOpenRow)
+        {
+            ModNotice = Modding.Mods.OpenFolder()
+                ? "OPENED THE MODS FOLDER"
+                : "COULD NOT OPEN THE MODS FOLDER";
+            Core.Audio.PlayBlip();
+            return Action.None;
+        }
+
+        if (ModRow == ModReloadRow)
+        {
+            if (InMatch)
+            {
+                ModNotice = "RELOAD FROM THE TITLE MENU";
+            }
+            else
+            {
+                Modding.Mods.Reload();
+                int ok = Modding.Mods.All.Count(m => m.Loaded);
+                int bad = ModCount - ok;
+                ModNotice = bad > 0 ? $"LOADED {ok}, {bad} FAILED" : $"LOADED {ok}";
+                ModScroll = 0;
+                // The list may have changed length under the cursor: keep it on RELOAD.
+                ModRow = ModReloadRow;
+            }
+            Core.Audio.PlayBlip();
+        }
+        return Action.None;
+    }
+
+    private void StepModRow(int dir, int rows)
+    {
+        ModRow = (ModRow + dir + rows) % rows;
+        Core.Audio.PlayBlip();
+        if (ModRow >= ModCount) return;   // the three rows under the list leave the view be
+        if (ModRow < ModScroll) ModScroll = ModRow;
+        if (ModRow >= ModScroll + ModRowsVisible) ModScroll = ModRow - ModRowsVisible + 1;
     }
 
     // --- The mixer --------------------------------------------------------------------
@@ -363,6 +473,7 @@ public sealed class SettingsScreen
     {
         RootRow.Controls => "CONTROLS",
         RootRow.Audio => "SOUND",
+        RootRow.Mods => "MODS",
         _ => "BACK",
     };
 

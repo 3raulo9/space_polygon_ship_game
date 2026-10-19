@@ -230,6 +230,15 @@ public sealed class SoldierAnimator
         _slashSide = -_slashSide;   // alternating, so a run of them isn't one gesture twice
     }
 
+    /// <summary>The same arc led by one named arm — a single weapon in one fist, where the
+    /// squads' alternating pair would have the empty hand doing the cutting every other
+    /// swing.</summary>
+    public void Slash(bool right)
+    {
+        _slash = 1f;
+        _slashSide = right ? 1f : -1f;
+    }
+
     /// <summary>
     /// Took a hit from <paramref name="worldAngle"/> — the direction the damage came
     /// <em>from</em>, in world radians, matching the heading convention. Strength 0..1.
