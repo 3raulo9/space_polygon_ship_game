@@ -21,6 +21,20 @@ glxinfo -B >"$OUT/glxinfo.txt" 2>&1 || true
 # --- Minecraft ---------------------------------------------------------------------------
 cd "$ROOT/PortalMods/fabric"
 mkdir -p run
+# No first-launch onboarding, no tutorial toasts, a light client for a software GPU.
+cat > run/options.txt <<'OPT'
+onboardAccessibility:false
+skipMultiplayerWarning:true
+tutorialStep:none
+joinedFirstServer:true
+renderDistance:8
+simulationDistance:8
+maxFps:30
+graphicsMode:0
+renderClouds:"false"
+soundCategory_master:0.0
+pauseOnLostFocus:false
+OPT
 RIFT_AUTOTEST=true ./gradlew runClient --no-daemon --console=plain >"$OUT/mc.log" 2>&1 &
 MC=$!
 
@@ -61,6 +75,10 @@ cp -f "$ROOT/PortalMods/fabric/run/screenshots/"*.png "$OUT/" 2>/dev/null
 cp -f "$ROOT/bin/Release/net10.0/Mods/rift/rift.log" "$OUT/rift.log" 2>/dev/null
 echo "--- RIFT-E2E lines from Minecraft ---"
 grep -a "RIFT-E2E\|Rift:" "$OUT/mc-latest.log" | cut -c1-400 | tail -150
+echo "--- Minecraft warnings and errors ---"
+grep -a "WARN\|ERROR\|Exception\|at net.unrendered" "$OUT/mc-latest.log" | grep -v "Missing sound\|Unable to play\|narrator" | cut -c1-300 | tail -60
+echo "--- UNRENDERED stdout tail ---"
+tail -40 "$OUT/unr.log" 2>/dev/null
 echo "--- UNRENDERED rift.log ---"
 tail -120 "$OUT/rift.log" 2>/dev/null
 ls -la "$OUT" "$OUT/unr"

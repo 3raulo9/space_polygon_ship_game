@@ -54,14 +54,18 @@ public final class AutoTest {
     private static void tick(MinecraftClient mc) {
         ticks++;
         stepTicks++;
-        if (ticks > 20 * 60 * 12 && step != Step.DONE) {
+        if (ticks > 20 * 60 * 9 && step != Step.DONE) {
             log("timed out in step " + step);
             go(Step.DONE);
         }
         switch (step) {
             case TITLE -> {
-                if (mc.currentScreen instanceof TitleScreen && stepTicks > 40) {
-                    CreateWorldScreen.create(mc, mc.currentScreen);
+                // A first launch puts the accessibility onboarding (or a notice) in front of the
+                // title screen; after a short grace, make the world from whatever screen is up.
+                Screen s = mc.currentScreen;
+                if (stepTicks % 100 == 0) log("title step on " + (s == null ? "no screen" : s.getClass().getName()));
+                if ((s instanceof TitleScreen && stepTicks > 40) || (s != null && stepTicks > 200)) {
+                    CreateWorldScreen.create(mc, s instanceof TitleScreen ? s : new TitleScreen());
                     go(Step.CREATING);
                 }
             }
@@ -77,9 +81,12 @@ public final class AutoTest {
                         }
                     }
                     if (stepTicks % 100 == 0) log("no create button yet on " + s.getClass().getSimpleName());
+                } else if (stepTicks % 100 == 0) {
+                    log("creating, screen is " + (s == null ? "none" : s.getClass().getName()));
                 }
             }
             case LOADING -> {
+                if (stepTicks % 200 == 0) log("loading; screen " + (mc.currentScreen == null ? "none" : mc.currentScreen.getClass().getName()) + ", world " + (mc.world != null));
                 if (mc.world != null && mc.player != null && mc.getServer() != null && stepTicks > 100) go(Step.SETUP);
             }
             case SETUP -> {

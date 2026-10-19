@@ -11,6 +11,11 @@ on:
       - '.github/workflows/rift-e2e.yml'
   workflow_dispatch:
 
+# One run at a time: a newer push makes an older run pointless.
+concurrency:
+  group: rift-e2e
+  cancel-in-progress: true
+
 jobs:
   e2e:
     runs-on: ubuntu-latest
