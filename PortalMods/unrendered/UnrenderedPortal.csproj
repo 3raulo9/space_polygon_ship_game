@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- THE RIFT, UNRENDERED side: a code mod. One file, glowstone-rift.dll, dropped into the
+       game's Mods folder beside the .json mods. The game finds the IGameMod in it and calls it
+       from its own loop; nothing of the game is changed or patched.
+
+       It compiles against the game project only to see its types. Neither Unrendered.dll nor
+       Raylib-cs.dll is shipped with it: the game's own are already loaded. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>glowstone-rift</AssemblyName>
+    <RootNamespace>UnrenderedPortal</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Unrendered.csproj" Private="false" />
+  </ItemGroup>
+
+  <!-- The finished mod, ready to drop into <UNRENDERED>/Mods/. -->
+  <Target Name="PackRift" AfterTargets="Build">
+    <Copy SourceFiles="$(OutDir)glowstone-rift.dll" DestinationFolder="$(MSBuildProjectDirectory)\out" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

@@ -339,6 +339,9 @@ public final class RiftVisitors {
         if (p == null) return;
         float amount = m.has("amount") ? m.get("amount").getAsFloat() : 0f;
         if (amount > 0f) p.damage(RiftDamage.source(p.getServerWorld()), amount);
+        // The world they were standing in ended (a run over, a match, no seat left): home.
+        if (m.has("eject") && m.get("eject").getAsBoolean() && p.getServerWorld().getRegistryKey() == RiftMod.RIFT)
+            sendHome(p);
     }
 
     /** A visitor collected UNRENDERED salvage. */

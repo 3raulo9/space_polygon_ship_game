@@ -5,3 +5,8 @@ obj/
 # The listening harness's output (dotnet run -- --audioscene).
 scene.wav
 *.scene.wav
+
+# THE RIFT build output
+PortalMods/unrendered/out/
+PortalMods/unrendered/bin/
+PortalMods/unrendered/obj/
