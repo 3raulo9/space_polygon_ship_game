@@ -120,6 +120,7 @@ public final class CaptureService {
                 if (tell) RiftMod.LOG.info("RIFT-E2E: rents capture: {} entities", r.rents().size());
                 Bridge.sendBin("rents", new JsonObject(), out.toArray());
             }
+            if (tell && !r.avatars().isEmpty()) report.setLength(0);
             for (int i = 0; i < r.avatars().size(); i++) {
                 RiftHooks.EntitySnap s = r.avatars().get(i);
                 Wire.Out out = new Wire.Out(32 * 1024);
@@ -129,6 +130,8 @@ public final class CaptureService {
                 h.addProperty("uuid", r.avatarOwners().get(i).toString());
                 Bridge.sendBin("avatar", h, out.toArray());
             }
+            if (tell && !r.avatars().isEmpty())
+                RiftMod.LOG.info("RIFT-E2E: avatar capture: {} avatars [{}]", r.avatars().size(), report);
         } finally {
             dispatcher.setRenderShadows(shadows);
             dispatcher.setRenderHitboxes(hitboxes);
