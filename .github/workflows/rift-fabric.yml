@@ -29,7 +29,22 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew build --no-daemon
+      - name: Smoke test on a dedicated server
+        run: |
+          mkdir -p run
+          echo "eula=true" > run/eula.txt
+          printf 'online-mode=false\nspawn-protection=0\nview-distance=4\nsimulation-distance=4\n' > run/server.properties
+          nohup ./gradlew runServer --no-daemon --console=plain > run/server.log 2>&1 &
+          echo $! > run/gradle.pid
+          set +e
+          python3 tools/smoke.py run/server.log
+          status=$?
+          pkill -f 'net.fabricmc.devlaunchinjector' || true
+          pkill -f 'runServer' || true
+          kill "$(cat run/gradle.pid)" 2>/dev/null || true
+          exit $status
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: unrendered_portal-fabric-1.21.1
           path: PortalMods/fabric/build/libs/*.jar
