@@ -3,6 +3,7 @@ package net.unrendered.rift.client;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.Element;
+import net.minecraft.client.gui.screen.ConfirmScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.world.CreateWorldScreen;
@@ -56,6 +57,20 @@ public final class AutoTest {
         stepTicks++;
         if (ticks > 20 * 60 * 9 && step != Step.DONE) {
             log("timed out in step " + step);
+            go(Step.DONE);
+        }
+        // A question in the way (experimental settings, a backup offer...): say yes, after a beat.
+        if (mc.currentScreen instanceof ConfirmScreen c && step != Step.DONE && ticks % 20 == 10) {
+            for (Element e : c.children()) {
+                if (e instanceof ButtonWidget b) {
+                    log("answering \"" + c.getTitle().getString() + "\" with " + b.getMessage().getString());
+                    b.onPress();
+                    return;
+                }
+            }
+        }
+        if ((step == Step.TITLE || step == Step.CREATING || step == Step.LOADING) && stepTicks > 20 * 180) {
+            log("stuck in step " + step + " on " + (mc.currentScreen == null ? "no screen" : mc.currentScreen.getClass().getName()));
             go(Step.DONE);
         }
         switch (step) {
