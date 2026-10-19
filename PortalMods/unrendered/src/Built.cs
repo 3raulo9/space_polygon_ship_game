@@ -36,6 +36,8 @@ public static class Built
 
     internal static void Handle(Msg m)
     {
+        // A full send is the whole set: whatever was here before and is not in it is gone.
+        if (m.B("full")) _blocks.Clear();
         if (m.J["palette"] is JsonArray pal) Terrain.AddEntries(_palette, pal);
         if (m.J["set"] is JsonArray set)
             foreach (var n in set)
