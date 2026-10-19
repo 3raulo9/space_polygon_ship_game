@@ -240,6 +240,8 @@ public sealed class EntityRenderer
             if (seat == world.ViewSeat) continue;
             PlayerTank mate = world.Players[seat];
             if (!mate.Alive) continue;
+            // Gone somewhere this game does not draw, or a body a code mod draws itself.
+            if (mate.Elsewhere || mate.Puppet) continue;
             // A craft whose player has dropped is still standing there — held for their
             // return — so it is drawn, but frozen (no idle animation clock) so it reads as
             // dormant rather than alive.

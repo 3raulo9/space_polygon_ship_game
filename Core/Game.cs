@@ -142,6 +142,8 @@ public sealed class Game : IDisposable
 
         // The mods folder, read before any world exists — the opening scatter and every
         // multiplayer hello read the registry this fills. Rescanned from the MODS page.
+        // Code mods speak through whichever feed is live at the moment they speak.
+        Modding.CodeMods.Post = (line, kind) => Feed.Push(line, kind);
         Modding.Mods.Reload();
 
         // Capture runs the world directly (no menu), so build it now and aim the
@@ -227,6 +229,10 @@ public sealed class Game : IDisposable
             // Age the join/quit feed once per rendered frame so its lines fade out whatever
             // the sim is doing behind them.
             Feed.Age(Raylib.GetFrameTime());
+
+            // Code mods are told when the world on screen changes, whichever of the many ways
+            // it changed.
+            Modding.CodeMods.Track(_world);
 
             if (_capturePath != null && RunCaptureFrame()) break;
 
@@ -484,6 +490,9 @@ public sealed class Game : IDisposable
                     _world!.SpawnSoldierSquad();
             }
 
+            // Code mods read their own keys once per frame, while the keyboard is the game's.
+            if (!_inventoryOpen) Modding.CodeMods.Frame(_world!, Raylib.GetFrameTime());
+
             StepSim(readInput: true);
 
             // Did that step take the room off the planet? Checked before the run-over test,
@@ -538,7 +547,7 @@ public sealed class Game : IDisposable
             {
                 // A crafting panel is this machine's business — clear the combat bits
                 // before they are sent rather than making the host reason about it.
-                if (_inventoryOpen) frame = frame.WithoutCombat();
+                if (_inventoryOpen || Modding.CodeMods.HoldsMouse) frame = frame.WithoutCombat();
                 net.Pump(frame);
             }
 
@@ -578,6 +587,7 @@ public sealed class Game : IDisposable
         bool wantCapture = roomWalking
                         || (_state == GameState.Playing
                             && !_inventoryOpen
+                            && !Modding.CodeMods.HoldsMouse
                             && !_fading
                             && _world != null);
 
@@ -875,6 +885,14 @@ public sealed class Game : IDisposable
         if (text.Length == 0) return;
 
         if (_session is { } net) { net.Say(text); return; }
+
+        // A command a code mod answers for. Offered first, so a mod's verb never reads as a
+        // typo of the game's.
+        if (text.StartsWith('{') && Modding.CodeMods.Command(_world, text) is { } reply)
+        {
+            _soloFeed.Push(reply, Net.NoticeFeed.Kind.Console);
+            return;
+        }
 
         var cmd = ChatCommand.Parse(text);
         switch (cmd.Verb)
@@ -2266,7 +2284,9 @@ public sealed class Game : IDisposable
             case GameState.Paused:
                 // Combat triggers are muted while the crafting panel is up so a click
                 // on an item slot can't also fire the cannon; movement still runs.
-                _world!.Update(dt, input, acceptCombatInput: !_inventoryOpen && !_lanceHold);
+                bool combat = !_inventoryOpen && !_lanceHold && !Modding.CodeMods.HoldsMouse;
+                _world!.Update(dt, input, acceptCombatInput: combat);
+                Modding.CodeMods.Step(_world, dt, combat ? input : input.WithoutCombat());
                 break;
         }
     }

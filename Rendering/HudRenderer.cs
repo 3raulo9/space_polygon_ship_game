@@ -144,7 +144,7 @@ internal static class HudRenderer
         }
     }
 
-    public static void Draw(World.World world, ItemIconRenderer icons)
+    public static void Draw(World.World world, ItemIconRenderer icons, Modding.ModScene? scene = null)
     {
         _icons = icons;
         // The craft the instruments describe. Normally this machine's own; once its revives
@@ -167,7 +167,7 @@ internal static class HudRenderer
         DrawCrabBossBar(world);
         DrawWeaponSlots(world.InventoryOf(world.ViewSeat));
         if (world.Spectating) DrawSpectating(world);
-        DrawRadar(world, p);
+        DrawRadar(world, p, scene);
         // The firing sight sits dead centre, where the mouse aims the gun, and only on the
         // two machines: the SOLDIER and the FISH draw their own centre reticles (which
         // bloom into brackets and read the water), so a second one here would double up.
@@ -582,8 +582,12 @@ internal static class HudRenderer
 
     // --- Radar: player-centred overhead grid ---
 
-    private static void DrawRadar(World.World world, PlayerTank p)
+    private static void DrawRadar(World.World world, PlayerTank p, Modding.ModScene? scene)
     {
+        // A code mod showing somewhere other than the field can take the field's own contacts
+        // off — a hunter at the far side of a door the player walked through is not a contact.
+        bool field = scene is not { WorldContacts: false };
+
         int x0 = W - RadarSize - RadarMargin;
         int y0 = RadarMargin;
         int cx = x0 + RadarSize / 2;
@@ -605,6 +609,7 @@ internal static class HudRenderer
         float s = MathF.Sin(p.Heading);
         float scale = (RadarSize * 0.5f - 2f) / RadarWorldRange;
 
+        if (field)
         foreach (var e in world.Enemies)
         {
             if (!e.Alive) continue;
@@ -633,6 +638,7 @@ internal static class HudRenderer
         // of problem from one on the grid and reading them as the same blip would be a lie.
         // The one currently on a run is drawn white and a pixel bigger: with four of them
         // circling, the only thing the radar really has to answer is which one is coming.
+        if (field)
         foreach (var sol in world.Soldiers)
         {
             if (!sol.Alive) continue;
@@ -663,6 +669,7 @@ internal static class HudRenderer
         // Floating salvage shows as friendly blips so the player can steer toward a
         // resupply — each in its own colour, so a thrown core and a stray round are not the
         // same dot.
+        if (field)
         foreach (var pk in world.Pickups)
         {
             // Fragments are held back for their own pass below, so nothing drawn afterwards
@@ -689,6 +696,7 @@ internal static class HudRenderer
         // be indistinguishable from a battery at exactly the moment a room is trying to work
         // out where the last one fell. So they are drawn as a pulsing cross, at three pixels,
         // over the top of everything else.
+        if (field)
         foreach (var pk in world.Pickups)
         {
             if (!World.World.IsFragment(pk)) continue;
@@ -718,6 +726,7 @@ internal static class HudRenderer
         // whether the thing at the rim is an arch or a battery. Distance is not printed —
         // there is nowhere to print it in a 52-pixel square — and it does not need to be,
         // because the column of light in the world answers "how far" far better than a number.
+        if (field)
         foreach (var gate in world.Gates)
         {
             if (gate.State == World.Arch.Phase.Dark) continue;
@@ -737,6 +746,17 @@ internal static class HudRenderer
             Color col = Scale(Lerp(Palette.PortalMoon, Palette.PortalSun, gate.Warmth), beat);
 
             Raylib.DrawRectangleLines(px - 2, py - 2, 5, 5, col);
+        }
+
+        // Whatever code mods put on the panel: already in the viewer's own frame, so no turn.
+        if (scene != null)
+        {
+            foreach (var blip in scene.Blips)
+            {
+                int bx = (int)Math.Clamp(cx + blip.Offset.X * scale, x0 + 1, x0 + RadarSize - 1 - blip.Size);
+                int by = (int)Math.Clamp(cy - blip.Offset.Y * scale, y0 + 1, y0 + RadarSize - 1 - blip.Size);
+                Raylib.DrawRectangle(bx, by, blip.Size, blip.Size, blip.Color);
+            }
         }
 
         // Player: a small chrome triangle fixed at centre, always pointing up.
