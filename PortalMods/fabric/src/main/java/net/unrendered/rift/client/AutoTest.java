@@ -117,7 +117,7 @@ public final class AutoTest {
                     run(server, null, "gamemode creative " + name);
                     run(server, null, "difficulty easy");
                     String at = "execute at " + name + " run ";
-                    run(server, null, at + "summon husk ^3 ^ ^6 {PersistenceRequired:1b}");
+                    run(server, null, at + "summon husk ^3 ^ ^6 {PersistenceRequired:1b,NoAI:1b}");
                     run(server, null, at + "summon cow ^-3 ^ ^5 {PersistenceRequired:1b}");
                     run(server, null, at + "summon pig ^-1 ^ ^7 {PersistenceRequired:1b}");
                     run(server, null, at + "summon villager ^2 ^ ^8 {PersistenceRequired:1b,NoAI:1b}");
@@ -178,8 +178,8 @@ public final class AutoTest {
 
     /**
      * Minecraft's own creatures all round the pilot as it arrives, whichever way it faces:
-     * standing still (NoAI) so UNRENDERED's screenshots catch them, a husk that fights, and
-     * an item to pick up.
+     * standing still (NoAI) so UNRENDERED's screenshots catch them and the tour gets home
+     * (a husk with its AI on kills the pilot in under a minute), and an item to pick up.
      */
     private static void ringOfMobs(MinecraftClient mc, Vec3d p) {
         IntegratedServer server = mc.getServer();
@@ -190,7 +190,7 @@ public final class AutoTest {
                 run(server, null, String.format(java.util.Locale.ROOT, "summon %s %.2f %.2f %.2f {PersistenceRequired:1b,NoAI:1b,Silent:1b}",
                     mobs[i], p.x + Math.cos(a) * d, p.y + 0.5, p.z + Math.sin(a) * d));
             }
-            run(server, null, String.format(java.util.Locale.ROOT, "summon husk %.2f %.2f %.2f {PersistenceRequired:1b}", p.x + 9, p.y + 0.5, p.z));
+            run(server, null, String.format(java.util.Locale.ROOT, "summon husk %.2f %.2f %.2f {PersistenceRequired:1b,NoAI:1b}", p.x + 9, p.y + 0.5, p.z));
             run(server, null, String.format(java.util.Locale.ROOT,
                 "summon item %.2f %.2f %.2f {Item:{id:\"minecraft:golden_apple\",count:1}}", p.x + 2.5, p.y + 0.5, p.z + 2.5));
             log("put " + mobs.length + " mobs, a husk and a golden apple round the pilot at " + p);
