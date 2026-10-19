@@ -56,6 +56,8 @@ public final class CaptureService {
         EquipmentSlot.MAINHAND, EquipmentSlot.OFFHAND, EquipmentSlot.FEET,
         EquipmentSlot.LEGS, EquipmentSlot.CHEST, EquipmentSlot.HEAD,
     };
+    private static final Pattern NAME = Pattern.compile("^RenderLayer\\[([^:\\]]+)");
+    private static final java.util.Set<String> skipped = new java.util.HashSet<>();
     private static final Pattern TEXTURE = Pattern.compile("Optional\\[([a-z0-9_.\\-]+:[a-z0-9_./\\-]+)\\]");
 
     private static volatile RiftHooks.CaptureRequest pending;
@@ -321,8 +323,13 @@ public final class CaptureService {
 
         private VertexConsumer open(RenderLayer layer) {
             String desc = layer.toString();
-            if (layer.getDrawMode() != VertexFormat.DrawMode.QUADS || desc.contains("text") || desc.contains("glint")
-                || desc.contains("shadow") || desc.contains("lines")) {
+            // Judge a layer by its name ("RenderLayer[entity_cutout:CompositeState[texture[...]...]]"),
+            // never by the whole description: every layer's description mentions "texture".
+            Matcher nm = NAME.matcher(desc);
+            String name = nm.find() ? nm.group(1) : desc;
+            if (layer.getDrawMode() != VertexFormat.DrawMode.QUADS || name.startsWith("text") || name.contains("glint")
+                || name.contains("shadow") || name.contains("lines") || name.contains("leash")) {
+                if (skipped.size() < 32 && skipped.add(name)) RiftMod.LOG.info("RIFT-E2E: capture leaves out layer {}", name);
                 return new Sink(null, null, null);
             }
             Matcher m = TEXTURE.matcher(desc);
