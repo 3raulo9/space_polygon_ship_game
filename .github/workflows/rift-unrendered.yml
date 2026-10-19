@@ -1,0 +1,35 @@
+name: rift-unrendered
+
+# Builds the UNRENDERED side of THE RIFT (PortalMods/unrendered) into glowstone-rift.dll,
+# the one file that goes into the game's Mods folder, and checks the game's own self-test
+# still passes with the mod project beside it.
+on:
+  push:
+    branches: [testing]
+    paths:
+      - 'PortalMods/unrendered/**'
+      - 'Modding/**'
+      - '.github/workflows/rift-unrendered.yml'
+  pull_request:
+    paths:
+      - 'PortalMods/unrendered/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build the mod
+        run: dotnet build PortalMods/unrendered -c Release
+      - name: Game self-test
+        run: |
+          dotnet build -c Release
+          dotnet bin/Release/net10.0/Unrendered.dll --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glowstone-rift-unrendered
+          path: PortalMods/unrendered/out/glowstone-rift.dll
