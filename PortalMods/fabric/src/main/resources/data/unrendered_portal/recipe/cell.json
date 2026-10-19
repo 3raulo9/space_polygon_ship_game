@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    { "item": "unrendered_portal:copper_wire" },
+    { "item": "unrendered_portal:scrap_metal" },
+    [
+      { "item": "unrendered_portal:lead" },
+      { "item": "unrendered_portal:zinc" },
+      { "item": "unrendered_portal:lithium" }
+    ]
+  ],
+  "result": { "id": "unrendered_portal:battery", "count": 1 }
+}

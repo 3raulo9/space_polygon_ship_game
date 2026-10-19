@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "unrendered_portal",
+  "version": "${version}",
+  "name": "The Rift (UNRENDERED)",
+  "description": "Open a world to LAN and UNRENDERED can find it. Build a glowstone frame, pour water in, and step through: you arrive in UNRENDERED's own world as yourself, a Minecraft player with all your items. UNRENDERED pilots can come the other way.",
+  "authors": ["UNRENDERED"],
+  "license": "All-Rights-Reserved",
+  "icon": "assets/unrendered_portal/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["net.unrendered.rift.RiftMod"],
+    "client": ["net.unrendered.rift.client.RiftClient"]
+  },
+  "mixins": ["unrendered_portal.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    { "item": "unrendered_portal:space_gunpowder" },
+    { "item": "unrendered_portal:dense_alloy" },
+    { "item": "unrendered_portal:scrap_metal" }
+  ],
+  "result": { "id": "unrendered_portal:bullet", "count": 5 }
+}

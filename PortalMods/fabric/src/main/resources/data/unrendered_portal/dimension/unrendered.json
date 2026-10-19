@@ -1,0 +1,17 @@
+{
+  "type": "unrendered_portal:unrendered",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "biome": "unrendered_portal:grid",
+      "lakes": false,
+      "features": false,
+      "structure_overrides": [],
+      "layers": [
+        { "block": "minecraft:bedrock", "height": 1 },
+        { "block": "minecraft:air", "height": 62 },
+        { "block": "unrendered_portal:rift_floor", "height": 1 }
+      ]
+    }
+  }
+}

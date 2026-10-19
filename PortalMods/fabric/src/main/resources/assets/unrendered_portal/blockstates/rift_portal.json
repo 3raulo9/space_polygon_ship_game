@@ -1,0 +1,6 @@
+{
+  "variants": {
+    "axis=x": { "model": "unrendered_portal:block/rift_portal_x" },
+    "axis=z": { "model": "unrendered_portal:block/rift_portal_z" }
+  }
+}
