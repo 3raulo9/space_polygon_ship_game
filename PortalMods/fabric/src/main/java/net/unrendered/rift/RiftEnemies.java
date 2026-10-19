@@ -60,7 +60,7 @@ public final class RiftEnemies {
             return;
         }
         e.refreshPositionAndAngles(at.x, at.y, at.z, w.random.nextFloat() * 360f, 0f);
-        e.initialize(w, w.getLocalDifficulty(BlockPos.ofFloored(at)), SpawnReason.DIMENSION_TRAVEL, null);
+        e.initialize(w, w.getLocalDifficulty(BlockPos.ofFloored(at)), SpawnReason.MOB_SUMMONED, null);
         e.setup(kind, hp, max);
         e.setPersistent();
         e.setPortalCooldown(80);
