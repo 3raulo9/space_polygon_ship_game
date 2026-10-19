@@ -20,6 +20,8 @@ public final class RiftConfig {
     /** How far below and above the portal's floor the terrain reaches. */
     public static int regionBelow = 24;
     public static int regionAbove = 40;
+    /** How many chunks a tick are streamed to a pilot (each is a full column). */
+    public static int chunksPerTick = 3;
     /** Whether to announce the world on the LAN for UNRENDERED to find. */
     public static boolean beacon = true;
 
@@ -38,6 +40,7 @@ public final class RiftConfig {
         bridgePort = num(p, "bridgePort", bridgePort, 0, 65535);
         allowBlockBreak = Boolean.parseBoolean(p.getProperty("allowBlockBreak", Boolean.toString(allowBlockBreak)));
         regionRadius = num(p, "regionRadius", regionRadius, 8, 96);
+        chunksPerTick = num(p, "chunksPerTick", chunksPerTick, 1, 16);
         regionBelow = num(p, "regionBelow", regionBelow, 4, 64);
         regionAbove = num(p, "regionAbove", regionAbove, 8, 96);
         beacon = Boolean.parseBoolean(p.getProperty("beacon", Boolean.toString(beacon)));
@@ -46,6 +49,7 @@ public final class RiftConfig {
             p.setProperty("bridgePort", Integer.toString(bridgePort));
             p.setProperty("allowBlockBreak", Boolean.toString(allowBlockBreak));
             p.setProperty("regionRadius", Integer.toString(regionRadius));
+            p.setProperty("chunksPerTick", Integer.toString(chunksPerTick));
             p.setProperty("regionBelow", Integer.toString(regionBelow));
             p.setProperty("regionAbove", Integer.toString(regionAbove));
             p.setProperty("beacon", Boolean.toString(beacon));

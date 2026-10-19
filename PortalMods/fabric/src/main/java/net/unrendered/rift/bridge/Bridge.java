@@ -12,6 +12,7 @@ import net.unrendered.rift.RiftSeats;
 import net.unrendered.rift.RiftConfig;
 import net.unrendered.rift.RiftMod;
 import net.unrendered.rift.RiftPilot;
+import net.unrendered.rift.RiftChunks;
 import net.unrendered.rift.RiftPortals;
 import net.unrendered.rift.RiftVisitors;
 
@@ -271,6 +272,7 @@ public final class Bridge {
             // A pilot in Minecraft.
             case "enter" -> RiftPilot.onEnter(server, m);
             case "me" -> RiftPilot.onMe(server, m);
+            case "view" -> RiftChunks.onView(server, m);
             case "tex" -> RiftPilot.onTex(server, m);
             case "hit" -> RiftPilot.onHit(server, m);
             case "break" -> RiftPilot.onBreak(server, m);

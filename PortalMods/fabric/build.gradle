@@ -21,6 +21,17 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
+loom {
+    runs {
+        client {
+            // The end-to-end harness (PortalMods/e2e) sets RIFT_AUTOTEST=true; a normal
+            // `runClient` is an ordinary dev client.
+            vmArg "-Drift.autotest=${System.getenv('RIFT_AUTOTEST') ?: 'false'}"
+            programArgs "--width", "960", "--height", "540"
+        }
+    }
+}
+
 processResources {
     inputs.property "version", project.version
     filesMatching("fabric.mod.json") {

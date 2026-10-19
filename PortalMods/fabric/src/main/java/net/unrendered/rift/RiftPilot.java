@@ -82,6 +82,11 @@ public final class RiftPilot {
         return active;
     }
 
+    /** Where the pilot stands now (MC coords), for the autotest's camera. */
+    public static Vec3d pilotPos() {
+        return pilotPos;
+    }
+
     public static void clear() {
         active = false;
         pilot = null;
@@ -92,7 +97,7 @@ public final class RiftPilot {
         RiftCapture.nbtSent.clear();
     }
 
-    private static ServerWorld world(MinecraftServer server) {
+    static ServerWorld world(MinecraftServer server) {
         return world == null ? null : server.getWorld(world.key());
     }
 
@@ -138,6 +143,9 @@ public final class RiftPilot {
         oy = bottom;
         sy = Math.max(1, top - bottom);
 
+        // The world streams by chunk once UNRENDERED says where the pilot is looking from
+        // (`view`, see RiftChunks). The old one-shot slice is still sent for one release, for an
+        // UNRENDERED that predates streaming; it also opens the palette.
         sendRegion(w);
 
         // Out of the water on whichever side is clear, facing away from it.
@@ -173,7 +181,7 @@ public final class RiftPilot {
         return w.getBlockState(p).getCollisionShape(w, p).isEmpty() && w.getBlockState(p.up()).getCollisionShape(w, p.up()).isEmpty();
     }
 
-    private static int indexOf(ServerWorld w, BlockState state, BlockPos pos, JsonArray newEntries) {
+    static int indexOf(ServerWorld w, BlockState state, BlockPos pos, JsonArray newEntries) {
         Integer i = paletteIndex.get(state);
         if (i != null) return i;
         int idx = palette.size();
@@ -447,6 +455,7 @@ public final class RiftPilot {
     }
 
     public static void onLeave(MinecraftServer server) {
+        RiftChunks.clear(server);
         PilotEntity p = pilot;
         if (p != null && !p.isRemoved()) p.discard();
         if (active) {
@@ -473,20 +482,23 @@ public final class RiftPilot {
     /** Called by the world mixin for every block change on the server. */
     public static void onBlockChanged(World w, BlockPos pos) {
         if (!active || world == null || w.getRegistryKey() != world.key()) return;
-        int x = pos.getX() - ox, y = pos.getY() - oy, z = pos.getZ() - oz;
-        if (x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz) return;
+        if (!RiftChunks.isSent(pos)) return;   // it will arrive with its chunk
         changed.add(pos.toImmutable());
     }
 
     public static void tick(MinecraftServer server) {
         tick++;
-        if (active && !Bridge.linked()) clear();
+        if (active && !Bridge.linked()) {
+            RiftChunks.clear(server);
+            clear();
+        }
         if (active && pilot != null && pilot.isRemoved()) {
             // Killed by something Minecraft does that no `hurt` could describe (/kill, the void).
             pilot = null;
         }
 
         if (active && !changed.isEmpty() && tick % 2 == 0) flushChanges(server);
+        if (active) RiftChunks.tick(server);
 
         // The pilot is a second player here: the world around them stays loaded and alive.
         if (active && pilot != null && !pilot.isRemoved() && tick % 10 == 0 && pilot.getWorld() instanceof ServerWorld pw)
@@ -569,7 +581,8 @@ public final class RiftPilot {
         List<RiftHooks.EntitySnap> ents = new ArrayList<>();
         ServerWorld w = world(server);
         if (active && w != null) {
-            Box box = Box.of(pilotPos, RiftConfig.regionRadius * 2.0, 96.0, RiftConfig.regionRadius * 2.0);
+            double reach = RiftChunks.radius() * 32.0;
+            Box box = Box.of(pilotPos, reach, 128.0, reach);
             for (Entity e : w.getOtherEntities(pilot, box, RiftCapture::visible)) ents.add(RiftCapture.snap(e));
         }
         List<RiftHooks.EntitySnap> avatars = new ArrayList<>();

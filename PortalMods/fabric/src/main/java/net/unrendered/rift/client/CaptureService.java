@@ -61,6 +61,11 @@ public final class CaptureService {
     private static volatile RiftHooks.CaptureRequest pending;
     private static long done;
 
+    // What the captures have been producing, logged now and then: the one way to know from a
+    // log whether Minecraft's models are really reaching UNRENDERED.
+    private static int requests, failures;
+    private static final StringBuilder report = new StringBuilder();
+
     private static final Map<Integer, Entity> mirrors = new HashMap<>();
     private static final Map<UUID, OtherClientPlayerEntity> playerMirrors = new HashMap<>();
     private static ClientWorld mirrorWorld;
@@ -93,10 +98,14 @@ public final class CaptureService {
         dispatcher.setRenderShadows(false);
         dispatcher.setRenderHitboxes(false);
         try {
+            boolean tell = ++requests % 40 == 1;
+            report.setLength(0);
             if (r.ents() != null) {
                 Wire.Out out = new Wire.Out(64 * 1024);
                 out.u16(r.ents().size());
                 for (RiftHooks.EntitySnap s : r.ents()) capture(out, s, world, dispatcher, tickDelta, 0, 0);
+                if (tell) RiftMod.LOG.info("RIFT-E2E: ents capture #{}: {} entities, {} bytes [{}] failures so far {}",
+                    requests, r.ents().size(), out.size(), report, failures);
                 JsonObject h = new JsonObject();
                 h.addProperty("time", r.worldTime());
                 Bridge.sendBin("ents", h, out.toArray());
@@ -106,6 +115,7 @@ public final class CaptureService {
                 Wire.Out out = new Wire.Out(64 * 1024);
                 out.u16(r.rents().size());
                 for (RiftHooks.EntitySnap s : r.rents()) capture(out, s, world, dispatcher, tickDelta, RiftMod.FLOOR_Y, 1);
+                if (tell) RiftMod.LOG.info("RIFT-E2E: rents capture: {} entities", r.rents().size());
                 Bridge.sendBin("rents", new JsonObject(), out.toArray());
             }
             for (int i = 0; i < r.avatars().size(); i++) {
@@ -143,7 +153,14 @@ public final class CaptureService {
                     LightmapTextureManager.MAX_LIGHT_COORDINATE);
             } catch (Throwable t) {
                 cap.layers.clear();
+                if (failures++ < 8) RiftMod.LOG.warn("RIFT-E2E: rendering {} into the capture failed", s.typeId, t);
             }
+        }
+        if (report.length() < 600) {
+            report.append(s.typeId).append(e == null ? "(no entity)" : "").append(':');
+            for (Map.Entry<String, Layer> l : cap.layers.entrySet())
+                report.append(' ').append(l.getKey().isEmpty() ? "<none>" : l.getKey()).append('x').append(l.getValue().count / 4);
+            report.append("; ");
         }
         if (cap.layers.isEmpty()) {
             // Nothing drawable: a box the size of its hitbox.

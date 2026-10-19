@@ -19,6 +19,7 @@ public final class SceneRenderer {
     private static volatile DrawList frame;
     public static volatile Sky sky;
     private static volatile long lastFrame;
+    private static int scenes;
 
     private SceneRenderer() {}
 
@@ -39,6 +40,11 @@ public final class SceneRenderer {
             DrawList list = DrawList.read(in);
             sky = s;
             frame = list;
+            if (++scenes % 30 == 1) {
+                int verts = 0;
+                for (DrawList.Draw d : list.draws) verts += d.count();
+                RiftMod.LOG.info("RIFT-E2E: scene #{} arrived: {} draws, {} vertices", scenes, list.draws.size(), verts);
+            }
             lastFrame = System.currentTimeMillis();
         } catch (Exception e) {
             RiftMod.LOG.debug("Rift: bad scene: {}", e.toString());

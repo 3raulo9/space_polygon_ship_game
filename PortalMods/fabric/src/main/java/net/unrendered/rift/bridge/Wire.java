@@ -54,6 +54,7 @@ public final class Wire {
         public int position() { return buf.position(); }
 
         public byte[] toArray() { return Arrays.copyOf(buf.array(), buf.position()); }
+        public int size() { return buf.position(); }
     }
 
     /** A little-endian reader over a byte array. */

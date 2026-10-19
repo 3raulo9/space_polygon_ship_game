@@ -26,6 +26,7 @@ public final class RiftClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         RiftHooks.client = new ClientHooksImpl();
+        AutoTest.install();
 
         BlockRenderLayerMap.INSTANCE.putBlock(RiftBlocks.RIFT_PORTAL, RenderLayer.getTranslucent());
         ColorProviderRegistry.BLOCK.register((state, world, pos, tint) -> WATER, RiftBlocks.RIFT_PORTAL);
