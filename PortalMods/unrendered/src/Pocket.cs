@@ -110,7 +110,7 @@ public static class Pocket
         _sel = _items.Count - 1;
         Save();
         if (Rift.World is { } world) CueBank.Play(Cue.Pickup, world.Player.Position, 0f);
-        Rift.Notice($"+{it.Count} {it.Name} (MINECRAFT)");
+        Rift.Notice($"+{it.Count} {it.Name}");
         Textures.Get(it.Tex);
         return true;
     }
@@ -148,12 +148,12 @@ public static class Pocket
                 return;
             }
             var weapon = Arsenal.For(it);
-            if (weapon == null) { Rift.Notice($"{it.Name} WILL NOT TAKE SHAPE YET — TRY AGAIN"); return; }
+            if (weapon == null) { Rift.Notice($"{it.Name}: TRY AGAIN"); return; }
             craft.HeldWeapon = weapon.Index;
-            Rift.Notice($"{it.Name} IN HAND — FIRE SWINGS IT");
+            Rift.Notice($"{it.Name} IN HAND");
             return;
         }
-        Rift.Notice($"{it.Name} MEANS NOTHING HERE — DROP IT IN MINECRAFT WITH {Rift.Cfg.DropKey}");
+        Rift.Notice($"NO USE FOR {it.Name} HERE");
     }
 
     private static void Drop()
@@ -161,7 +161,7 @@ public static class Pocket
         if (Selected is not { } it) return;
         if (!Realm.Active || Rift.Live is not { } live || Rift.World is not { } w)
         {
-            Rift.Notice("THERE IS NOWHERE TO PUT A MINECRAFT ITEM DOWN HERE");
+            Rift.Notice("DROP IT IN MINECRAFT");
             return;
         }
         var craft = w.Player;
@@ -171,7 +171,7 @@ public static class Pocket
         _items.Remove(it);
         _sel = Math.Max(0, _sel - 1);
         Save();
-        Rift.Notice($"DROPPED {it.Name} INTO MINECRAFT");
+        Rift.Notice($"DROPPED {it.Name}");
     }
 
     private static void Spend(Item it, int n)

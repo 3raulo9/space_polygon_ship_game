@@ -54,12 +54,19 @@ public sealed unsafe class Terrain : IDisposable
 
     public void AddPalette(JsonArray entries)
     {
+        AddEntries(Palette, entries);
+        MarkAllDirty();
+    }
+
+    /// <summary>Reads palette entries (PROTOCOL.md) into <paramref name="palette"/>, by index.</summary>
+    public static void AddEntries(List<Entry?> palette, JsonArray entries)
+    {
         foreach (var node in entries)
         {
             if (node is not JsonObject o) continue;
             var e = new Entry
             {
-                I = o["i"]?.GetValue<int>() ?? Palette.Count,
+                I = o["i"]?.GetValue<int>() ?? palette.Count,
                 Id = o["id"]?.GetValue<string>() ?? "",
                 Solid = o["solid"]?.GetValue<bool>() ?? false,
                 Collide = o["collide"]?.GetValue<bool>() ?? (o["solid"]?.GetValue<bool>() ?? false),
@@ -87,10 +94,9 @@ public sealed unsafe class Terrain : IDisposable
                     Atlas.Slot(tex);
                 }
             e.Quads = quads.ToArray();
-            while (Palette.Count <= e.I) Palette.Add(null);
-            Palette[e.I] = e;
+            while (palette.Count <= e.I) palette.Add(null);
+            palette[e.I] = e;
         }
-        MarkAllDirty();
     }
 
     public void LoadRegion(Msg m)
@@ -257,9 +263,8 @@ public sealed unsafe class Terrain : IDisposable
     {
         if (_sections[s] is { } old) Free(old);
         int sx = s % _secX, sz = (s / _secX) % _secZ, sy = s / (_secX * _secZ);
-        var opaque = new Builder();
-        var clear = new Builder();
         var sec = new Section();
+        var b = new Mesher(sec.Opaque, sec.Clear);
 
         for (int ly = sy * 16; ly < Math.Min(Sy, sy * 16 + 16); ly++)
             for (int lz = sz * 16; lz < Math.Min(Sz, sz * 16 + 16); lz++)
@@ -267,30 +272,53 @@ public sealed unsafe class Terrain : IDisposable
                 {
                     var e = Palette.Count > _idx[(ly * Sz + lz) * Sx + lx] ? Palette[_idx[(ly * Sz + lz) * Sx + lx]] : null;
                     if (e == null || e.Quads.Length == 0) continue;
-                    int x = Ox + lx, y = Oy + ly, z = Oz + lz;
-                    var into = e.Liquid != null || e.Portal ? clear : opaque;
-                    foreach (var q in e.Quads)
-                    {
-                        if (q.Cull >= 0)
-                        {
-                            var d = Dir[q.Cull];
-                            var n = At(x + d[0], y + d[1], z + d[2]);
-                            if (n != null && (n.Solid || (e.Liquid != null && n.Liquid == e.Liquid))) continue;
-                        }
-                        // Light from the block the face looks into, as Minecraft lights it.
-                        int lightAt = q.Cull >= 0
-                            ? LightAt(x + Dir[q.Cull][0], y + Dir[q.Cull][1], z + Dir[q.Cull][2])
-                            : Math.Max(LightAt(x, y, z), LightAt(x, y + 1, z));
-                        float sky = (lightAt >> 4) / 15f;
-                        float blk = Math.Max(lightAt & 15, e.Emit) / 15f;
-                        float shade = q.Shade ? FaceShade(q.Normal) : 1f;
-                        Emit(into, q, x, y, z, shade, sky, blk);
-                        if (into.Verts > 60000) Flush(into, into == clear ? sec.Clear : sec.Opaque);
-                    }
+                    b.Block(e, Ox + lx, Oy + ly, Oz + lz, At, LightAt);
                 }
-        Flush(opaque, sec.Opaque);
-        Flush(clear, sec.Clear);
+        b.Finish();
         _sections[s] = sec;
+    }
+
+    /// <summary>
+    /// Turns blocks into meshes: each block state's own quads, culled against the solid
+    /// neighbours Minecraft would cull them against, lit by the light in the block each face
+    /// looks into, with Minecraft's face shading. Shared by the slice of Minecraft a pilot
+    /// walks in and by the blocks Minecraft players build in UNRENDERED.
+    /// </summary>
+    public sealed class Mesher
+    {
+        private readonly List<Mesh> _opaque, _clear;
+        private readonly Builder _o = new(), _c = new();
+
+        public Mesher(List<Mesh> opaque, List<Mesh> clear) { _opaque = opaque; _clear = clear; }
+
+        public void Block(Entry e, int x, int y, int z, Func<int, int, int, Entry?> at, Func<int, int, int, int> light)
+        {
+            var into = e.Liquid != null || e.Portal ? _c : _o;
+            foreach (var q in e.Quads)
+            {
+                if (q.Cull >= 0)
+                {
+                    var d = Dir[q.Cull];
+                    var n = at(x + d[0], y + d[1], z + d[2]);
+                    if (n != null && (n.Solid || (e.Liquid != null && n.Liquid == e.Liquid))) continue;
+                }
+                // Light from the block the face looks into, as Minecraft lights it.
+                int lightAt = q.Cull >= 0
+                    ? light(x + Dir[q.Cull][0], y + Dir[q.Cull][1], z + Dir[q.Cull][2])
+                    : Math.Max(light(x, y, z), light(x, y + 1, z));
+                float sky = (lightAt >> 4) / 15f;
+                float blk = Math.Max(lightAt & 15, e.Emit) / 15f;
+                float shade = q.Shade ? FaceShade(q.Normal) : 1f;
+                Emit(into, q, x, y, z, shade, sky, blk);
+                if (into.Verts > 60000) Flush(into, into == _c ? _clear : _opaque);
+            }
+        }
+
+        public void Finish()
+        {
+            Flush(_o, _opaque);
+            Flush(_c, _clear);
+        }
     }
 
     /// <summary>Minecraft's directional face shading: full on top, half underneath, the
@@ -341,6 +369,12 @@ public sealed unsafe class Terrain : IDisposable
         foreach (var m in s.Clear) Raylib.UnloadMesh(m);
     }
 
+    public static void Free(List<Mesh> meshes)
+    {
+        foreach (var m in meshes) Raylib.UnloadMesh(m);
+        meshes.Clear();
+    }
+
     private void Unload()
     {
         foreach (var s in _sections) if (s != null) Free(s);
@@ -354,13 +388,28 @@ public sealed unsafe class Terrain : IDisposable
     private static Shader _shader;
     private static Material _material;
     private static bool _ready;
-    private static int _locDay, _locCam, _locFog, _locFogStart, _locFogEnd;
+    private static int _locDay, _locCam, _locFog, _locFogStart, _locFogEnd, _locKeyMode;
 
     /// <summary>Draws every built section. The meshes are in Minecraft's own coordinates;
     /// <paramref name="origin"/> is the Minecraft point that sits at the drawing space's zero.</summary>
     public void Draw(Vector3 origin, Vector3 camMc, float daylight, Color fog, float fogStart, float fogEnd)
     {
         if (!Loaded) return;
+        var opaque = new List<Mesh>();
+        var clear = new List<Mesh>();
+        foreach (var s in _sections)
+            if (s != null) { opaque.AddRange(s.Opaque); clear.AddRange(s.Clear); }
+        DrawMeshes(opaque, clear, origin, camMc, daylight, fog, fogStart, fogEnd, keyed: false);
+    }
+
+    /// <summary>
+    /// Minecraft block meshes, through Minecraft's light and fog. <paramref name="keyed"/> draws
+    /// them as the composite's mask instead (water and glass included — whatever shows of a
+    /// block is Minecraft's to fill in).
+    /// </summary>
+    public static void DrawMeshes(List<Mesh> opaque, List<Mesh> clear, Vector3 origin, Vector3 camMc,
+        float daylight, Color fog, float fogStart, float fogEnd, bool keyed)
+    {
         Ready();
         Atlas.Upload();
         Raylib.SetShaderValue(_shader, _locDay, daylight, ShaderUniformDataType.Float);
@@ -368,18 +417,17 @@ public sealed unsafe class Terrain : IDisposable
         Raylib.SetShaderValue(_shader, _locFog, new Vector4(fog.R / 255f, fog.G / 255f, fog.B / 255f, 1f), ShaderUniformDataType.Vec4);
         Raylib.SetShaderValue(_shader, _locFogStart, fogStart, ShaderUniformDataType.Float);
         Raylib.SetShaderValue(_shader, _locFogEnd, fogEnd, ShaderUniformDataType.Float);
+        Raylib.SetShaderValue(_shader, _locKeyMode, keyed ? 1 : 0, ShaderUniformDataType.Int);
         _material.Maps[(int)MaterialMapIndex.Albedo].Texture = Atlas.Texture;
 
         Matrix4x4 at = Matrix4x4.Transpose(Matrix4x4.CreateTranslation(-origin));
-        foreach (var s in _sections)
-            if (s != null) foreach (var m in s.Opaque) Raylib.DrawMesh(m, _material, at);
+        foreach (var m in opaque) Raylib.DrawMesh(m, _material, at);
 
         // Water, lava and the portal: after everything solid, without writing depth, so
         // what is under the surface still shows through it.
         Rlgl.DrawRenderBatchActive();
         Rlgl.DisableDepthMask();
-        foreach (var s in _sections)
-            if (s != null) foreach (var m in s.Clear) Raylib.DrawMesh(m, _material, at);
+        foreach (var m in clear) Raylib.DrawMesh(m, _material, at);
         Rlgl.DrawRenderBatchActive();
         Rlgl.EnableDepthMask();
     }
@@ -394,6 +442,7 @@ public sealed unsafe class Terrain : IDisposable
         _locFog = Raylib.GetShaderLocation(_shader, "fogColor");
         _locFogStart = Raylib.GetShaderLocation(_shader, "fogStart");
         _locFogEnd = Raylib.GetShaderLocation(_shader, "fogEnd");
+        _locKeyMode = Raylib.GetShaderLocation(_shader, "keyMode");
         _material = Raylib.LoadMaterialDefault();
         _material.Shader = _shader;
     }
@@ -434,6 +483,7 @@ public sealed unsafe class Terrain : IDisposable
         uniform vec4 fogColor;
         uniform float fogStart;
         uniform float fogEnd;
+        uniform int keyMode;
         out vec4 finalColor;
         float curve(float f) {
             float v = f / (4.0 - 3.0 * f);
@@ -443,6 +493,7 @@ public sealed unsafe class Terrain : IDisposable
         void main() {
             vec4 t = texture(texture0, uv);
             if (t.a < 0.1) discard;
+            if (keyMode == 1) { finalColor = vec4(0.0); return; }
             float l = max(curve(light.x) * daylight, curve(light.y) * vec3(1.0, 0.9, 0.75).r);
             l = max(l, 0.05);
             vec3 blockTint = vec3(1.0, 0.92, 0.8);

@@ -99,7 +99,8 @@ public static class Rift
     {
         Log("NOTICE " + text);
         Hud.Toast(text);
-        Host?.Notice(Font.Clean(text));
+        string line = Font.Clean(text);
+        Host?.Notice(line.Length > 34 ? line[..34] : line);
     }
 
     // --- The parts ------------------------------------------------------------------
@@ -121,6 +122,7 @@ public static class Rift
             Link = null;
             Realm.Abort("THE LINK WAS LOST");
             Visitors.Clear();
+            Overlays.Clear();
             Portal.Unlink();
         }
 
@@ -143,12 +145,12 @@ public static class Rift
     {
         if (InMatch)
         {
-            Notice("THE RIFT ONLY OPENS IN A SOLO RUN");
+            Notice("SOLO RUNS ONLY");
             return;
         }
         if (Realm.Active)
         {
-            Notice("YOU ARE ALREADY ON THE OTHER SIDE");
+            Notice("ALREADY IN MINECRAFT");
             return;
         }
 
@@ -172,7 +174,7 @@ public static class Rift
         }
         else if (Link == null)
         {
-            Notice("NO MINECRAFT WORLD IS OPEN ON YOUR NETWORK — THE WATER IS STILL");
+            Notice("THE WATER IS STILL");
         }
     }
 
@@ -182,6 +184,7 @@ public static class Rift
         Portal.Tick(world, dt);
         Realm.Tick(world, dt);
         Visitors.Tick(world, dt);
+        Overlays.Tick(world, dt);
         Background.Tick(dt);
     }
 

@@ -74,7 +74,7 @@ public static class Realm
         var p = home.Player;
         live.Send("enter", "name", Rift.Cfg.Name, "chassis", p.Class.ToString().ToUpperInvariant(),
             "hp", p.Health + p.Shield, "max", p.MaxHealth + p.MaxShield);
-        Rift.Notice("THE WATER PULLS YOU THROUGH…");
+        Rift.Notice("THROUGH THE WATER...");
         CueBank.Play(Cue.PortalEnter, p.Position, 0f);
     }
 
@@ -108,7 +108,8 @@ public static class Realm
                 ReadEnts(m);
                 return true;
             case "hurt":
-                Hurt(m.F("amount"), m.Str("by"));
+                if (m.J["seat"] != null) Visitors.HurtSeat(m.I("seat"), m.F("amount") * McMobToUnr);
+                else Hurt(m.F("amount"), m.Str("by"));
                 return true;
         }
         return false;
@@ -184,7 +185,7 @@ public static class Realm
         Ents.Clear();
         _askedPickup.Clear();
         Rift.World = realm;
-        Rift.Notice("YOU ARE IN MINECRAFT. WALK BACK INTO THE WATER TO GO HOME");
+        Rift.Notice("MINECRAFT");
         Rift.Log($"realm: crossed at mc {Ox:0.0},{y:0.0},{Oz:0.0} ref {RefY}");
     }
 
@@ -248,7 +249,7 @@ public static class Realm
         if (_entering && Raylib.GetTime() - _enteringSince > 20)
         {
             _entering = false;
-            Rift.Notice("MINECRAFT NEVER SENT THE OTHER SIDE");
+            Rift.Notice("MINECRAFT DID NOT ANSWER");
         }
         if (!Active || !ReferenceEquals(world, RealmWorld) || _craft is not { } craft) return;
 
@@ -399,7 +400,7 @@ public static class Realm
         }
     }
 
-    private static bool SegmentHitsBox(Vector3 a, Vector3 b, Vector3 feet, float half, float h)
+    internal static bool SegmentHitsBox(Vector3 a, Vector3 b, Vector3 feet, float half, float h)
     {
         Vector3 min = new(feet.X - half, feet.Y, feet.Z - half), max = new(feet.X + half, feet.Y + h, feet.Z + half);
         Vector3 d = b - a;
@@ -529,7 +530,9 @@ public static class Realm
         if (!Owns(world) || _craft is not { } craft) return;
         scene.OwnsWorld = true;
         scene.WorldContacts = false;
-        scene.Clear = FogColor;
+        // With the composite, the game's frame is cleared to nothing so Minecraft shows
+        // through wherever the game draws nothing.
+        scene.Clear = Composite.Enabled ? new Color(0, 0, 0, 0) : FogColor;
 
         var feet = Mc(craft.Position, craft.Height);
         Vector2 fwd = craft.Forward, right = new(fwd.Y, -fwd.X);
@@ -552,10 +555,35 @@ public static class Realm
     {
         if (!Active || _craft is null) return;
         var cam = scene.Camera;
+        if (Composite.RealmLayered)
+        {
+            // Minecraft is drawn at full resolution afterwards (Composite). Here it only
+            // writes depth, so what the craft throws into the air goes behind a hill when it
+            // is behind a hill.
+            Rlgl.DrawRenderBatchActive();
+            Rlgl.ColorMask(false, false, false, false);
+            DrawMinecraft(cam, sky: false);
+            Rlgl.DrawRenderBatchActive();
+            Rlgl.ColorMask(true, true, true, true);
+        }
+        else DrawMinecraft(cam, sky: true);
+
+        // And the craft's own share of the picture, which the game left out with its world:
+        // its rounds in flight, its sparks and debris, the soldier's arms and whatever is in
+        // their hands. The stand-in world holds nothing else, so this is exactly that.
+        _ownEye ??= new EntityRenderer();
+        _ownEye.Draw(RealmWorld!, cam.Position);
+    }
+
+    /// <summary>Minecraft at the window's own resolution, for the composite.</summary>
+    internal static void DrawFull(Camera3D cam) => DrawMinecraft(cam, sky: true);
+
+    /// <summary>Minecraft's sky, blocks and creatures around the given realm-space eye.</summary>
+    private static void DrawMinecraft(Camera3D cam, bool sky)
+    {
         var origin = new Vector3((float)Ox, ShownRef, (float)Oz);
         var mcEye = cam.Position + origin;
-
-        DrawSky(cam);
+        if (sky) DrawSky(cam);
 
         Rlgl.DrawRenderBatchActive();
         Rlgl.EnableBackfaceCulling();
@@ -570,13 +598,10 @@ public static class Realm
             e.Draw(e.Pos - origin, fog, FogColor);
         }
         Rlgl.DrawRenderBatchActive();
-
-        // And the craft's own share of the picture, which the game left out with its world:
-        // its rounds in flight, its sparks and debris, the soldier's arms and whatever is in
-        // their hands. The stand-in world holds nothing else, so this is exactly that.
-        _ownEye ??= new EntityRenderer();
-        _ownEye.Draw(RealmWorld!, cam.Position);
     }
+
+    /// <summary>Minecraft's fog colour at this hour — what the composite clears to.</summary>
+    public static Color Fog => FogColor;
 
     private static EntityRenderer? _ownEye;
 

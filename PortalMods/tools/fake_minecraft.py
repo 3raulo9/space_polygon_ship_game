@@ -378,15 +378,19 @@ def paint_scene(payload, path):
 VISITOR_YAW = 0.0
 
 
+T0 = time.time()
+
+
 def serve(sock, addr):
-    global VISITOR_YAW
+    global VISITOR_YAW, T0
+    T0 = time.time()
     c = Conn(sock)
     log("UNRENDERED connected from", addr)
     state = {"pilot": None, "hp": 20.0, "sword": True, "scene": 0, "visitor_sent": False}
     portal = {"x": 100, "y": 68, "z": 198, "axis": "x", "dim": "minecraft:overworld"}
 
     def ticker():
-        t0 = time.time()
+        t0 = T0
         while c.alive:
             t = time.time() - t0
             try:
@@ -413,6 +417,38 @@ def serve(sock, addr):
                         c.send_bin("avatar", entity_record(1, (vx, 64.0, vz), 0.6, 1.8, 20, 20, 2, "Steve",
                                                            [("minecraft:skins/steve_test", biped(t * 6, VISITOR_YAW), (255, 255, 255, 255))]),
                                    uuid="0000-steve")
+                if state.get("placed") and not state.get("built_sent"):
+                    state["built_sent"] = True
+                    bx, bz = int(state["vx"]) + 3, int(state["vz"]) + 3
+                    hut = []
+                    for dx in range(3):
+                        for dz in range(3):
+                            for dy in range(3):
+                                edge = dx in (0, 2) or dz in (0, 2)
+                                if edge or dy == 2: hut.append([bx + dx, dy, bz + dz, 2 if dy == 2 else 1])
+                    built_pal = [dict(PALETTE[5], i=1), dict(PALETTE[7], i=2)]
+                    c.send({"t": "built", "set": hut, "palette": built_pal})
+                    log("built a hut of", len(hut), "blocks at", bx, bz)
+                if state.get("placed"):
+                    px, pz = state["vx"] - 3 + 2 * math.sin(t * 0.7), state["vz"] + 1
+                    pig = entity_record(77, (px, 0.0, pz), 0.9, 0.9, 10, 10, 0, "Pig",
+                                        [("minecraft:textures/entity/zombie/zombie.png", biped(t * 6, 90), (255, 190, 190, 255))])
+                    c.send_bin("rents", struct.pack("<H", 1) + pig)
+                    pt = t - state["placed"]
+                    if pt > 3 and not state.get("used"):
+                        state["used"] = True
+                        c.send({"t": "use", "uuid": "0000-steve", "item": "crab_core"})
+                        log("visitor threw a crab core")
+                    if pt > 4 and not state.get("mined") and state.get("tower"):
+                        state["mined"] = True
+                        x, z, r = state["tower"]
+                        for k in range(12):
+                            c.send({"t": "mine", "uuid": "0000-steve", "x": x + r - 0.5, "y": 1.5 + (k % 4), "z": z + (k // 4) - 1})
+                        log("visitor mined a tower at", x, z)
+                    if pt > 5 and not state.get("hurt_seat"):
+                        state["hurt_seat"] = True
+                        c.send({"t": "hurt", "seat": 0, "amount": 2.0, "by": "Pig"})
+                        log("a rift mob hurt seat 0")
                 if args.visitor and not state["visitor_sent"] and t > 3:
                     state["visitor_sent"] = True
                     c.send({"t": "arrive", "uuid": "0000-steve", "name": "Steve"})
@@ -472,9 +508,29 @@ def serve(sock, addr):
                 if state["craft"] % 20 == 1: log("craft frame: %d bytes" % len(b))
             elif t == "city":
                 log("city: %d structures" % len(o["structures"]))
+                # the nearest tower to the origin, for the mining test
+                best = None
+                for st in o["structures"]:
+                    for (x, z, r) in st["legs"]:
+                        if st["h"] > 20 and (best is None or x * x + z * z < best[0]):
+                            best = (x * x + z * z, (x, z, r))
+                if best: state["tower"] = best[1]
             elif t == "place":
                 log("place:", o)
                 state["vx"], state["vz"] = o["x"], o["z"]
+                state["placed"] = time.time() - T0
+            elif t == "cut":
+                log("cut: structure", o["i"], "lost", len(o["boxes"]), "pieces")
+            elif t == "seats":
+                if int(time.time() * 2) % 8 == 0 and not state.get("seats_logged"):
+                    state["seats_logged"] = True
+                    log("seats:", o["list"])
+            elif t == "model":
+                log("model for", o.get("kind"), "%d bytes" % len(b))
+            elif t == "cross":
+                log("an UNRENDERED", o["kind"], "came through with", o["hp"], "of", o["max"])
+                threading.Timer(2.0, lambda kind=o["kind"], hp=o["hp"], mx=o["max"]:
+                                c.send({"t": "return", "kind": kind, "hp": hp, "max": mx})).start()
             elif t == "field":
                 state["field"] = o
                 # The visitor swings a diamond sword at whatever is nearest, once a second.

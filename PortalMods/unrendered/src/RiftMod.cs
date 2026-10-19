@@ -23,6 +23,7 @@ public sealed class RiftMod : IGameMod
     {
         Rift.Boot(host);
         RiftConfig.WriteDefault(Path.Combine(Rift.Dir, "portal.cfg"));
+        Hooks.Install();
     }
 
     public void WorldOpened(GameWorld world) { }
@@ -43,21 +44,25 @@ public sealed class RiftMod : IGameMod
 
     public void Frame(GameWorld world, float dt) => Guard("frame", Rift.Frame);
 
-    public void BeforeDraw(GameWorld world, ModScene scene) => Guard("before-draw", () => Realm.BeforeDraw(world, scene));
+    public void BeforeDraw(GameWorld world, ModScene scene) => Guard("before-draw", () =>
+    {
+        Realm.BeforeDraw(world, scene);
+        Composite.Begin(world, scene);
+    });
 
     public void Draw3D(GameWorld world, ModScene scene) => Guard("draw", () =>
     {
         if (Realm.Owns(world)) Realm.Draw3D(scene);
         else
         {
-            Portal.Draw(world, scene.Eye);
-            Visitors.Draw(world, scene.Eye);
+            // Minecraft's things: as the composite's mask when it will fill them in at full
+            // resolution, as themselves when there is no composite.
+            Overlays.Draw(world, scene.Eye, keyed: Composite.OverlayKeyed);
         }
     });
 
     public void DrawHud(GameWorld world, ModScene scene) => Guard("hud", () =>
     {
-        Visitors.DrawTags(world, scene.Camera);
         if (Realm.Owns(world)) Realm.DrawTags(scene.Camera);
         Hud.Draw(world);
     });

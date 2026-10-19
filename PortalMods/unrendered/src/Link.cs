@@ -209,9 +209,10 @@ public sealed class Link
                 WorldName = m.Str("world");
                 HostName = m.Str("host");
                 Rift.Log($"welcomed by {WorldName} ({HostName}, mc {m.Str("mc")})");
-                Rift.Notice($"WORLDS JOINED: {WorldName.ToUpperInvariant()} — {HostName.ToUpperInvariant()} IS ON THE OTHER SIDE");
+                Rift.Notice($"WORLDS JOINED: {WorldName.ToUpperInvariant()}");
                 if (m.J["portal"] is JsonObject p) Portal.LinkTo(p);
                 Textures.Relink();
+                Crossings.Relink();
                 // The join that started all this: ask Minecraft for its half of the door.
                 if (Portal.Open) Send("join");
                 return;
@@ -234,6 +235,8 @@ public sealed class Link
         }
 
         if (Realm.Handle(m)) return;
+        if (Overlays.Handle(m)) return;
+        if (Crossings.Handle(m)) return;
         if (Visitors.Handle(m)) return;
         if (Pocket.Handle(m)) return;
     }

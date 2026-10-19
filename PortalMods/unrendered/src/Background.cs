@@ -21,11 +21,12 @@ public static class Background
     internal static void Tick(float dt)
     {
         if (!Realm.Active || Realm.HomeWorld is not { } home || Realm.RealmWorld is not { } realm) return;
-        if (!Visitors.AnyIn(home)) return;
+        if (!Visitors.AnyIn(home) && Overlays.RiftEnts.Count == 0) return;
         try
         {
             home.Update(dt, InputFrame.Empty, acceptCombatInput: false);
             Visitors.Tick(home, dt);
+            Overlays.Tick(home, dt);
         }
         catch (Exception e) { Rift.Log("background: " + e); }
         try { DriveListener?.Invoke(realm, new object[] { 0f }); }

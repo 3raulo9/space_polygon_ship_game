@@ -87,11 +87,12 @@ public static class Visitors
             case "avatar": Avatar(m); return true;
             case "strike": Strike(m); return true;
             case "mine": Mine(m); return true;
+            case "use": Use(m); return true;
             case "depart":
                 if (_all.Remove(m.Str("uuid"), out var gone))
                 {
                     gone.World.RemovePuppet(gone.Seat);
-                    Rift.Notice($"{gone.Name} WENT BACK TO MINECRAFT");
+                    Rift.Notice($"{gone.Name} WENT HOME");
                 }
                 return true;
         }
@@ -125,9 +126,9 @@ public static class Visitors
             at = Torus.Wrap(p.Position + p.Forward * 5f);
         }
 
-        // A soldier's build, because that is the size of a person in this game: the hunters
-        // aim at a head where a head is, and a round that would miss a soldier misses them.
-        var seat = home.AddPuppet(new Loadout { Class = PlayerClass.Soldier }, name, at, facing);
+        // A plain machine build: it carries no viewmodel and no rig, so nothing of
+        // UNRENDERED's own first-person kit can ever be drawn on a Minecraft body.
+        var seat = home.AddPuppet(new Loadout { Class = PlayerClass.Tank }, name, at, facing);
         if (seat == null)
         {
             live.Send("harm", "uuid", uuid, "amount", 0f, "by", "A FULL WORLD", "eject", true);
@@ -150,7 +151,7 @@ public static class Visitors
             ["facing"] = Portal.Open ? Portal.Facing : facing,
         };
         live.Send("place", "uuid", uuid, "x", at.X, "z", at.Y, "yaw", facing, "portal", portal);
-        Rift.Notice($"{name} CAME THROUGH FROM MINECRAFT");
+        Rift.Notice($"{name} CAME THROUGH");
         CueBank.Play(Cue.PortalEnter, at, 0f);
     }
 
@@ -248,12 +249,24 @@ public static class Visitors
         }
     }
 
-    /// <summary>A visitor broke a piece of a building. Enough of them and the building comes
-    /// down — in UNRENDERED, for real, the way a lance would bring it down.</summary>
+    private static readonly System.Reflection.MethodInfo? FractureDebris =
+        typeof(GameWorld).GetMethod("EmitTowerFractureDebris",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+    private static readonly List<DebrisSpawn> _detached = new();
+
+    /// <summary>
+    /// A Minecraft player broke a piece of a building — with a pickaxe, a sword, TNT, a creeper
+    /// going off beside it, whatever broke the block. The building takes it the way it takes a
+    /// lance: its own fracture model loses the cells around that point (they fall as the game's
+    /// own rubble), a section left unsupported comes down with them, and a base cut through
+    /// brings the whole tower down. Minecraft is told which pieces went, so its collision
+    /// follows. Arches have no cells: enough broken pieces and they give way whole.
+    /// </summary>
     private static void Mine(Msg m)
     {
         if (Home is not { } w) return;
-        var at = new Vector2(m.F("x"), m.F("z"));
+        var at = new Vector3(m.F("x"), m.F("y"), m.F("z"));
+        var flat = new Vector2(at.X, at.Z);
         Structure? best = null;
         float bestD = float.MaxValue;
         Span<(Vector2 At, float Radius)> legs = stackalloc (Vector2, float)[Structure.MaxBlockers];
@@ -262,29 +275,100 @@ public static class Visitors
             int n = s.Blockers(legs);
             for (int i = 0; i < n; i++)
             {
-                float d = Torus.Distance(legs[i].At, at) - legs[i].Radius;
+                float d = Torus.Distance(legs[i].At, flat) - legs[i].Radius;
                 if (d < bestD) { bestD = d; best = s; }
             }
         }
-        if (best == null || bestD > 2f) return;
+        if (best == null || bestD > 2f || best.Falling) return;
+        _all.TryGetValue(m.Str("uuid"), out var who);
+
+        if (best.Kind == StructureKind.Tower)
+        {
+            var impact = new Vector3(Torus.NearestImage(flat, best.Position).X, at.Y, Torus.NearestImage(flat, best.Position).Y);
+            _detached.Clear();
+            // A cell of the fracture model is a few metres across; one Minecraft block mined out of
+            // it chips the cells nearest it, and a handful bring one chunk of the tower away.
+            bool felled = best.CutTower(impact, 4f, 12f, _detached, out bool fresh);
+            FractureDebris?.Invoke(w, new object[] { best, impact, _detached, fresh, felled });
+            if (_detached.Count > 0 && Rift.Live is { } live)
+            {
+                var boxes = new JsonArray();
+                foreach (var d in _detached) boxes.Add(new JsonArray(d.Pos.X, d.Pos.Y, d.Pos.Z, MathF.Max(0.75f, d.Size)));
+                live.Send("cut", "i", best.Index, "boxes", boxes);
+            }
+            if (felled && who != null) Rift.Notice($"{who.Name} BROUGHT DOWN A TOWER");
+            return;
+        }
+
         int count = _mined.TryGetValue(best.Index, out int c) ? c + 1 : 1;
         _mined[best.Index] = count;
-        w.Emit(Cue.StructureCrack, at);
-        int needed = (int)(10 + best.BlockHeight * 0.6f);
-        if (count >= needed && !best.Falling)
+        w.Emit(Cue.StructureCrack, flat);
+        if (count >= (int)(6 + best.BlockHeight * 0.5f))
         {
             best.Strike();
             w.Emit(Cue.StructureGroan, best.Position);
-            if (_all.TryGetValue(m.Str("uuid"), out var who))
-                Rift.Notice($"{who.Name} BROUGHT DOWN A TOWER WITH A PICKAXE");
+            if (who != null) Rift.Notice($"{who.Name} BROUGHT DOWN AN ARCH");
         }
+    }
+
+    /// <summary>Something in the rift dimension hit one of UNRENDERED's own players.</summary>
+    internal static void HurtSeat(int seat, float amount)
+    {
+        if (Home is not { } w || (uint)seat >= (uint)w.Players.Count) return;
+        var craft = w.Players[seat];
+        if (craft.Puppet || !craft.Alive) return;
+        w.HurtCraft(craft, amount, craft.Position);
+    }
+
+    /// <summary>
+    /// A Minecraft player used one of UNRENDERED's own items inside UNRENDERED. It does what it
+    /// does here: a crab core is lobbed from their seat, along where they are looking, by the
+    /// game's own throw — the same bomb, the same beams, the kill credited to them.
+    /// </summary>
+    private static void Use(Msg m)
+    {
+        if (Home is not { } w || !_all.TryGetValue(m.Str("uuid"), out var v)) return;
+        if (m.Str("item") != "crab_core") return;
+        int seat = v.SeatIndex;
+        if (seat < 0) return;
+        var pack = w.InventoryOf(seat);
+        pack.Weapons[0] = new ItemStack(ItemKind.CrabCore, 1);
+        w.UseWeaponSlot(0, v.Seat);
+        pack.Weapons[0] = ItemStack.Empty;
+    }
+
+    /// <summary>20 Hz: where UNRENDERED's own players stand, so the rift dimension can hold
+    /// a stand-in for each that Minecraft's mobs go for and Minecraft's weapons can hit.</summary>
+    private static double _seatClock;
+
+    private static void SendSeats(GameWorld w, Link live)
+    {
+        double now = Raylib.GetTime();
+        if (now - _seatClock < 0.05) return;
+        _seatClock = now;
+        var list = new JsonArray();
+        for (int i = 0; i < w.Players.Count; i++)
+        {
+            var p = w.Players[i];
+            if (p.Puppet || p.Away || !p.Alive) continue;
+            list.Add(new JsonObject
+            {
+                ["seat"] = i, ["name"] = i == w.LocalIndex ? Rift.Cfg.Name : w.NameOrSeat(i),
+                ["x"] = p.Position.X, ["y"] = p.Height, ["z"] = p.Position.Y, ["yaw"] = p.Heading,
+                ["hp"] = p.Health + p.Shield, ["max"] = p.MaxHealth + p.MaxShield,
+                ["r"] = p.IsMachine ? PlayerTank.Radius : 0.4f, ["h"] = p.EyeHeight + 0.3f,
+            });
+        }
+        live.Send("seats", "list", list);
     }
 
     // --- Each tick ---------------------------------------------------------------------
 
     internal static void Tick(GameWorld w, float dt)
     {
-        if (_all.Count == 0 || Rift.Live is not { } live) return;
+        if (Rift.Live is not { } live || !ReferenceEquals(w, Home)) return;
+        if (!w.Networked) SendSeats(w, live);
+        if (_all.Count == 0) return;
         bool any = false;
         foreach (var v in _all.Values)
         {
@@ -295,7 +379,7 @@ public static class Visitors
         if (!any) return;
 
         double now = Raylib.GetTime();
-        if (now - _fieldClock > 0.1)
+        if (now - _fieldClock > 0.05)
         {
             _fieldClock = now;
             SendField(w, live);
@@ -389,22 +473,40 @@ public static class Visitors
             bw.Write(eye.X); bw.Write(eye.Y); bw.Write(eye.Z);
 
             _eye ??= new EntityRenderer();
-            Capture.DrawList(() =>
+            // Drawn as if the visitor's own seat were the eye: the game then leaves that seat
+            // out (Minecraft draws the visitor) and draws everybody else — the pilot's craft
+            // included — as bodies seen from outside, with no first-person arms anywhere.
+            int was = w.ViewSeat;
+            SetViewSeat(w, v.SeatIndex);
+            try
             {
-                GridRenderer.Draw(v.Pos);
-                _eye.Draw(w, eye);
-            }, bw);
+                Capture.DrawList(() =>
+                {
+                    GridRenderer.Draw(v.Pos);
+                    _eye.Draw(w, eye);
+                }, bw);
+            }
+            finally { SetViewSeat(w, was); }
             bw.Flush();
             live.SendBin("scene", ms.GetBuffer().AsSpan(0, (int)ms.Length), droppable: true, "uuid", v.Uuid);
         }
+    }
+
+    private static readonly System.Reflection.PropertyInfo? ViewSeatProp = typeof(GameWorld).GetProperty(nameof(GameWorld.ViewSeat));
+
+    private static void SetViewSeat(GameWorld w, int seat)
+    {
+        if (seat >= 0) ViewSeatProp?.SetValue(w, seat);
     }
 
     private static void Rgba(BinaryWriter w, Color c) { w.Write(c.R); w.Write(c.G); w.Write(c.B); w.Write(c.A); }
 
     // --- Drawing them, in UNRENDERED --------------------------------------------------
 
-    /// <summary>Inside the 3D pass: each visitor exactly as Minecraft draws them.</summary>
-    internal static void Draw(GameWorld w, Vector3 cam)
+    public static bool AnyLookIn(GameWorld w) => _all.Values.Any(v => ReferenceEquals(v.World, w));
+
+    /// <summary>Each visitor exactly as Minecraft draws them (keyed: as the composite's mask).</summary>
+    internal static void Draw(GameWorld w, Vector3 cam, bool keyed = false)
     {
         var eyeXZ = new Vector2(cam.X, cam.Z);
         foreach (var v in _all.Values)
@@ -414,8 +516,8 @@ public static class Visitors
             float fog = GridRenderer.FogFactor(Vector2.Distance(at, eyeXZ));
             if (fog >= 0.99f) continue;
             var feet = new Vector3(at.X, v.Y, at.Y);
-            if (v.Look is { } look) look.Draw(feet, fog, Atmosphere.FogColor);
-            else Raylib.DrawCubeWires(feet + new Vector3(0, 0.9f, 0), 0.6f, 1.8f, 0.6f, Color.White);
+            if (v.Look is { } look) look.Draw(feet, fog, Atmosphere.FogColor, keyed);
+            else if (!keyed) Raylib.DrawCubeWires(feet + new Vector3(0, 0.9f, 0), 0.6f, 1.8f, 0.6f, Color.White);
         }
     }
 

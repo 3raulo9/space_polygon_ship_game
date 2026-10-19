@@ -81,6 +81,8 @@ public static class Portal
         _age += dt;
         if (Grown < 1f) return;
 
+        Crossings.Tick(world);
+
         var p = world.Player;
         if (!p.Alive) return;
 
@@ -117,9 +119,16 @@ public static class Portal
     // --- Drawing ----------------------------------------------------------------------
 
     /// <summary>Inside the 3D pass, after the game's own entities.</summary>
-    internal static void Draw(GameWorld world, Vector3 cam)
+    internal static void Draw(GameWorld world, Vector3 cam, bool keyed = false)
     {
         if (!ReferenceEquals(world, _world)) return;
+        McShader.Begin(keyed);
+        try { DrawFrame(cam); }
+        finally { McShader.End(); }
+    }
+
+    private static void DrawFrame(Vector3 cam)
+    {
         var eye = new Vector2(cam.X, cam.Z);
         Vector2 at = Torus.NearestImage(_at, eye);
         float fog = GridRenderer.FogFactor(Vector2.Distance(at, eye));

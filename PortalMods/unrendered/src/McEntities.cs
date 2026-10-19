@@ -63,12 +63,13 @@ public sealed class McEntity
     /// <summary>
     /// Replays the captured quads with their feet at <paramref name="at"/> (in whatever space
     /// the caller is drawing). <paramref name="fog"/> 0..1 sinks the colours toward
-    /// <paramref name="fogColor"/> — UNRENDERED's fog when a Minecraft player is standing in
-    /// UNRENDERED, none when the pilot is looking at Minecraft. <paramref name="scale"/> lets
-    /// a far-away dropped item stay the size Minecraft draws it.
+    /// <paramref name="fogColor"/>. With <paramref name="keyed"/> it is drawn as the
+    /// composite's mask instead (see <see cref="Composite.BeginMask"/>) — every pixel the
+    /// texture actually covers, and no other.
     /// </summary>
-    public void Draw(Vector3 at, float fog, Color fogColor)
+    public void Draw(Vector3 at, float fog, Color fogColor, bool keyed = false)
     {
+        McShader.Begin(keyed);
         foreach (var (texId, v, c) in Layers)
         {
             // An empty id is a layer with no texture at all (a plain coloured box, from a
@@ -79,7 +80,7 @@ public sealed class McEntity
             for (int i = 0; i < n; i++)
             {
                 Color col = new(c[i * 4], c[i * 4 + 1], c[i * 4 + 2], c[i * 4 + 3]);
-                if (fog > 0f)
+                if (fog > 0f && !keyed)
                 {
                     byte a = col.A;
                     col = GridRenderer.LerpColor(col, fogColor, fog);
@@ -92,6 +93,7 @@ public sealed class McEntity
             Rlgl.End();
             Rlgl.SetTexture(0);
         }
+        McShader.End();
     }
 
     /// <summary>Asks for every texture this entity wears, so the first sight of a new mob
@@ -105,4 +107,50 @@ public sealed class McEntity
     {
         public const int Quads = UnrenderedPortal.Draw.Quads;
     }
+}
+
+/// <summary>
+/// How Minecraft's models are filled in: texture times vertex colour, with the cut-out
+/// Minecraft gives them — a pixel the texture leaves transparent is not drawn and writes no
+/// depth, so a skin's outer layer never hides the body under it. In key mode the covered
+/// pixels are written as the composite's mask (alpha zero).
+/// </summary>
+public static class McShader
+{
+    private static Shader _s;
+    private static bool _ready;
+    private static int _locKeyMode;
+
+    public static void Begin(bool keyed)
+    {
+        if (!_ready)
+        {
+            _ready = true;
+            _s = Raylib.LoadShaderFromMemory(null, Fs);
+            _locKeyMode = Raylib.GetShaderLocation(_s, "keyMode");
+        }
+        Raylib.BeginShaderMode(_s);
+        Raylib.SetShaderValue(_s, _locKeyMode, keyed ? 1 : 0, ShaderUniformDataType.Int);
+    }
+
+    public static void End()
+    {
+        Rlgl.DrawRenderBatchActive();
+        Raylib.EndShaderMode();
+    }
+
+    private const string Fs = """
+        #version 330
+        in vec2 fragTexCoord;
+        in vec4 fragColor;
+        uniform sampler2D texture0;
+        uniform vec4 colDiffuse;
+        uniform int keyMode;
+        out vec4 finalColor;
+        void main() {
+            vec4 t = texture(texture0, fragTexCoord) * fragColor;
+            if (t.a < 0.1) discard;
+            finalColor = keyMode == 1 ? vec4(0.0) : t;
+        }
+        """;
 }

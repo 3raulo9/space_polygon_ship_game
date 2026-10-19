@@ -33,6 +33,23 @@ public static class TestHatch
             Realm.Enter(w);
         }
 
+        // Walk the nearest hunter through UNRENDERED's own portal, one side then the other.
+        if (Plan.Contains("cross") && Portal.Open && Portal.Linked != null && _crossStep < 3 && w.Enemies.Count > 0)
+        {
+            var n = new System.Numerics.Vector2(MathF.Sin(Portal.Facing), MathF.Cos(Portal.Facing));
+            var e = w.Enemies[0];
+            if (_crossStep == 0 && Raylib_cs.Raylib.GetTime() > 4) { e.Position = Portal.Position + n * 2f; _crossStep = 1; }
+            else if (_crossStep == 1) { _crossStep = 2; }
+            else if (_crossStep == 2) { e.Position = Portal.Position - n * 2f; _crossStep = 3; }
+        }
+
+        // Turn to face what Minecraft built.
+        if (Plan.Contains("lookbuilt") && Built.First is { } b)
+        {
+            var to = new System.Numerics.Vector2(b.X, b.Z) - w.Player.Position;
+            w.Player.Heading = MathF.Atan2(to.X, to.Y);
+        }
+
         if (!Realm.Active) { _since = -1; return; }
         double now = Raylib_cs.Raylib.GetTime();
         if (_since < 0) _since = now;
@@ -72,5 +89,6 @@ public static class TestHatch
     }
 
     private static double _since = -1, _shot;
+    private static int _crossStep;
     private static bool _picked, _used, _left;
 }

@@ -156,3 +156,29 @@ eyeZ`, then a **draw list**.
 **Draw list** (`scene` and `craft`): `u32 draws`, then per draw: `u8 mode` (1
 lines, 4 triangles, 7 quads), `u32 verts`, then `verts` × (`f32 x,y,z`,
 `u8 r,g,b,a`). These are UNRENDERED's own vertices, already shaded and fogged.
+
+## One world each, shared (protocol 1, second pass)
+
+The rift dimension is UNRENDERED's world, as seen by Minecraft. The pilot's stand-in
+world is the Minecraft overworld around the portal, as seen by UNRENDERED. Each game
+simulates its own things wherever they are; the other game sees them and can touch them.
+
+| dir | `t` / kind | fields | meaning |
+|-----|-----------|--------|---------|
+| U→M | `seats`   | `list[{seat, name, x, y, z, yaw, hp, max, r, h}]` | 20 Hz: UNRENDERED's own players in its world (UNR coords). Minecraft keeps an invisible stand-in for each in the rift dimension, which mobs target and anything can hit |
+| M→U | `hurt`    | `amount, by, seat` | with `seat`: something in the rift dimension hit that UNRENDERED player (MC HP) |
+| M→U | bin `rents` | — | 20 Hz: every entity in the rift dimension within 96 blocks of a visitor or an UNRENDERED seat, other than the rift's own stand-ins and the visitors themselves: mobs that walked through the portal, dropped items, arrows, block entities in motion. Same record layout as `ents`, but **x, y, z are UNR coordinates** (MC y − 64). UNRENDERED draws them and its rounds hit them (`hit` takes any entity id) |
+| M→U | `built`   | `set[[x,y,z,p]...], palette[]` | blocks Minecraft players placed (or removed: `p` = 0) in the rift dimension, anything that isn't the rift's own collision. UNR coords: y = MC y − 64. `palette` holds new entries in the pilot palette format. Sent in full when a visitor arrives, then as changes |
+| M→U | `use`     | `uuid, item` | a visitor used an UNRENDERED relic in the rift dimension whose effect is UNRENDERED's (`crab_core`): UNRENDERED throws its own from their seat |
+| U→M | `cut`     | `i, boxes[[x, y, z, r]...]` | a building lost the pieces around these points (UNR coords). Clear its collision blocks within each `r` |
+| U→M | bin `model` | `kind` | a draw list of an UNRENDERED enemy's body at the origin, facing +Z, feet on 0. Sent once per kind, before the first `cross` of that kind |
+| U→M | `cross`   | `kind, hp, max` | an UNRENDERED enemy (`hunter`, `elite`, `soldier`) walked into UNRENDERED's portal. It comes out of the Minecraft portal and fights there as itself. Drawn with its `model`, killed by Minecraft weapons, drops UNRENDERED salvage as relics |
+| M→U | `return`  | `kind, hp, max` | such an enemy walked back into the Minecraft portal; UNRENDERED takes it back |
+
+Mobs, animals and dropped items go through either portal like a nether portal. A mob
+walking into the overworld portal comes out of the rift dimension's portal (in
+UNRENDERED's world), and the other way round.
+
+`mine` is also sent when an explosion or any other means breaks the city's collision.
+Minecraft drops UNRENDERED salvage relics for mined city blocks (mostly `scrap_metal`,
+sometimes `dense_alloy` or `copper_wire`).
