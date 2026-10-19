@@ -137,6 +137,7 @@ public final class AutoTest {
             }
             case WATCH_PILOT -> {
                 Vec3d p = RiftPilot.pilotPos();
+                if (stepTicks == 20 && p != null) ringOfMobs(mc, p);
                 if (RiftPilot.active()) follow(mc, p);
                 if (stepTicks % 80 == 40) shot(mc, "mc-pilot");
                 if (!RiftPilot.active() && !pilotSeenLeaving) {
@@ -175,6 +176,27 @@ public final class AutoTest {
         }
     }
 
+    /**
+     * Minecraft's own creatures all round the pilot as it arrives, whichever way it faces:
+     * standing still (NoAI) so UNRENDERED's screenshots catch them, a husk that fights, and
+     * an item to pick up.
+     */
+    private static void ringOfMobs(MinecraftClient mc, Vec3d p) {
+        IntegratedServer server = mc.getServer();
+        String[] mobs = {"cow", "pig", "villager", "sheep", "zombie", "chicken", "creeper", "skeleton"};
+        server.execute(() -> {
+            for (int i = 0; i < mobs.length; i++) {
+                double a = i * Math.PI * 2 / mobs.length, d = 6.0;
+                run(server, null, String.format(java.util.Locale.ROOT, "summon %s %.2f %.2f %.2f {PersistenceRequired:1b,NoAI:1b,Silent:1b}",
+                    mobs[i], p.x + Math.cos(a) * d, p.y + 0.5, p.z + Math.sin(a) * d));
+            }
+            run(server, null, String.format(java.util.Locale.ROOT, "summon husk %.2f %.2f %.2f {PersistenceRequired:1b}", p.x + 9, p.y + 0.5, p.z));
+            run(server, null, String.format(java.util.Locale.ROOT,
+                "summon item %.2f %.2f %.2f {Item:{id:\"minecraft:golden_apple\",count:1}}", p.x + 2.5, p.y + 0.5, p.z + 2.5));
+            log("put " + mobs.length + " mobs, a husk and a golden apple round the pilot at " + p);
+        });
+    }
+
     /** Stand a little way off the pilot and look at it. */
     private static void follow(MinecraftClient mc, Vec3d p) {
         if (mc.player == null || p == null) return;
@@ -182,7 +204,7 @@ public final class AutoTest {
             IntegratedServer server = mc.getServer();
             String name = mc.player.getGameProfile().getName();
             Vec3d at = p.add(5.5, 2.5, 5.5);
-            server.execute(() -> run(server, null, String.format("tp %s %.2f %.2f %.2f", name, at.x, at.y, at.z)));
+            server.execute(() -> run(server, null, String.format(java.util.Locale.ROOT, "tp %s %.2f %.2f %.2f", name, at.x, at.y, at.z)));
         }
         mc.player.lookAt(EntityAnchorArgumentType.EntityAnchor.EYES, p.add(0, 1.0, 0));
     }

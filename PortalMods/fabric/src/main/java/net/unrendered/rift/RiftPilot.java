@@ -470,6 +470,8 @@ public final class RiftPilot {
         if (active) onLeave(server);
     }
 
+    private static int hurtLogged;
+
     /** Minecraft hurt the pilot. UNRENDERED does the bookkeeping. */
     public static void onPilotHurt(PilotEntity body, DamageSource source, float amount) {
         JsonObject h = Bridge.msg("hurt");
@@ -477,6 +479,7 @@ public final class RiftPilot {
         Entity by = source.getAttacker();
         h.addProperty("by", by != null ? by.getName().getString() : source.getName());
         Bridge.send(h);
+        if (hurtLogged++ < 40) RiftMod.LOG.info("Rift: the pilot took {} from {}", amount, h.get("by").getAsString());
     }
 
     /** Called by the world mixin for every block change on the server. */
