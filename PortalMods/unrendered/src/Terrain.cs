@@ -483,6 +483,11 @@ public static unsafe class Atlas
         _tex = Raylib.LoadTextureFromImage(_img);
         Raylib.SetTextureFilter(_tex, TextureFilter.Point);
         Textures.Loaded += Paint;
+
+        // Slot 0 is plain white, for faces with no texture at all — a Minecraft with no client
+        // sends blocks as their map colour, which is all tint.
+        _slots[""] = 0;
+        Raylib.ImageDrawRectangle(ref _img, 0, 0, Tile, Tile, Color.White);
     }
 
     public static int Slot(string tex)
@@ -490,6 +495,7 @@ public static unsafe class Atlas
         Make();
         if (_slots.TryGetValue(tex, out int s)) return s;
         s = _slots.Count;
+        if (tex.Length == 0) return 0;
         if (s >= PerRow * PerRow) return 0;
         _slots[tex] = s;
         if (Textures.Get(tex) is { } t) Paint(t);
@@ -508,7 +514,8 @@ public static unsafe class Atlas
 
     private static void Paint(Textures.Tex t)
     {
-        if (!_slots.TryGetValue(t.Id, out int s)) return;
+        if (!_slots.TryGetValue(t.Id, out int s) || s == 0) return;
+        Raylib.ImageDrawRectangle(ref _img, (s % PerRow) * Tile, (s / PerRow) * Tile, Tile, Tile, Color.Blank);
         // The whole strip, scaled to 16 wide, so every frame is ready to step through.
         Image strip = Raylib.ImageCopy(t.Cpu);
         Raylib.ImageResizeNN(ref strip, Tile, Tile * t.Frames);

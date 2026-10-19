@@ -71,8 +71,9 @@ public sealed class McEntity
     {
         foreach (var (texId, v, c) in Layers)
         {
-            var tex = Textures.Or(texId);
-            Rlgl.SetTexture(tex.Gpu.Id);
+            // An empty id is a layer with no texture at all (a plain coloured box, from a
+            // Minecraft with no client to draw for it): raylib's default white, tinted.
+            Rlgl.SetTexture(texId.Length == 0 ? Rlgl.GetTextureIdDefault() : Textures.Or(texId).Gpu.Id);
             Rlgl.Begin(Draw_.Quads);
             int n = v.Length / 5;
             for (int i = 0; i < n; i++)
@@ -97,7 +98,7 @@ public sealed class McEntity
     /// costs one round trip rather than one per frame.</summary>
     public void Warm()
     {
-        foreach (var (tex, _, _) in Layers) Textures.Get(tex);
+        foreach (var (tex, _, _) in Layers) if (tex.Length > 0) Textures.Get(tex);
     }
 
     private static class Draw_
