@@ -262,8 +262,16 @@ public final class RiftVisitors {
     // --- From UNRENDERED ----------------------------------------------------------------
 
     /** UNRENDERED's frame for one visitor: forwarded, still compressed, to that player's client. */
+    private static int scenesIn;
+
     public static void onScene(MinecraftServer server, JsonObject m, byte[] packed) {
-        if (packed == null || packed.length > 1_000_000) return;
+        scenesIn++;
+        if (packed == null || packed.length > 1_000_000) {
+            if (scenesIn < 200 && scenesIn % 20 == 1)
+                RiftMod.LOG.warn("Rift: scene {} from UNRENDERED dropped, {} bytes packed (a payload holds 1 MB)", scenesIn, packed == null ? -1 : packed.length);
+            return;
+        }
+        if (scenesIn % 60 == 1) RiftMod.LOG.info("Rift: scene {} from UNRENDERED, {} bytes packed", scenesIn, packed.length);
         UUID id;
         try {
             id = UUID.fromString(Session.str(m, "uuid"));
