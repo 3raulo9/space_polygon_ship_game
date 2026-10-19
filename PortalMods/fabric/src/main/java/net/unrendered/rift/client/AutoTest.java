@@ -165,7 +165,15 @@ public final class AutoTest {
                 }
             }
             case IN_RIFT -> {
-                if (mc.player != null) mc.player.setYaw(mc.player.getYaw() + 1.5f);
+                // A visitor arrives in the portal, inside the craft that just came home through
+                // it: step back twelve blocks and look at UNRENDERED from there.
+                if (stepTicks == 2) {
+                    IntegratedServer server = mc.getServer();
+                    String name = mc.player.getGameProfile().getName();
+                    server.execute(() -> run(server, null, "execute as " + name + " at " + name + " run tp @s ^ ^1 ^-12"));
+                }
+                if (stepTicks == 25 && mc.player != null) mc.player.setPitch(4f);
+                if (mc.player != null && stepTicks > 40) mc.player.setYaw(mc.player.getYaw() + 1.5f);
                 if (stepTicks % 60 == 30) shot(mc, "mc-rift");
                 if (stepTicks > 20 * 30) go(Step.DONE);
             }
