@@ -10,8 +10,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
-  <!-- PortalMods/ holds two separate mods (one for this game, one for Minecraft) with their
-       own projects. None of it is part of the game, so the game's build looks past it. -->
+  <!-- PortalMods/ holds separate mod projects with their own builds. None of it is part of
+       the game, so the game's build looks past it. -->
   <ItemGroup>
     <Compile Remove="PortalMods\**" />
     <None Remove="PortalMods\**" />

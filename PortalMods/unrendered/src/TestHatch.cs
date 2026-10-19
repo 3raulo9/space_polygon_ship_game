@@ -10,10 +10,45 @@ namespace UnrenderedPortal;
 public static class TestHatch
 {
     private static readonly string Plan = Environment.GetEnvironmentVariable("RIFT_TEST") ?? "";
+
+    // --- Pictures and an ending, for runs nobody is watching (the end-to-end test) ----------
+
+    /// <summary>RIFT_SHOTS: a folder; the finished frame is saved there every few seconds.</summary>
+    private static readonly string? Shots = Environment.GetEnvironmentVariable("RIFT_SHOTS");
+    private static readonly double QuitAfter =
+        double.TryParse(Environment.GetEnvironmentVariable("RIFT_QUIT_AFTER"), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out double q) ? q : 0;
+    private static double _lastShot = -100, _started = -1;
+    private static int _shotN;
+
+    public static bool ShotDue => Shots != null && Raylib_cs.Raylib.GetTime() - _lastShot > 4.0;
+
+    /// <summary>Saves the frame being presented (call before the buffers swap).</summary>
+    public static void Shoot(string label)
+    {
+        _lastShot = Raylib_cs.Raylib.GetTime();
+        try
+        {
+            Directory.CreateDirectory(Shots!);
+            var img = Raylib_cs.Raylib.LoadImageFromScreen();
+            string file = Path.Combine(Shots!, $"{_shotN++:000}-{label}.png");
+            Raylib_cs.Raylib.ExportImage(img, file);
+            Raylib_cs.Raylib.UnloadImage(img);
+            Rift.Log($"shot {file} (realm {Realm.Active}, terrain columns {Realm.Land.Columns}, mobs {Realm.Ents.Count}, " +
+                     $"rift things {Overlays.RiftEnts.Count}, visitors {Visitors.All.Count}, built {Built.Any})");
+        }
+        catch (Exception e) { Rift.Log("shot: " + e.Message); }
+    }
     private static bool _opened, _linked, _entered;
 
     public static void Frame()
     {
+        if (_started < 0) _started = Raylib_cs.Raylib.GetTime();
+        if (QuitAfter > 0 && Raylib_cs.Raylib.GetTime() - _started > QuitAfter)
+        {
+            Rift.Log("test hatch: time is up");
+            Environment.Exit(0);
+        }
         if (Plan.Length == 0 || Rift.World is not { } w) return;
         if (Plan.Contains("portal") && !_opened)
         {
@@ -78,6 +113,37 @@ public static class TestHatch
             craft.Heading = MathF.Atan2(to.X, to.Y);
             w.FirePlayerShot();
         }
+        // A walk through Minecraft: forward for twenty seconds (turning off anything it walks
+        // into), then at the nearest mob, then the nearest dropped item, then home.
+        if (Plan.Contains("tour"))
+        {
+            float dt = Raylib_cs.Raylib.GetFrameTime();
+            if (inside > 2 && inside < 22)
+            {
+                var before = craft.Position;
+                craft.Position += craft.Forward * 7f * dt;
+                if (inside - _lastTurn > 1.0 && Vector2Distance(before, _tourMark) < 0.5f) { craft.Heading += 1.6f; _lastTurn = inside; }
+                if (inside - _lastTurn > 1.0) _tourMark = before;
+            }
+            else if (inside >= 22 && inside < 30 && Realm.Ents.FirstOrDefault(e => !e.IsItem) is { } quarry && now - _shot > 0.4)
+            {
+                _shot = now;
+                var to = new System.Numerics.Vector2((float)(quarry.Pos.X - Realm.Ox), (float)(quarry.Pos.Z - Realm.Oz)) - craft.Position;
+                craft.Heading = MathF.Atan2(to.X, to.Y);
+                if (to.Length() > 12f) craft.Position += System.Numerics.Vector2.Normalize(to) * 8f * dt;
+                w.FirePlayerShot();
+            }
+            else if (inside >= 30 && inside < 34 && Realm.Ents.FirstOrDefault(e => e.IsItem) is { } loot)
+                Realm.PlaceAt(loot.Pos.X, loot.Pos.Z);
+            else if (inside >= 40 && !_left)
+            {
+                _left = true;
+                var portal = Portal.Linked!;
+                Realm.PlaceAt(portal["x"]!.GetValue<int>() + 0.5, portal["z"]!.GetValue<int>() + 1.5);
+                craft.Position += new System.Numerics.Vector2(0, -1.2f);
+            }
+        }
+
         // Walk back into Minecraft's portal.
         if (Plan.Contains("leave") && !_left && inside > 5.0)
         {
@@ -90,5 +156,9 @@ public static class TestHatch
 
     private static double _since = -1, _shot;
     private static int _crossStep;
+    private static double _lastTurn;
+    private static System.Numerics.Vector2 _tourMark;
+
+    private static float Vector2Distance(System.Numerics.Vector2 a, System.Numerics.Vector2 b) => (a - b).Length();
     private static bool _picked, _used, _left;
 }

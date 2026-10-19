@@ -82,9 +82,12 @@ public static class Composite
     /// frame back to the game untouched.</summary>
     internal static bool Present(Renderer renderer)
     {
-        if (_mode == Mode.None || _world == null || !ReferenceEquals(_world, Rift.World)) return false;
+        bool shot = TestHatch.ShotDue;
+        bool mine = _mode != Mode.None && _world != null && ReferenceEquals(_world, Rift.World);
+        if (!mine && !shot) return false;
         var target = TargetOf(renderer);
         if (target == null) return false;
+        if (!mine) { PresentPlain(target.Value); return true; }
         Ready();
 
         int sw = Raylib.GetScreenWidth(), sh = Raylib.GetScreenHeight();
@@ -119,8 +122,24 @@ public static class Composite
         var dst = new Rectangle((sw - dw) / 2, (sh - dh) / 2, dw, dh);
         Raylib.DrawTexturePro(target.Value.Texture, src, dst, Vector2.Zero, 0f, Color.White);
         Raylib.EndShaderMode();
+        if (shot) TestHatch.Shoot(_mode == Mode.Realm ? "minecraft" : "unrendered");
         Raylib.EndDrawing();
         return true;
+    }
+
+    /// <summary>The game's own present, word for word, for a frame the test hatch wants a
+    /// picture of: the picture has to be taken before the buffers swap.</summary>
+    private static void PresentPlain(RenderTexture2D target)
+    {
+        Raylib.BeginDrawing();
+        Raylib.ClearBackground(Palette.Void);
+        int sw = Raylib.GetScreenWidth(), sh = Raylib.GetScreenHeight();
+        int scale = Math.Max(1, Math.Min(sw / Config.InternalWidth, sh / Config.InternalHeight));
+        int dw = Config.InternalWidth * scale, dh = Config.InternalHeight * scale;
+        Raylib.DrawTexturePro(target.Texture, new Rectangle(0, 0, Config.InternalWidth, -Config.InternalHeight),
+            new Rectangle((sw - dw) / 2, (sh - dh) / 2, dw, dh), Vector2.Zero, 0f, Color.White);
+        TestHatch.Shoot("unrendered");
+        Raylib.EndDrawing();
     }
 
     private static readonly FieldInfo? TargetField =

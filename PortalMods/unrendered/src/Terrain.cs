@@ -6,7 +6,8 @@ using Raylib_cs;
 namespace UnrenderedPortal;
 
 /// <summary>
-/// The slice of a Minecraft world around the portal, held block by block and drawn the way
+/// The Minecraft world around the pilot, streamed in by chunk column as they move, held block
+/// by block and drawn the way
 /// Minecraft draws it: each block state's own baked model quads (so stairs are stairs and
 /// a torch is a torch), Minecraft's own textures out of an atlas, its sky and block light,
 /// its face shading and its biome tints.
@@ -45,10 +46,21 @@ public sealed unsafe class Terrain : IDisposable
     }
 
     public readonly List<Entry?> Palette = new();
-    public int Ox, Oy, Oz, Sx, Sy, Sz;
-    private ushort[] _idx = Array.Empty<ushort>();
-    private byte[] _light = Array.Empty<byte>();
-    public bool Loaded { get; private set; }
+
+    /// <summary>One chunk column, as Minecraft sent it: blocks from <see cref="Y0"/> up
+    /// through every section that holds anything.</summary>
+    private sealed class Column
+    {
+        public int Cx, Cz, Y0, H;
+        public ushort[] Idx = Array.Empty<ushort>();
+        public byte[] Light = Array.Empty<byte>();
+        public Section?[] Secs = Array.Empty<Section?>();
+        public bool[] Dirty = Array.Empty<bool>();
+    }
+
+    private readonly Dictionary<(int, int), Column> _cols = new();
+    public bool Loaded => _cols.Count > 0;
+    public int Columns => _cols.Count;
 
     // --- Palette and region -----------------------------------------------------------
 
@@ -99,79 +111,157 @@ public sealed unsafe class Terrain : IDisposable
         }
     }
 
+    /// <summary>One chunk column off the wire (PROTOCOL.md, <c>chunk</c>).</summary>
+    public void LoadChunk(Msg m)
+    {
+        int cx = m.I("cx"), cz = m.I("cz"), y0 = m.I("y0"), h = m.I("h");
+        Put(cx, cz, y0, h, m.Bin!, 0);
+    }
+
+    /// <summary>The old fixed slice, still understood: cut into columns.</summary>
     public void LoadRegion(Msg m)
     {
-        Ox = m.I("ox"); Oy = m.I("oy"); Oz = m.I("oz");
-        Sx = m.I("sx"); Sy = m.I("sy"); Sz = m.I("sz");
-        int n = Sx * Sy * Sz;
+        int ox = m.I("ox"), oy = m.I("oy"), oz = m.I("oz");
+        int sx = m.I("sx"), sy = m.I("sy"), sz = m.I("sz");
         var bin = m.Bin!;
-        _idx = new ushort[n];
-        _light = new byte[n];
-        MemoryMarshal.Cast<byte, ushort>(bin.AsSpan(0, n * 2)).CopyTo(_idx);
-        if (bin.Length >= n * 3) bin.AsSpan(n * 2, n).CopyTo(_light);
-        else Array.Fill(_light, (byte)0xF0);
-        Loaded = true;
-        Unload();
-        _secX = (Sx + 15) / 16; _secY = (Sy + 15) / 16; _secZ = (Sz + 15) / 16;
-        _sections = new Section?[_secX * _secY * _secZ];
-        _dirty = new bool[_sections.Length];
-        MarkAllDirty();
-        Rift.Log($"terrain: region {Sx}x{Sy}x{Sz} at {Ox},{Oy},{Oz}, palette {Palette.Count}");
+        int n = sx * sy * sz;
+        int h = (sy + 15) / 16 * 16;
+        for (int cx = ox >> 4; cx <= (ox + sx - 1) >> 4; cx++)
+            for (int cz = oz >> 4; cz <= (oz + sz - 1) >> 4; cz++)
+            {
+                var col = new Column { Cx = cx, Cz = cz, Y0 = oy, H = h, Idx = new ushort[256 * h], Light = new byte[256 * h] };
+                for (int y = 0; y < sy; y++)
+                    for (int z = 0; z < 16; z++)
+                        for (int x = 0; x < 16; x++)
+                        {
+                            int wx = cx * 16 + x - ox, wz = cz * 16 + z - oz;
+                            int i = (y * 16 + z) * 16 + x;
+                            if ((uint)wx >= (uint)sx || (uint)wz >= (uint)sz) { col.Light[i] = 0xF0; continue; }
+                            int r = (y * sz + wz) * sx + wx;
+                            col.Idx[i] = (ushort)(bin[r * 2] | bin[r * 2 + 1] << 8);
+                            col.Light[i] = bin.Length >= n * 3 ? bin[n * 2 + r] : (byte)0xF0;
+                        }
+                Install(col);
+            }
+        Rift.Log($"terrain: region {sx}x{sy}x{sz} at {ox},{oy},{oz} as {_cols.Count} columns");
+    }
+
+    private void Put(int cx, int cz, int y0, int h, byte[] bin, int at)
+    {
+        int n = 256 * h;
+        var col = new Column { Cx = cx, Cz = cz, Y0 = y0, H = h, Idx = new ushort[n], Light = new byte[n] };
+        if (n > 0)
+        {
+            MemoryMarshal.Cast<byte, ushort>(bin.AsSpan(at, n * 2)).CopyTo(col.Idx);
+            if (bin.Length >= at + n * 3) bin.AsSpan(at + n * 2, n).CopyTo(col.Light);
+            else Array.Fill(col.Light, (byte)0xF0);
+        }
+        Install(col);
+    }
+
+    private void Install(Column col)
+    {
+        if (_cols.Remove((col.Cx, col.Cz), out var old)) Free(old);
+        col.Secs = new Section?[col.H / 16];
+        col.Dirty = new bool[col.H / 16];
+        Array.Fill(col.Dirty, true);
+        _cols[(col.Cx, col.Cz)] = col;
+        // The neighbours' faces against this column were drawn against nothing; now they
+        // have something to be culled against.
+        foreach (var (dx, dz) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+            if (_cols.TryGetValue((col.Cx + dx, col.Cz + dz), out var n)) Array.Fill(n.Dirty, true);
+    }
+
+    /// <summary>Lets go of every column farther than <paramref name="keep"/> chunks from (cx, cz).</summary>
+    public void Forget(int cx, int cz, int keep)
+    {
+        foreach (var key in _cols.Keys.Where(k => Math.Max(Math.Abs(k.Item1 - cx), Math.Abs(k.Item2 - cz)) > keep).ToList())
+        {
+            Free(_cols[key]);
+            _cols.Remove(key);
+        }
     }
 
     public void SetBlock(int x, int y, int z, int p, int light)
     {
-        int lx = x - Ox, ly = y - Oy, lz = z - Oz;
-        if (!In(lx, ly, lz)) return;
-        int i = (ly * Sz + lz) * Sx + lx;
-        _idx[i] = (ushort)p;
-        if (light >= 0) _light[i] = (byte)light;
+        if (!_cols.TryGetValue((x >> 4, z >> 4), out var c)) return;
+        int ly = y - c.Y0;
+        if (ly < 0) return;
+        if (ly >= c.H)
+        {
+            if (p == 0) return;
+            Grow(c, (ly / 16 + 1) * 16);
+        }
+        int i = (ly * 16 + (z & 15)) * 16 + (x & 15);
+        c.Idx[i] = (ushort)p;
+        if (light >= 0) c.Light[i] = (byte)light;
         for (int dx = -1; dx <= 1; dx++)
             for (int dy = -1; dy <= 1; dy++)
                 for (int dz = -1; dz <= 1; dz++)
-                    MarkDirty(lx + dx, ly + dy, lz + dz);
+                    MarkDirty(x + dx, y + dy, z + dz);
     }
 
-    private bool In(int lx, int ly, int lz) => (uint)lx < (uint)Sx && (uint)ly < (uint)Sy && (uint)lz < (uint)Sz;
+    /// <summary>A block placed above the top of what was sent: the column grows to hold it.</summary>
+    private static void Grow(Column c, int h)
+    {
+        var idx = new ushort[256 * h];
+        var light = new byte[256 * h];
+        Array.Fill(light, (byte)0xF0);
+        c.Idx.CopyTo(idx, 0);
+        c.Light.CopyTo(light, 0);
+        var secs = new Section?[h / 16];
+        c.Secs.CopyTo(secs, 0);
+        var dirty = new bool[h / 16];
+        Array.Fill(dirty, true);
+        c.Idx = idx; c.Light = light; c.Secs = secs; c.Dirty = dirty; c.H = h;
+    }
 
-    /// <summary>The block state at an absolute Minecraft position, or null outside the slice.</summary>
+    /// <summary>True when Minecraft has sent the column this point stands in.</summary>
+    public bool Has(int x, int z) => _cols.ContainsKey((x >> 4, z >> 4));
+
+    /// <summary>The block state at an absolute Minecraft position (null for air, or for
+    /// anywhere Minecraft has not sent).</summary>
     public Entry? At(int x, int y, int z)
     {
-        int lx = x - Ox, ly = y - Oy, lz = z - Oz;
-        if (!In(lx, ly, lz)) return null;
-        int p = _idx[(ly * Sz + lz) * Sx + lx];
+        if (!_cols.TryGetValue((x >> 4, z >> 4), out var c)) return null;
+        int ly = y - c.Y0;
+        if ((uint)ly >= (uint)c.H) return null;
+        int p = c.Idx[(ly * 16 + (z & 15)) * 16 + (x & 15)];
         return p < Palette.Count ? Palette[p] : null;
     }
 
     public int LightAt(int x, int y, int z)
     {
-        int lx = x - Ox, ly = y - Oy, lz = z - Oz;
-        if (!In(lx, ly, lz)) return ly >= Sy ? 0xF0 : 0;
-        return _light[(ly * Sz + lz) * Sx + lx];
+        if (!_cols.TryGetValue((x >> 4, z >> 4), out var c)) return 0xF0;
+        int ly = y - c.Y0;
+        if (ly < 0) return 0;
+        if (ly >= c.H) return 0xF0;
+        return c.Light[(ly * 16 + (z & 15)) * 16 + (x & 15)];
     }
 
-    public bool InsideXZ(float x, float z, float margin)
-        => x >= Ox + margin && x < Ox + Sx - margin && z >= Oz + margin && z < Oz + Sz - margin;
+    /// <summary>The lowest Y any column holds, for a fall with nothing under it.</summary>
+    private int Floor(int x, int z) => _cols.TryGetValue((x >> 4, z >> 4), out var c) ? c.Y0 : -64;
 
     // --- Collision, for UNRENDERED's crafts ------------------------------------------
 
     /// <summary>The top of whatever can be stood on in this column at or below
-    /// <paramref name="fromY"/>, in absolute Minecraft Y. Falls to the slice floor.</summary>
+    /// <paramref name="fromY"/>, in absolute Minecraft Y.</summary>
     public float GroundBelow(int x, int z, float fromY)
     {
-        int y = (int)MathF.Floor(fromY);
-        for (; y >= Oy; y--)
+        int bottom = Floor(x, z);
+        for (int y = (int)MathF.Floor(fromY); y >= bottom; y--)
         {
             var e = At(x, y, z);
             if (e is { Collide: true } && y + e.Top <= fromY + 1e-3f) return y + e.Top;
-            // A fence's 1.5 sticks up into the block above: look one below as well.
         }
-        return Oy;
+        return bottom;
     }
 
-    /// <summary>True if anything collidable occupies [y0, y1) in this column.</summary>
+    /// <summary>True if anything collidable occupies [y0, y1) in this column — and a column
+    /// Minecraft has not sent yet is a wall, not a hole.</summary>
     public bool Blocked(int x, int z, float y0, float y1)
     {
+        if (!Has(x, z)) return true;
         for (int y = (int)MathF.Floor(y0) - 1; y < (int)MathF.Ceiling(y1); y++)
         {
             var e = At(x, y, z);
@@ -209,40 +299,37 @@ public sealed unsafe class Terrain : IDisposable
         public readonly List<Mesh> Clear = new();
     }
 
-    private Section?[] _sections = Array.Empty<Section?>();
-    private bool[] _dirty = Array.Empty<bool>();
-    private int _secX, _secY, _secZ;
-
-    private void MarkDirty(int lx, int ly, int lz)
+    private void MarkDirty(int x, int y, int z)
     {
-        if (!In(lx, ly, lz)) return;
-        _dirty[((ly / 16) * _secZ + lz / 16) * _secX + lx / 16] = true;
+        if (!_cols.TryGetValue((x >> 4, z >> 4), out var c)) return;
+        int s = (y - c.Y0) >> 4;
+        if ((uint)s < (uint)c.Dirty.Length) c.Dirty[s] = true;
     }
 
     private void MarkAllDirty()
     {
-        for (int i = 0; i < _dirty.Length; i++) _dirty[i] = true;
+        foreach (var c in _cols.Values) Array.Fill(c.Dirty, true);
     }
 
     /// <summary>Rebuilds a few dirty sections a frame, nearest the eye first.</summary>
     public void Rebuild(Vector3 eyeMc, int budget)
     {
-        if (!Loaded) return;
         while (budget-- > 0)
         {
-            int best = -1;
+            Column? best = null;
+            int bestS = -1;
             float bestD = float.MaxValue;
-            for (int i = 0; i < _dirty.Length; i++)
-            {
-                if (!_dirty[i]) continue;
-                int sx = i % _secX, sz = (i / _secX) % _secZ, sy = i / (_secX * _secZ);
-                var c = new Vector3(Ox + sx * 16 + 8, Oy + sy * 16 + 8, Oz + sz * 16 + 8);
-                float d = Vector3.DistanceSquared(c, eyeMc);
-                if (d < bestD) { bestD = d; best = i; }
-            }
-            if (best < 0) return;
-            _dirty[best] = false;
-            BuildSection(best);
+            foreach (var c in _cols.Values)
+                for (int s = 0; s < c.Dirty.Length; s++)
+                {
+                    if (!c.Dirty[s]) continue;
+                    var mid = new Vector3(c.Cx * 16 + 8, c.Y0 + s * 16 + 8, c.Cz * 16 + 8);
+                    float d = Vector3.DistanceSquared(mid, eyeMc);
+                    if (d < bestD) { bestD = d; best = c; bestS = s; }
+                }
+            if (best == null) return;
+            best.Dirty[bestS] = false;
+            BuildSection(best, bestS);
         }
     }
 
@@ -259,23 +346,23 @@ public sealed unsafe class Terrain : IDisposable
         public int Verts => Pos.Count / 3;
     }
 
-    private void BuildSection(int s)
+    private void BuildSection(Column c, int s)
     {
-        if (_sections[s] is { } old) Free(old);
-        int sx = s % _secX, sz = (s / _secX) % _secZ, sy = s / (_secX * _secZ);
+        if (c.Secs[s] is { } old) Free(old);
         var sec = new Section();
         var b = new Mesher(sec.Opaque, sec.Clear);
-
-        for (int ly = sy * 16; ly < Math.Min(Sy, sy * 16 + 16); ly++)
-            for (int lz = sz * 16; lz < Math.Min(Sz, sz * 16 + 16); lz++)
-                for (int lx = sx * 16; lx < Math.Min(Sx, sx * 16 + 16); lx++)
+        int y0 = s * 16;
+        for (int ly = y0; ly < Math.Min(c.H, y0 + 16); ly++)
+            for (int lz = 0; lz < 16; lz++)
+                for (int lx = 0; lx < 16; lx++)
                 {
-                    var e = Palette.Count > _idx[(ly * Sz + lz) * Sx + lx] ? Palette[_idx[(ly * Sz + lz) * Sx + lx]] : null;
+                    int p = c.Idx[(ly * 16 + lz) * 16 + lx];
+                    var e = p < Palette.Count ? Palette[p] : null;
                     if (e == null || e.Quads.Length == 0) continue;
-                    b.Block(e, Ox + lx, Oy + ly, Oz + lz, At, LightAt);
+                    b.Block(e, c.Cx * 16 + lx, c.Y0 + ly, c.Cz * 16 + lz, At, LightAt);
                 }
         b.Finish();
-        _sections[s] = sec;
+        c.Secs[s] = sec;
     }
 
     /// <summary>
@@ -375,13 +462,18 @@ public sealed unsafe class Terrain : IDisposable
         meshes.Clear();
     }
 
-    private void Unload()
+    private static void Free(Column c)
     {
-        foreach (var s in _sections) if (s != null) Free(s);
-        Array.Clear(_sections);
+        foreach (var s in c.Secs) if (s != null) Free(s);
     }
 
-    public void Dispose() => Unload();
+    /// <summary>Everything let go — the pilot went home.</summary>
+    public void Dispose()
+    {
+        foreach (var c in _cols.Values) Free(c);
+        _cols.Clear();
+        Palette.Clear();
+    }
 
     // --- Drawing -------------------------------------------------------------------
 
@@ -397,8 +489,14 @@ public sealed unsafe class Terrain : IDisposable
         if (!Loaded) return;
         var opaque = new List<Mesh>();
         var clear = new List<Mesh>();
-        foreach (var s in _sections)
-            if (s != null) { opaque.AddRange(s.Opaque); clear.AddRange(s.Clear); }
+        float reach = fogEnd + 24f;
+        foreach (var c in _cols.Values)
+        {
+            float dx = c.Cx * 16 + 8 - camMc.X, dz = c.Cz * 16 + 8 - camMc.Z;
+            if (dx * dx + dz * dz > reach * reach) continue;
+            foreach (var s in c.Secs)
+                if (s != null) { opaque.AddRange(s.Opaque); clear.AddRange(s.Clear); }
+        }
         DrawMeshes(opaque, clear, origin, camMc, daylight, fog, fogStart, fogEnd, keyed: false);
     }
 

@@ -182,3 +182,19 @@ UNRENDERED's world), and the other way round.
 `mine` is also sent when an explosion or any other means breaks the city's collision.
 Minecraft drops UNRENDERED salvage relics for mined city blocks (mostly `scrap_metal`,
 sometimes `dense_alloy` or `copper_wire`).
+
+## Streaming Minecraft around the pilot (replaces the fixed `region`)
+
+Minecraft streams its world to a pilot the way it streams it to a player: by chunk, around
+where they are, generating what has never been generated.
+
+| dir | `t` / kind | fields | meaning |
+|-----|-----------|--------|---------|
+| U→M | `view`    | `cx, cz, r` | the chunk the pilot stands in and how many chunks around it they see (default 8). Sent on `enter`, whenever the chunk changes, and every 2 s |
+| M→U | bin `chunk` | `cx, cz, y0, h` | one chunk column. Payload: `16·16·h` × u16 palette index, then `16·16·h` × u8 light (`sky<<4 \| block`). Index `((y − y0)·16 + z)·16 + x` with x, z local to the chunk. `h` is a multiple of 16 covering every non-air section (0 for an all-air column). Re-sent whole if it changes too much to patch |
+
+Minecraft holds a chunk ticket of radius `r` around the pilot, so the chunks load and
+generate and the world around them ticks. It sends missing chunks nearest first, a few per
+tick. Block changes inside sent chunks keep arriving as `blocks`. `ents` cover the same
+radius. UNRENDERED forgets columns farther than `r + 2` on its own. `spawn` is still sent
+on `enter`, and the first `view` follows it.

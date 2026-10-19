@@ -262,6 +262,42 @@ def biped(walk, yaw):
     return quads
 
 
+def column_block(x, y, z):
+    if OX <= x < OX + SX and OZ <= z < OZ + SZ:
+        return getb(x, y, z)
+    h = height(x, z)
+    if y > h: return 4 if y <= 65 and h < 65 else 0
+    if y == h: return 1
+    return 2 if y >= h - 3 else 3
+
+
+def chunk_payload(cx, cz):
+    y0, h = OY, SY
+    idx = bytearray(16 * 16 * h * 2)
+    for y in range(h):
+        for z in range(16):
+            for x in range(16):
+                struct.pack_into("<H", idx, ((y * 16 + z) * 16 + x) * 2, column_block(cx * 16 + x, y0 + y, cz * 16 + z))
+    return y0, h, bytes(idx) + bytes([0xF0]) * (16 * 16 * h)
+
+
+def stream_chunks(c, state):
+    """Sends the chunks around the pilot's view, nearest first, a few at a time."""
+    while c.alive and state.get("pilot"):
+        cx, cz, r = state["view"]
+        want = sorted(((dx * dx + dz * dz, cx + dx, cz + dz) for dx in range(-r, r + 1) for dz in range(-r, r + 1)))
+        sent = 0
+        for _, x, z in want:
+            if (x, z) in state["sent_chunks"]: continue
+            y0, h, data = chunk_payload(x, z)
+            c.send_bin("chunk", data, cx=x, cz=z, y0=y0, h=h)
+            state["sent_chunks"].add((x, z))
+            sent += 1
+            if sent >= 6: break
+        time.sleep(0.05)
+    state["streaming"] = False
+
+
 def put_str(b, s):
     e = s.encode(); b += struct.pack("<H", len(e)); b += e
 
@@ -471,12 +507,17 @@ def serve(sock, addr):
                 log("pilot entering:", o)
                 state["pilot"] = o
                 c.send({"t": "palette", "entries": PALETTE})
-                c.send_bin("region", bytes(blocks) + bytes(light), ox=OX, oy=OY, oz=OZ, sx=SX, sy=SY, sz=SZ)
                 c.send({"t": "spawn", "x": SPAWN[0], "y": SPAWN[1], "z": SPAWN[2], "yaw": 0.0})
+                state["sent_chunks"] = set()
             elif t == "tex":
                 for tid in o["ids"]:
                     data, ft = texdata(tid)
                     c.send({"t": "texdata", "id": tid, "png": data, "frametime": ft})
+            elif t == "view":
+                state["view"] = (o["cx"], o["cz"], o["r"])
+                if not state.get("streaming"):
+                    state["streaming"] = True
+                    threading.Thread(target=stream_chunks, args=(c, state), daemon=True).start()
             elif t == "me":
                 state["me"] = o
                 if int(time.time() * 2) % 10 == 0: log("pilot at %.1f %.1f %.1f hp %.0f" % (o["x"], o["y"], o["z"], o["hp"]))

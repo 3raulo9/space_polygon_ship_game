@@ -51,7 +51,7 @@ public static class Realm
     private static bool _entering;
     private static double _enteringSince;
     private static JsonObject? _spawn;
-    private static bool _palette, _region;
+    private static bool _palette;
     public static long DayTime = 6000;
 
     public static readonly List<McEntity> Ents = new();
@@ -68,7 +68,7 @@ public static class Realm
         if (Active || _entering || Rift.Live is not { } live) return;
         _entering = true;
         _enteringSince = Raylib.GetTime();
-        _palette = _region = false;
+        _palette = false;
         _spawn = null;
         Land.Palette.Clear();
         var p = home.Player;
@@ -89,11 +89,16 @@ public static class Realm
                 return true;
             case "region":
                 Land.LoadRegion(m);
-                _region = true;
+                TrySwap();
+                return true;
+            case "chunk":
+                Land.LoadChunk(m);
                 TrySwap();
                 return true;
             case "spawn":
                 _spawn = m.J;
+                // Ask for the ground around where they will stand.
+                SendView(m.F("x"), m.F("z"), force: true);
                 TrySwap();
                 return true;
             case "blocks":
@@ -117,7 +122,9 @@ public static class Realm
 
     private static void TrySwap()
     {
-        if (!_entering || !_palette || !_region || _spawn == null) return;
+        if (!_entering || !_palette || _spawn == null) return;
+        // The ground under the spawn has to be here before anyone stands on it.
+        if (!Land.Has((int)Math.Floor(_spawn["x"]!.GetValue<double>()), (int)Math.Floor(_spawn["z"]!.GetValue<double>()))) return;
         if (Rift.World is not { } home || !ReferenceEquals(home, Portal.World ?? home)) { _entering = false; return; }
         _entering = false;
         Swap(home, _spawn);
@@ -256,9 +263,11 @@ public static class Realm
         Ground(craft);
         Rounds(world, dt);
         Collect(craft);
+        Recentre(world, craft);
 
         // The way home is the portal Minecraft stands on its side.
         var feet = Mc(craft.Position, craft.Height);
+        SendView(feet.X, feet.Z, force: false);
         if (Land.PortalNear(feet, craft.Soldier != null ? 0.5f : 1.0f))
         {
             Leave();
@@ -274,6 +283,55 @@ public static class Realm
                 "hp", craft.Health + craft.Shield, "max", craft.MaxHealth + craft.MaxShield,
                 "moving", craft.IsAirborne ? 0 : 1, "chassis", craft.Class.ToString().ToUpperInvariant());
         }
+    }
+
+    /// <summary>How many chunks around the pilot Minecraft streams — Minecraft's own render
+    /// distance, near enough.</summary>
+    public const int ViewChunks = 8;
+
+    private static (int, int) _viewChunk = (int.MinValue, 0);
+    private static double _viewClock;
+
+    /// <summary>Tells Minecraft where the pilot is, so it streams the chunks around them; and
+    /// lets go of the ones that are now out of sight.</summary>
+    private static void SendView(float mcX, float mcZ, bool force)
+    {
+        if (Rift.Live is not { } live) return;
+        var c = ((int)MathF.Floor(mcX) >> 4, (int)MathF.Floor(mcZ) >> 4);
+        double now = Raylib.GetTime();
+        if (!force && c == _viewChunk && now - _viewClock < 2.0) return;
+        _viewChunk = c;
+        _viewClock = now;
+        live.Send("view", "cx", c.Item1, "cz", c.Item2, "r", ViewChunks);
+        Land.Forget(c.Item1, c.Item2, ViewChunks + 2);
+    }
+
+    /// <summary>
+    /// UNRENDERED's world is a torus 400 metres across; walk 200 from where you came in and it
+    /// would fold you back to the far side. So the stand-in world's origin travels with the
+    /// pilot: every hundred metres the plane is re-centred under them, and everything on it
+    /// (their own rounds in flight) moves with it. Minecraft's world just keeps going.
+    /// </summary>
+    private static void Recentre(GameWorld world, PlayerTank craft)
+    {
+        Vector2 d = craft.Position;
+        if (MathF.Abs(d.X) < 100f && MathF.Abs(d.Y) < 100f) return;
+        d = new Vector2(MathF.Round(d.X), MathF.Round(d.Y));
+        Ox += d.X;
+        Oz += d.Y;
+        craft.Position -= d;
+        foreach (var p in world.Projectiles) if (p.Active) p.Position = Torus.Wrap(p.Position - d);
+    }
+
+    /// <summary>Puts the craft down on the surface at a Minecraft X/Z (the test hatch's
+    /// shortcut; a player walks).</summary>
+    internal static void PlaceAt(double mcX, double mcZ)
+    {
+        if (!Active || _craft is not { } craft) return;
+        craft.Position = new Vector2((float)(mcX - Ox), (float)(mcZ - Oz));
+        RefY = Land.GroundBelow((int)Math.Floor(mcX), (int)Math.Floor(mcZ), 320f);
+        ShownRef = RefY;
+        craft.Height = 0f;
     }
 
     /// <summary>A realm position (plane + height above the floor) in Minecraft coordinates.</summary>
@@ -292,16 +350,7 @@ public static class Realm
         float step = craft.IsMachine ? 1.05f : 0.6f;
         float body = MathF.Max(1.6f, craft.EyeHeight + 0.2f);
 
-        // Stay inside the slice Minecraft sent.
         var mc = Mc(craft.Position, craft.Height);
-        float minX = Land.Ox + 1 + r, maxX = Land.Ox + Land.Sx - 1 - r;
-        float minZ = Land.Oz + 1 + r, maxZ = Land.Oz + Land.Sz - 1 - r;
-        if (mc.X < minX || mc.X > maxX || mc.Z < minZ || mc.Z > maxZ)
-        {
-            mc.X = Math.Clamp(mc.X, minX, maxX);
-            mc.Z = Math.Clamp(mc.Z, minZ, maxZ);
-            craft.Position = new Vector2((float)(mc.X - Ox), (float)(mc.Z - Oz));
-        }
 
         float feet = RefY + craft.Height;
 
@@ -470,7 +519,7 @@ public static class Realm
     internal static void BeforeFrame()
     {
         if (!Active || _craft is not { } craft) return;
-        Land.Rebuild(Mc(craft.Position, craft.Height + craft.EyeHeight), budget: 3);
+        Land.Rebuild(Mc(craft.Position, craft.Height + craft.EyeHeight), budget: 8);
 
         double now = Raylib.GetTime();
         if (now - _craftClock < 0.1 || Rift.Live is not { } live || live.Backlog > 4) return;
@@ -509,7 +558,7 @@ public static class Realm
 
     /// <summary>Where Minecraft's fog closes in: just inside the edge of the slice it sent,
     /// so the end of the world is never seen — the way Minecraft hides its render distance.</summary>
-    private static float FogEnd => MathF.Max(12f, MathF.Min(Land.Sx, Land.Sz) * 0.5f - 2f);
+    private static float FogEnd => ViewChunks * 16f - 10f;
 
     private static Color SkyColor => Lerp(new Color(10, 12, 24, 255), new Color(120, 167, 255, 255), Daylight);
     private static Color FogColor => Lerp(new Color(8, 10, 18, 255), new Color(192, 216, 255, 255), Daylight);
