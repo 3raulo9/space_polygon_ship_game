@@ -508,9 +508,11 @@ public final class RiftPilot {
             RiftMod.hold(pw, pilot.getPos());
 
         ServerWorld rift = server.getWorld(RiftMod.RIFT);
-        List<ServerPlayerEntity> visitors = rift != null && Bridge.linked() && tick % 2 == 0 ? rift.getPlayers() : List.of();
-        boolean riftWatched = rift != null && Bridge.linked() && (!rift.getPlayers().isEmpty() || RiftSeats.any());
-        if (Bridge.linked() && (active || !visitors.isEmpty() || riftWatched)) requestCapture(server, visitors);
+        // Ten captures a second, each carrying every visitor: the client keeps only the newest
+        // request, so one without the visitors must never follow one with them.
+        List<ServerPlayerEntity> visitors = rift != null && Bridge.linked() ? rift.getPlayers() : List.of();
+        boolean riftWatched = rift != null && Bridge.linked() && (!visitors.isEmpty() || RiftSeats.any());
+        if (Bridge.linked() && tick % 2 == 0 && (active || riftWatched)) requestCapture(server, visitors);
     }
 
     /**
