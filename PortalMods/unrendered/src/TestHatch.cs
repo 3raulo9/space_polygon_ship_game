@@ -150,10 +150,19 @@ public static class TestHatch
                 Realm.PlaceAt(loot.Pos.X, loot.Pos.Z);
             else if (inside >= 40 && !_left)
             {
+                // Into the water: the portal's first water cell.
                 _left = true;
                 var portal = Portal.Linked!;
-                Realm.PlaceAt(portal["x"]!.GetValue<int>() + 0.5, portal["z"]!.GetValue<int>() + 1.5);
-                craft.Position += new System.Numerics.Vector2(0, -1.2f);
+                Realm.PlaceAt(portal["x"]!.GetValue<int>() + 0.5, portal["z"]!.GetValue<int>() + 0.5);
+                Rift.Log("test hatch: walking into the portal");
+            }
+            else if (inside >= 44 && _left)
+            {
+                // Still here: the portal is not where Minecraft said, or the craft was pushed off
+                // its frame. Say so, and go home anyway so the rest of the run is not lost.
+                Rift.Log($"test hatch: the portal did not take the pilot (portal {Portal.Linked?.ToJsonString()}, " +
+                         $"feet {Realm.Mc(craft.Position, craft.Height)})");
+                Realm.Leave();
             }
         }
 

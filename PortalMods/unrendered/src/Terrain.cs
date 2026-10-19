@@ -593,7 +593,7 @@ public sealed unsafe class Terrain : IDisposable
             if (t.a < 0.1) discard;
             if (keyMode == 1) { finalColor = vec4(0.0); return; }
             float l = max(curve(light.x) * daylight, curve(light.y) * vec3(1.0, 0.9, 0.75).r);
-            l = max(l, 0.05);
+            l = max(l, 0.08);
             vec3 blockTint = vec3(1.0, 0.92, 0.8);
             vec3 lit = mix(vec3(l), vec3(l) * blockTint, step(curve(light.x) * daylight, curve(light.y)));
             vec3 c = t.rgb * tint.rgb * lit;

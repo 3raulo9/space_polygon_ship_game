@@ -632,25 +632,48 @@ public static class Realm
     {
         var origin = new Vector3((float)Ox, ShownRef, (float)Oz);
         var mcEye = cam.Position + origin;
-        if (sky) DrawSky(cam);
+        Medium(mcEye);
+        if (sky && _inside == null) DrawSky(cam);
 
         Rlgl.DrawRenderBatchActive();
         Rlgl.EnableBackfaceCulling();
-        Land.Draw(origin, mcEye, Daylight, FogColor, FogEnd * 0.6f, FogEnd);
+        Land.Draw(origin, mcEye, Daylight, Fog, _fogStart, _fogEnd);
         Rlgl.DisableBackfaceCulling();
 
         foreach (var e in Ents)
         {
             float d = Vector2.Distance(new Vector2(e.Pos.X, e.Pos.Z), new Vector2(mcEye.X, mcEye.Z));
-            float fog = Math.Clamp((d - FogEnd * 0.6f) / (FogEnd * 0.4f), 0f, 1f);
+            float fog = Math.Clamp((d - _fogStart) / (_fogEnd - _fogStart), 0f, 1f);
             if (fog >= 0.99f) continue;
-            e.Draw(e.Pos - origin, fog, FogColor);
+            e.Draw(e.Pos - origin, fog, Fog);
         }
         Rlgl.DrawRenderBatchActive();
     }
 
-    /// <summary>Minecraft's fog colour at this hour — what the composite clears to.</summary>
-    public static Color Fog => FogColor;
+    /// <summary>Minecraft's fog colour — what the composite clears to. The air's at this hour,
+    /// or, with the eye under water or in lava, that liquid's, as Minecraft does it.</summary>
+    public static Color Fog => _inside switch
+    {
+        "water" => Lerp(new Color(3, 10, 30, 255), new Color(25, 70, 160, 255), Daylight),
+        "lava" => new Color(153, 25, 0, 255),
+        _ => FogColor,
+    };
+
+    private static string? _inside;
+    private static float _fogStart = 70f, _fogEnd = 118f;
+
+    /// <summary>What the eye is in. Under water the world closes in to a blue murk a few dozen
+    /// blocks deep instead of going black; in lava, to an orange wall a block away.</summary>
+    private static void Medium(Vector3 mcEye)
+    {
+        _inside = Land.At((int)MathF.Floor(mcEye.X), (int)MathF.Floor(mcEye.Y), (int)MathF.Floor(mcEye.Z))?.Liquid;
+        (_fogStart, _fogEnd) = _inside switch
+        {
+            "water" => (0f, 36f),
+            "lava" => (0f, 2f),
+            _ => (FogEnd * 0.6f, FogEnd),
+        };
+    }
 
     private static EntityRenderer? _ownEye;
 
