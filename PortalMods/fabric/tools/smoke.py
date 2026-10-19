@@ -43,10 +43,10 @@ class Link:
     def send(self, msg):
         self.sock.sendall((json.dumps(msg) + "\n").encode())
 
-    def send_bin(self, kind, payload, **head):
+    def send_bin(self, frame_kind, payload, **head):
         z = zlib.compressobj(6, zlib.DEFLATED, -15)
         data = z.compress(payload) + z.flush()
-        head.update({"t": "bin", "k": kind, "n": len(data)})
+        head.update({"t": "bin", "k": frame_kind, "n": len(data)})
         self.sock.sendall((json.dumps(head) + "\n").encode() + data)
 
     def line(self):
