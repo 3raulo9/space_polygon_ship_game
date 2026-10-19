@@ -121,6 +121,8 @@ public final class RiftVisitors {
         player.setVelocity(Vec3d.ZERO);
         rift.playSound(null, x, y, z, SoundEvents.BLOCK_PORTAL_TRAVEL, SoundCategory.PLAYERS, 0.25f, 1.6f);
         player.sendMessage(Text.literal("UNRENDERED").formatted(Formatting.LIGHT_PURPLE, Formatting.BOLD), true);
+        // What other Minecraft players built here before them, as UNRENDERED should show it.
+        if (player.getServer() != null) RiftBuilt.sendAll(player.getServer());
     }
 
     /** Builds (or moves) the glowstone portal in the rift where UNRENDERED's portal stands. */
@@ -357,15 +359,28 @@ public final class RiftVisitors {
             SoundCategory.PLAYERS, 0.3f, 1.4f);
     }
 
-    /** A visitor broke a piece of the city. UNRENDERED decides when the building gives. */
-    public static void onBlockBroken(World world, PlayerEntity player, BlockPos pos, BlockState state) {
-        if (world.isClient || world.getRegistryKey() != RiftMod.RIFT || !state.isOf(RiftBlocks.RIFT_SOLID)) return;
+    /** Whoever is breaking a block right now (set around a player's break), for `mine`. */
+    public static PlayerEntity breaker;
+
+    /**
+     * A piece of the city was broken: by a visitor's pickaxe, an explosion, anything. It is
+     * reported to UNRENDERED, which cuts the real building there, and it drops what
+     * UNRENDERED's buildings are made of.
+     */
+    public static void onCityBroken(World world, BlockPos pos) {
         JsonObject mine = Bridge.msg("mine");
-        mine.addProperty("uuid", player.getUuidAsString());
+        PlayerEntity by = breaker;
+        mine.addProperty("uuid", by != null ? by.getUuidAsString() : "");
         mine.addProperty("x", pos.getX() + 0.5);
         mine.addProperty("y", pos.getY() - RiftMod.FLOOR_Y + 0.5);
         mine.addProperty("z", pos.getZ() + 0.5);
         Bridge.send(mine);
+
+        if (world.random.nextFloat() < (by != null ? 0.85f : 0.4f)) {
+            float roll = world.random.nextFloat();
+            Item loot = roll < 0.7f ? RiftItems.SCRAP_METAL : roll < 0.88f ? RiftItems.DENSE_ALLOY : RiftItems.COPPER_WIRE;
+            net.minecraft.block.Block.dropStack(world, pos, new ItemStack(loot));
+        }
     }
 
     private static ServerPlayerEntity player(MinecraftServer server, JsonObject m) {

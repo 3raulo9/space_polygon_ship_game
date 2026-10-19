@@ -220,7 +220,7 @@ public final class RiftPilot {
     }
 
     /** One palette entry: what a block state looks like and how it behaves. */
-    private static JsonObject entry(ServerWorld w, BlockState state, BlockPos pos, int idx) {
+    static JsonObject entry(ServerWorld w, BlockState state, BlockPos pos, int idx) {
         JsonObject e = new JsonObject();
         e.addProperty("i", idx);
         e.addProperty("id", BlockArgumentParser.stringifyBlockState(state));
@@ -488,9 +488,38 @@ public final class RiftPilot {
 
         if (active && !changed.isEmpty() && tick % 2 == 0) flushChanges(server);
 
+        // The pilot is a second player here: the world around them stays loaded and alive.
+        if (active && pilot != null && !pilot.isRemoved() && tick % 10 == 0 && pilot.getWorld() instanceof ServerWorld pw)
+            RiftMod.hold(pw, pilot.getPos());
+
         ServerWorld rift = server.getWorld(RiftMod.RIFT);
         List<ServerPlayerEntity> visitors = rift != null && Bridge.linked() && tick % 2 == 0 ? rift.getPlayers() : List.of();
-        if (Bridge.linked() && (active || !visitors.isEmpty())) requestCapture(server, visitors);
+        boolean riftWatched = rift != null && Bridge.linked() && (!rift.getPlayers().isEmpty() || RiftSeats.any());
+        if (Bridge.linked() && (active || !visitors.isEmpty() || riftWatched)) requestCapture(server, visitors);
+    }
+
+    /**
+     * The rift dimension's own creatures: mobs that walked through the portal, items on the
+     * floor, arrows in the air. Everything near a visitor or one of UNRENDERED's seats, except
+     * the rift's stand-ins and the visitors themselves (who travel as avatars). Null when
+     * nobody is watching.
+     */
+    private static List<RiftHooks.EntitySnap> riftEntities(MinecraftServer server) {
+        ServerWorld rift = server.getWorld(RiftMod.RIFT);
+        if (rift == null) return null;
+        List<Vec3d> eyes = new ArrayList<>();
+        for (ServerPlayerEntity p : rift.getPlayers()) eyes.add(p.getPos());
+        eyes.addAll(RiftSeats.positions());
+        if (eyes.isEmpty()) return null;
+        Map<Integer, RiftHooks.EntitySnap> found = new java.util.LinkedHashMap<>();
+        for (Vec3d at : eyes) {
+            Box box = Box.of(at, 192.0, 128.0, 192.0);
+            for (Entity e : rift.getEntitiesByClass(Entity.class, box, RiftCapture::riftVisible)) {
+                if (found.size() >= 256) break;
+                found.computeIfAbsent(e.getId(), id -> RiftCapture.snap(e));
+            }
+        }
+        return new ArrayList<>(found.values());
     }
 
     private static void flushChanges(MinecraftServer server) {
@@ -550,11 +579,21 @@ public final class RiftPilot {
             owners.add(v.getUuid());
         }
         int time = w != null ? (int) (w.getTimeOfDay() % 24000L) : (int) (server.getOverworld().getTimeOfDay() % 24000L);
+        List<RiftHooks.EntitySnap> rents = riftEntities(server);
 
         RiftHooks.Client c = RiftHooks.client;
         if (c != null) {
-            c.request(new RiftHooks.CaptureRequest(++captureSerial, time, active ? ents : null, avatars, owners));
+            c.request(new RiftHooks.CaptureRequest(++captureSerial, time, active ? ents : null, avatars, owners, rents));
             return;
+        }
+        if (rents != null) {
+            Wire.Out out = new Wire.Out(rents.size() * 600 + 8);
+            out.u16(rents.size());
+            for (RiftHooks.EntitySnap e : rents) {
+                e.y -= RiftMod.FLOOR_Y;
+                RiftCapture.writeBox(out, e);
+            }
+            Bridge.sendBin("rents", new JsonObject(), out.toArray());
         }
         // Dedicated server: boxes.
         if (active) {

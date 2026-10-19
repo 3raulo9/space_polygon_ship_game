@@ -48,7 +48,7 @@ public final class RiftHooks {
 
     /** What the render thread is asked to capture next. Replaced whole by the server thread. */
     public record CaptureRequest(long serial, int worldTime, List<EntitySnap> ents, List<EntitySnap> avatars,
-                                 List<UUID> avatarOwners) {}
+                                 List<UUID> avatarOwners, List<EntitySnap> rents) {}
 
     public interface Client {
         /** Baked-model quads for a block state, in the palette's quad format. Null if unavailable. */

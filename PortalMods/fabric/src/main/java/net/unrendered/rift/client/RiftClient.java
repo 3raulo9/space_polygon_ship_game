@@ -16,6 +16,7 @@ import net.unrendered.rift.RiftEntities;
 import net.unrendered.rift.RiftHooks;
 import net.unrendered.rift.RiftMod;
 import net.unrendered.rift.net.CraftPayload;
+import net.unrendered.rift.net.ModelPayload;
 import net.unrendered.rift.net.ScenePayload;
 
 public final class RiftClient implements ClientModInitializer {
@@ -32,9 +33,13 @@ public final class RiftClient implements ClientModInitializer {
         EntityRendererRegistry.register(RiftEntities.ECHO, EmptyEntityRenderer::new);
         EntityRendererRegistry.register(RiftEntities.PILOT, PilotRenderer::new);
         EntityRendererRegistry.register(RiftEntities.CRAB_CORE, FlyingItemEntityRenderer::new);
+        EntityRendererRegistry.register(RiftEntities.SEAT, EmptyEntityRenderer::new);
+        EntityRendererRegistry.register(RiftEntities.UNR_ENEMY, UnrEnemyRenderer::new);
+        EntityRendererRegistry.register(RiftEntities.UNR_BOLT, ctx -> new FlyingItemEntityRenderer<>(ctx, 0.8f, true));
 
         ClientPlayNetworking.registerGlobalReceiver(ScenePayload.ID, (payload, ctx) -> SceneRenderer.accept(payload.data()));
         ClientPlayNetworking.registerGlobalReceiver(CraftPayload.ID, (payload, ctx) -> PilotRenderer.accept(payload.entityId(), payload.data()));
+        ClientPlayNetworking.registerGlobalReceiver(ModelPayload.ID, (payload, ctx) -> UnrEnemyRenderer.accept(payload.kind(), payload.data()));
 
         // Inside the rift, the sky is UNRENDERED's and there is no weather and no cloud.
         DimensionRenderingRegistry.registerSkyRenderer(RiftMod.RIFT, SkyPainter::render);

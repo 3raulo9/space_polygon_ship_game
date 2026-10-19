@@ -8,6 +8,9 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.TypedActionResult;
 import net.minecraft.world.World;
 import net.unrendered.rift.entity.CrabCoreEntity;
+import net.unrendered.rift.RiftMod;
+import net.unrendered.rift.bridge.Bridge;
+import com.google.gson.JsonObject;
 
 /** The Crab-Core's heart. Thrown, it goes off the way it does in UNRENDERED: a ring of
  *  force that flattens what stands near it and leaves the ground alone. */
@@ -19,6 +22,21 @@ public class CrabCoreItem extends RelicItem {
     @Override
     public TypedActionResult<ItemStack> use(World world, PlayerEntity user, Hand hand) {
         ItemStack stack = user.getStackInHand(hand);
+        // Inside UNRENDERED's world it is UNRENDERED's crab core: UNRENDERED throws its own,
+        // from this player's seat, with its own blast.
+        if (world.getRegistryKey() == RiftMod.RIFT && Bridge.linked()) {
+            if (!world.isClient) {
+                JsonObject use = Bridge.msg("use");
+                use.addProperty("uuid", user.getUuidAsString());
+                use.addProperty("item", "crab_core");
+                Bridge.send(use);
+                stack.decrementUnlessCreative(1, user);
+            }
+            world.playSound(null, user.getX(), user.getY(), user.getZ(), SoundEvents.ENTITY_SNOWBALL_THROW,
+                SoundCategory.PLAYERS, 0.6f, 0.5f);
+            user.getItemCooldownManager().set(this, 20);
+            return TypedActionResult.success(stack, world.isClient);
+        }
         world.playSound(null, user.getX(), user.getY(), user.getZ(), SoundEvents.ENTITY_SNOWBALL_THROW,
             SoundCategory.PLAYERS, 0.6f, 0.5f);
         if (!world.isClient) {

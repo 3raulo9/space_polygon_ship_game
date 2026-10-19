@@ -62,9 +62,10 @@ public final class RiftPortalBlock extends Block {
 
     @Override
     protected void onEntityCollision(BlockState state, World world, BlockPos pos, Entity entity) {
-        if (!world.isClient && entity instanceof ServerPlayerEntity player) {
-            RiftPortals.onEnter(player, pos, state.get(AXIS));
-        }
+        if (world.isClient) return;
+        if (entity instanceof ServerPlayerEntity player) RiftPortals.onEnter(player, pos, state.get(AXIS));
+        else if (!(entity instanceof net.minecraft.entity.player.PlayerEntity) && world instanceof net.minecraft.server.world.ServerWorld sw)
+            RiftPortals.onEntityEnter(entity, sw, pos, state.get(AXIS));
     }
 
     @Override

@@ -91,9 +91,15 @@ public final class RiftCapture {
     /** Should a pilot see this at all? Not their own body, not UNRENDERED's own hitboxes,
      *  and nothing that draws nothing. */
     public static boolean visible(Entity e) {
-        if (e.getType() == RiftEntities.PILOT || e.getType() == RiftEntities.ECHO) return false;
+        if (e.getType() == RiftEntities.PILOT || e.getType() == RiftEntities.ECHO || e.getType() == RiftEntities.SEAT) return false;
         if (e.getType() == EntityType.MARKER || e.getType() == EntityType.AREA_EFFECT_CLOUD) return false;
         return !e.isRemoved();
+    }
+
+    /** Should UNRENDERED see this rift-dimension entity? Not the rift's own stand-ins, and not
+     *  players (visitors travel as avatars). */
+    public static boolean riftVisible(Entity e) {
+        return visible(e) && !(e instanceof PlayerEntity);
     }
 
     /** The entity header in the `ents` layout, up to and including the layer count. */

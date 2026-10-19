@@ -13,8 +13,15 @@ import net.minecraft.registry.RegistryKeys;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.Identifier;
 import net.minecraft.world.World;
+import net.minecraft.server.world.ChunkTicketType;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
+import net.minecraft.util.math.Vec3d;
+import java.util.Comparator;
 import net.unrendered.rift.bridge.Bridge;
 import net.unrendered.rift.net.CraftPayload;
+import net.unrendered.rift.net.ModelPayload;
 import net.unrendered.rift.net.ScenePayload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +50,21 @@ public final class RiftMod implements ModInitializer {
 
     public static MinecraftServer server;
 
+    /**
+     * Keeps the world around something that isn't a Minecraft player loaded and ticking the
+     * way it would be around a player: the UNRENDERED pilot in Minecraft, and UNRENDERED's own
+     * players standing in the rift. Refreshed while they're there, gone a couple of seconds
+     * after they leave.
+     */
+    public static final ChunkTicketType<ChunkPos> PRESENCE =
+        ChunkTicketType.create("unrendered_presence", Comparator.comparingLong(ChunkPos::toLong), 60);
+
+    /** Holds the chunks around {@code at} in {@code world}, like a player standing there. */
+    public static void hold(ServerWorld world, Vec3d at) {
+        ChunkPos c = new ChunkPos(BlockPos.ofFloored(at));
+        world.getChunkManager().addTicket(PRESENCE, c, 3, c);
+    }
+
     public static Identifier id(String path) {
         return Identifier.of(MOD_ID, path);
     }
@@ -57,25 +79,35 @@ public final class RiftMod implements ModInitializer {
 
         PayloadTypeRegistry.playS2C().register(ScenePayload.ID, ScenePayload.CODEC);
         PayloadTypeRegistry.playS2C().register(CraftPayload.ID, CraftPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(ModelPayload.ID, ModelPayload.CODEC);
 
         UseBlockCallback.EVENT.register(RiftPortals::onUseBlock);
-        PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, be) ->
-            RiftVisitors.onBlockBroken(world, player, pos, state));
+        // Who is breaking a block, for the piece of UNRENDERED's city it may turn out to be.
+        PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, be) -> {
+            RiftVisitors.breaker = player;
+            return true;
+        });
+        PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, be) -> RiftVisitors.breaker = null);
+        PlayerBlockBreakEvents.CANCELED.register((world, player, pos, state, be) -> RiftVisitors.breaker = null);
 
         CommandRegistrationCallback.EVENT.register((dispatcher, access, env) -> RiftCommands.register(dispatcher));
 
         ServerLifecycleEvents.SERVER_STARTED.register(s -> {
             server = s;
             RiftCity.load(s);
+            RiftBuilt.load(s);
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(s -> {
             Bridge.stop("the Minecraft world closed");
             RiftVisitors.clear();
             RiftPilot.clear();
+            RiftSeats.clear();
+            RiftEnemies.clear();
             server = null;
         });
         ServerTickEvents.END_SERVER_TICK.register(RiftMod::tick);
         ServerPlayConnectionEvents.DISCONNECT.register((handler, s) -> RiftVisitors.onDisconnect(handler.getPlayer()));
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, s) -> RiftEnemies.onJoin(handler.getPlayer()));
     }
 
     private static void tick(MinecraftServer s) {
@@ -89,5 +121,7 @@ public final class RiftMod implements ModInitializer {
         RiftCity.tick(s);
         RiftVisitors.tick(s);
         RiftPilot.tick(s);
+        RiftSeats.tick(s);
+        RiftBuilt.tick(s);
     }
 }

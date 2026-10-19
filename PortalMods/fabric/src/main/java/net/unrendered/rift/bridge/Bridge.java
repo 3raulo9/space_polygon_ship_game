@@ -5,7 +5,10 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import net.unrendered.rift.RiftBuilt;
 import net.unrendered.rift.RiftCity;
+import net.unrendered.rift.RiftEnemies;
+import net.unrendered.rift.RiftSeats;
 import net.unrendered.rift.RiftConfig;
 import net.unrendered.rift.RiftMod;
 import net.unrendered.rift.RiftPilot;
@@ -221,6 +224,7 @@ public final class Bridge {
     private static void onLinkLost(MinecraftServer server) {
         RiftPilot.onLinkLost(server);
         RiftVisitors.onLinkLost(server);
+        RiftSeats.clear();
         for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
             p.sendMessage(Text.literal("[RIFT] ").formatted(Formatting.LIGHT_PURPLE)
                 .append(Text.literal("UNRENDERED let go of this world.").formatted(Formatting.GRAY)), false);
@@ -256,6 +260,8 @@ public final class Bridge {
             s.send(w);
             RiftPortals.broadcast(server, Text.literal(s.pilotName + " reached this world from UNRENDERED.")
                 .formatted(Formatting.GRAY));
+            // Whatever Minecraft players already built in UNRENDERED's world.
+            RiftBuilt.sendAll(server);
             return;
         }
 
@@ -278,6 +284,10 @@ public final class Bridge {
             case "field" -> RiftVisitors.onField(server, m);
             case "harm" -> RiftVisitors.onHarm(server, m);
             case "give" -> RiftVisitors.onGive(server, m);
+            // One world each, shared.
+            case "seats" -> RiftSeats.onSeats(server, m);
+            case "cut" -> RiftCity.onCut(server, m);
+            case "cross" -> RiftEnemies.onCross(server, m);
             case "bin" -> {
                 String k = Session.str(m, "k");
                 byte[] p = in.payload();
@@ -285,6 +295,7 @@ public final class Bridge {
                 switch (k) {
                     case "scene" -> RiftVisitors.onScene(server, m, in.packed());
                     case "craft" -> RiftPilot.onCraft(server, in.packed());
+                    case "model" -> RiftEnemies.onModel(server, m, in.packed());
                     default -> { }
                 }
             }

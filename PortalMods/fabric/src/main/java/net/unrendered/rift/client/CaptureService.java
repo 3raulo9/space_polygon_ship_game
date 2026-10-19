@@ -101,6 +101,13 @@ public final class CaptureService {
                 h.addProperty("time", r.worldTime());
                 Bridge.sendBin("ents", h, out.toArray());
             }
+            if (r.rents() != null) {
+                // The rift dimension's own creatures, in UNRENDERED's frame (the rift's floor is its grid).
+                Wire.Out out = new Wire.Out(64 * 1024);
+                out.u16(r.rents().size());
+                for (RiftHooks.EntitySnap s : r.rents()) capture(out, s, world, dispatcher, tickDelta, RiftMod.FLOOR_Y, 1);
+                Bridge.sendBin("rents", new JsonObject(), out.toArray());
+            }
             for (int i = 0; i < r.avatars().size(); i++) {
                 RiftHooks.EntitySnap s = r.avatars().get(i);
                 Wire.Out out = new Wire.Out(32 * 1024);

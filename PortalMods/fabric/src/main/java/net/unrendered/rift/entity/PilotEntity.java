@@ -45,6 +45,17 @@ public class PilotEntity extends PathAwareEntity {
         return true;
     }
 
+    /**
+     * The body never moves itself (UNRENDERED moves it), so Minecraft never asks what it is
+     * standing in. Ask every tick: pressure plates press, tripwires trip, the portal's water
+     * notices it.
+     */
+    @Override
+    public void tick() {
+        super.tick();
+        if (!getWorld().isClient) checkBlockCollision();
+    }
+
     @Override
     public boolean isPushable() {
         return false;

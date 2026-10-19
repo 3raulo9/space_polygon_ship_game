@@ -39,6 +39,10 @@ public final class RiftCity {
     private static final ArrayDeque<int[]> queue = new ArrayDeque<>();
     private static boolean dirty;
 
+    /** True while the rift itself is writing the city's blocks, so its own writes are not
+     *  mistaken for somebody mining. */
+    public static boolean writing;
+
     private RiftCity() {}
 
     private static Path file(MinecraftServer server) {
@@ -175,17 +179,59 @@ public final class RiftCity {
         BlockState solid = RiftBlocks.RIFT_SOLID.getDefaultState();
         BlockState air = Blocks.AIR.getDefaultState();
         BlockPos.Mutable pos = new BlockPos.Mutable();
-        for (int budget = 6000; budget > 0 && !queue.isEmpty(); budget--) {
-            int[] op = queue.poll();
-            pos.set(op[0], op[1], op[2]);
-            BlockState now = rift.getBlockState(pos);
-            if (op[3] == 1) {
-                // Never bury what a player built there.
-                if (now.isAir()) rift.setBlockState(pos, solid, 2 | 16);
-            } else if (now.isOf(RiftBlocks.RIFT_SOLID)) {
-                rift.setBlockState(pos, air, 2 | 16);
+        writing = true;
+        try {
+            for (int budget = 6000; budget > 0 && !queue.isEmpty(); budget--) {
+                int[] op = queue.poll();
+                pos.set(op[0], op[1], op[2]);
+                BlockState now = rift.getBlockState(pos);
+                if (op[3] == 1) {
+                    // Never bury what a player built there.
+                    if (now.isAir()) rift.setBlockState(pos, solid, 2 | 16);
+                } else if (now.isOf(RiftBlocks.RIFT_SOLID)) {
+                    rift.setBlockState(pos, air, 2 | 16);
+                }
             }
+        } finally {
+            writing = false;
         }
+    }
+
+    /**
+     * `cut`: a building in UNRENDERED lost the pieces around these points (a Minecraft
+     * player's pickaxe, its own lance, a crab core). Its collision goes with them, so what
+     * a visitor can walk into is what is still standing.
+     */
+    public static void onCut(MinecraftServer server, JsonObject m) {
+        ServerWorld rift = server.getWorld(RiftMod.RIFT);
+        if (rift == null || !m.has("boxes")) return;
+        BlockState air = Blocks.AIR.getDefaultState();
+        BlockPos.Mutable pos = new BlockPos.Mutable();
+        int removed = 0;
+        writing = true;
+        try {
+            for (JsonElement el : m.getAsJsonArray("boxes")) {
+                JsonArray b = el.getAsJsonArray();
+                double cx = b.get(0).getAsDouble(), cy = b.get(1).getAsDouble() + RiftMod.FLOOR_Y, cz = b.get(2).getAsDouble();
+                double r = Math.max(0.5, Math.min(b.get(3).getAsDouble(), 12.0));
+                int ri = (int) Math.ceil(r);
+                for (int dx = -ri; dx <= ri; dx++) {
+                    for (int dy = -ri; dy <= ri; dy++) {
+                        for (int dz = -ri; dz <= ri; dz++) {
+                            if (dx * dx + dy * dy + dz * dz > r * r + 0.5) continue;
+                            int x = wrap(cx + dx), z = wrap(cz + dz);
+                            pos.set(x, (int) Math.floor(cy) + dy, z);
+                            if (!rift.getBlockState(pos).isOf(RiftBlocks.RIFT_SOLID)) continue;
+                            rift.setBlockState(pos, air, 2 | 16);
+                            removed++;
+                        }
+                    }
+                }
+            }
+        } finally {
+            writing = false;
+        }
+        if (removed > 0) dirty = true;
     }
 
     /** Which structure a block of the city belongs to (for `mine`), or -1. */

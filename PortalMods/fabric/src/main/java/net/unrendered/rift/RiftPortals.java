@@ -3,7 +3,10 @@ package net.unrendered.rift;
 import com.google.gson.JsonObject;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.world.TeleportTarget;
+import net.unrendered.rift.entity.UnrEnemyEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.registry.RegistryKey;
@@ -303,6 +306,65 @@ public final class RiftPortals {
         float yaw = (float) (MathHelper.atan2(-normal.x * side, normal.z * side) * (180.0 / Math.PI));
         cooldown.put(id, 60);
         RiftVisitors.requestArrival(player, world.getRegistryKey(), back, yaw);
+    }
+
+    /** A clear spot on whichever side of {@code s} has room, {@code dist} blocks out of the water. */
+    public static Vec3d exitBeside(ServerWorld w, Spot s, double dist) {
+        Vec3d c = s.floorCentre();
+        Vec3d n = s.normal();
+        for (double side : new double[]{1, -1}) {
+            Vec3d at = c.add(n.multiply(side * dist));
+            BlockPos p = BlockPos.ofFloored(at);
+            if (w.getBlockState(p).getCollisionShape(w, p).isEmpty() && w.getBlockState(p.up()).getCollisionShape(w, p.up()).isEmpty())
+                return at;
+        }
+        return c.add(n.multiply(dist));
+    }
+
+    /**
+     * A mob, an animal, a dropped item, an arrow: anything that isn't a player walking into
+     * the water goes through, the way things go through a nether portal. Out of the overworld
+     * it lands in UNRENDERED's world (the rift), in front of UNRENDERED's own portal. Out of
+     * the rift it lands back in front of the Minecraft portal. UNRENDERED's own enemies go
+     * home to UNRENDERED instead.
+     */
+    public static void onEntityEnter(Entity entity, ServerWorld world, BlockPos pos, Direction.Axis axis) {
+        if (entity.isRemoved() || entity.hasPortalCooldown() || entity.hasVehicle()) return;
+        if (entity.getType() == RiftEntities.ECHO || entity.getType() == RiftEntities.SEAT || entity.getType() == RiftEntities.PILOT) return;
+        MinecraftServer server = world.getServer();
+        if (entity instanceof UnrEnemyEntity enemy) {
+            if (Bridge.linked()) RiftEnemies.sendBack(enemy);
+            return;
+        }
+        if (!Bridge.linked()) return;
+
+        Spot here = findPortalAround(world, pos, axis);
+        Spot there;
+        ServerWorld dest;
+        if (world.getRegistryKey() == RiftMod.RIFT) {
+            if (!lastPortalStands(server)) return;
+            there = lastPortal;
+            dest = server.getWorld(there.dim());
+        } else {
+            there = riftPortal;
+            dest = server.getWorld(RiftMod.RIFT);
+        }
+        if (there == null || dest == null) return;
+
+        // Out the far side: whichever way it was going through this portal, it keeps going.
+        Vec3d n = here != null ? here.normal() : (axis == Direction.Axis.X ? new Vec3d(0, 0, 1) : new Vec3d(1, 0, 0));
+        Vec3d c = here != null ? here.floorCentre() : Vec3d.ofBottomCenter(pos);
+        double side = entity.getPos().subtract(c).dotProduct(n) > 0 ? -1 : 1;
+        Vec3d at = there.floorCentre().add(there.normal().multiply(side * 1.8));
+        BlockPos ap = BlockPos.ofFloored(at);
+        if (!dest.getBlockState(ap).getCollisionShape(dest, ap).isEmpty()) at = exitBeside(dest, there, 1.8);
+        dest.getChunk(BlockPos.ofFloored(at));
+
+        entity.setPortalCooldown(80);
+        Entity moved = entity.teleportTo(new TeleportTarget(dest, at, entity.getVelocity(), entity.getYaw(), entity.getPitch(),
+            TeleportTarget.NO_OP));
+        if (moved != null) moved.setPortalCooldown(80);
+        dest.playSound(null, at.x, at.y, at.z, SoundEvents.BLOCK_PORTAL_TRAVEL, SoundCategory.NEUTRAL, 0.15f, 1.8f);
     }
 
     /** The portal a given water block belongs to. */
