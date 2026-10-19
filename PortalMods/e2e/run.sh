@@ -42,8 +42,8 @@ done
 # --- UNRENDERED ---------------------------------------------------------------------------
 cd "$ROOT/bin/Release/net10.0"
 UNRENDERED_CAPTURE="$OUT/unr-final.png" UNRENDERED_CAPTURE_FRAME=100000000 \
-RIFT_CONNECT=127.0.0.1:25570 RIFT_TEST=portal,link,enter,tour RIFT_SHOTS="$OUT/unr" RIFT_QUIT_AFTER=200 \
-  timeout 260 dotnet Unrendered.dll >"$OUT/unr.log" 2>&1 &
+RIFT_CONNECT=127.0.0.1:25570 RIFT_TEST=portal,link,enter,tour RIFT_SHOTS="$OUT/unr" RIFT_QUIT_AFTER=140 \
+  timeout 200 dotnet Unrendered.dll >"$OUT/unr.log" 2>&1 &
 UNR=$!
 
 # Minecraft quits by itself when its script is done; give it a generous ceiling.
@@ -62,6 +62,6 @@ cp -f "$ROOT/bin/Release/net10.0/Mods/rift/rift.log" "$OUT/rift.log" 2>/dev/null
 echo "--- RIFT-E2E lines from Minecraft ---"
 grep -a "RIFT-E2E\|Rift:" "$OUT/mc-latest.log" | cut -c1-400 | tail -150
 echo "--- UNRENDERED rift.log ---"
-tail -80 "$OUT/rift.log" 2>/dev/null
+tail -120 "$OUT/rift.log" 2>/dev/null
 ls -la "$OUT" "$OUT/unr"
 exit 0
