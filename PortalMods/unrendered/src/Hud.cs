@@ -71,6 +71,5 @@ public static class Hud
             Font.Centered(t, w / 2, 152, 1, new Color(Gold.R, Gold.G, Gold.B, a));
         }
 
-        Pocket.Draw();
     }
 }

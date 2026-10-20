@@ -12,15 +12,6 @@ public sealed class RiftConfig
     /// <summary>Opens the portal / JOIN WORLDS. B by default, as asked for.</summary>
     public KeyboardKey PortalKey = KeyboardKey.B;
 
-    /// <summary>Uses the selected Minecraft item in the pocket.</summary>
-    public KeyboardKey UseKey = KeyboardKey.P;
-
-    /// <summary>Cycles the pocket's selection.</summary>
-    public KeyboardKey NextKey = KeyboardKey.O;
-
-    /// <summary>Drops the selected pocket item (back into Minecraft, when in Minecraft).</summary>
-    public KeyboardKey DropKey = KeyboardKey.I;
-
     /// <summary>Skip discovery and go straight to this Minecraft bridge.</summary>
     public (string Host, int Port)? Connect;
 
@@ -52,9 +43,6 @@ public sealed class RiftConfig
 
         # Keys (a letter, or a raylib key name such as F6).
         portal_key = B        # open the portal / JOIN WORLDS
-        next_key   = O        # next Minecraft item in your pocket
-        use_key    = P        # use it (eat it, or take a sword in hand as a SOLDIER)
-        drop_key   = I        # drop it back into Minecraft
 
         # The name Minecraft players see over your craft.
         # name = PILOT
@@ -92,9 +80,6 @@ public sealed class RiftConfig
                 switch (key)
                 {
                     case "portal_key": c.PortalKey = Key(val); break;
-                    case "use_key": c.UseKey = Key(val); break;
-                    case "next_key": c.NextKey = Key(val); break;
-                    case "drop_key": c.DropKey = Key(val); break;
                     case "name": c.Name = val.ToUpperInvariant(); break;
                     case "scene_hz": c.SceneHz = Math.Clamp(int.Parse(val, CultureInfo.InvariantCulture), 2, 30); break;
                     case "break_blocks": c.BreakBlocks = val is "1" or "true" or "yes"; break;

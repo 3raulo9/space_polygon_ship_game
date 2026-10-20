@@ -21,12 +21,17 @@ public static class TestHatch
     private static double _lastShot = -100, _started = -1;
     private static int _shotN;
 
-    public static bool ShotDue => Shots != null && Raylib_cs.Raylib.GetTime() - _lastShot > 4.0;
+    public static bool ShotDue => Shots != null && (_pending != null || Raylib_cs.Raylib.GetTime() - _lastShot > 4.0);
+
+    /// <summary>A picture wanted on the very next frame, under this name.</summary>
+    private static string? _pending;
 
     /// <summary>Saves the frame being presented (call before the buffers swap).</summary>
     public static void Shoot(string label)
     {
         _lastShot = Raylib_cs.Raylib.GetTime();
+        label = _pending ?? label;
+        _pending = null;
         try
         {
             Directory.CreateDirectory(Shots!);
@@ -40,6 +45,32 @@ public static class TestHatch
         catch (Exception e) { Rift.Log("shot: " + e.Message); }
     }
     private static bool _opened, _linked, _entered;
+    private static double _packOpened = -1, _homeSince = -1;
+    private static bool _packDone, _packShot;
+
+    /// <summary>Every presented frame, panel or not.</summary>
+    internal static void Presenting()
+    {
+        if (_packOpened < 0) return;
+        double open = Raylib_cs.Raylib.GetTime() - _packOpened;
+        if (open > 1.0 && !_packShot) { _pending = "pack"; _packShot = true; }
+        if (open > 3.0)
+        {
+            Panel(false);
+            _packOpened = -1;
+            _packDone = true;
+        }
+    }
+
+    /// <summary>The game's own inventory panel, opened or shut as the F key would.</summary>
+    private static bool Panel(bool open)
+    {
+        var m = Rift.Game?.GetType().GetMethod("SetInventory",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        if (m == null) { Rift.Log("test hatch: no inventory panel to open"); return false; }
+        m.Invoke(Rift.Game, new object[] { open });
+        return true;
+    }
 
     public static void Frame()
     {
@@ -98,6 +129,18 @@ public static class TestHatch
             w.Player.Heading = MathF.Atan2(to.X, to.Y);
         }
 
+        // Back home with something out of Minecraft in the pack: open the pack and look at it.
+        // The panel stops the mods' frame, so Presenting() takes the picture and shuts it.
+        if (Plan.Contains("pack") && !Realm.Active && _packOpened < 0 && !_packDone && _homeSince > 0
+            && Raylib_cs.Raylib.GetTime() - _homeSince > 3.0 && Pocket.FirstSlot(w) is var slot and >= 0)
+        {
+            Rift.Log($"test hatch: the pack holds {Unrendered.Core.ItemNames.Of(w.Inventory.Slots[slot].Kind)} x{w.Inventory.Slots[slot].Count} from Minecraft; opening it");
+            if (Panel(true)) _packOpened = Raylib_cs.Raylib.GetTime();
+            else _packDone = true;
+        }
+        if (Realm.Active) _homeSince = -1;
+        else if (_homeSince < 0) _homeSince = Raylib_cs.Raylib.GetTime();
+
         // Back home: turn to face the Minecraft player standing in UNRENDERED.
         if (Plan.Contains("lookvisitor") && !Realm.Active && Visitors.FirstIn(w) is { } vp)
         {
@@ -119,10 +162,11 @@ public static class TestHatch
             craft.Position = new System.Numerics.Vector2((float)(item.Pos.X - Realm.Ox), (float)(item.Pos.Z - Realm.Oz));
         }
         // Take what came back in hand.
-        if (Plan.Contains("use") && !_used && Pocket.Selected != null && inside > 2.0)
+        if (Plan.Contains("use") && !_used && inside > 2.0 && Pocket.FirstSlot(w) is var held and >= 0)
         {
             _used = true;
-            Pocket.UseSelected();
+            Rift.Log($"test hatch: right-click on {Unrendered.Core.ItemNames.Of(w.Inventory.Slots[held].Kind)} in the pack: "
+                + (w.ChargeFromSlot(craft, w.Inventory, held) ? "spent" : "kept"));
         }
         // Turn on the nearest mob and fire at it twice a second.
         if (Plan.Contains("shoot") && inside > 2.0 && inside < 5.0 && now - _shot > 0.5

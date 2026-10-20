@@ -76,6 +76,7 @@ public final class RiftMod implements ModInitializer {
         RiftItems.register();
         RiftEntities.register();
         RiftDamage.register();
+        RiftSounds.register();
 
         PayloadTypeRegistry.playS2C().register(ScenePayload.ID, ScenePayload.CODEC);
         PayloadTypeRegistry.playS2C().register(CraftPayload.ID, CraftPayload.CODEC);

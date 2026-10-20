@@ -82,6 +82,7 @@ public static class Composite
     /// frame back to the game untouched.</summary>
     internal static bool Present(Renderer renderer)
     {
+        TestHatch.Presenting();
         bool shot = TestHatch.ShotDue;
         bool mine = _mode != Mode.None && _world != null && ReferenceEquals(_world, Rift.World);
         if (!mine && !shot) return false;

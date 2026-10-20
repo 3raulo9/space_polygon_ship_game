@@ -33,7 +33,9 @@ public final class RiftClient implements ClientModInitializer {
 
         EntityRendererRegistry.register(RiftEntities.ECHO, EmptyEntityRenderer::new);
         EntityRendererRegistry.register(RiftEntities.PILOT, PilotRenderer::new);
-        EntityRendererRegistry.register(RiftEntities.CRAB_CORE, FlyingItemEntityRenderer::new);
+        EntityRendererRegistry.register(RiftEntities.CRAB_CORE, CrabCoreSlugRenderer::new);
+        EntityRendererRegistry.register(RiftEntities.CRAB_CORE_BLAST, CrabCoreBlastRenderer::new);
+        UnrItemRenderer.registerAll();
         EntityRendererRegistry.register(RiftEntities.SEAT, EmptyEntityRenderer::new);
         EntityRendererRegistry.register(RiftEntities.UNR_ENEMY, UnrEnemyRenderer::new);
         EntityRendererRegistry.register(RiftEntities.UNR_BOLT, ctx -> new FlyingItemEntityRenderer<>(ctx, 0.8f, true));

@@ -57,7 +57,7 @@ public static class Rift
     /// whichever world it holds). The game gives the mod system a delegate that speaks into
     /// its feed; that delegate is bound to the game, so the game is found through it.
     /// </summary>
-    private static object? Game
+    internal static object? Game
     {
         get
         {
@@ -130,7 +130,6 @@ public static class Rift
         Textures.Pump();
 
         if (Raylib.IsKeyPressed(Cfg.PortalKey)) PortalKey();
-        Pocket.Keys();
 
         Visitors.SendScenes();
         Realm.BeforeFrame();

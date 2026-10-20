@@ -27,7 +27,7 @@ import net.unrendered.rift.bridge.Bridge;
  * photographs that, and quits. Everything it does is logged with the {@code RIFT-E2E} tag.
  */
 public final class AutoTest {
-    private enum Step { TITLE, CREATING, LOADING, SETUP, WAIT_PILOT, WATCH_PILOT, TO_RIFT, IN_RIFT, DONE }
+    private enum Step { TITLE, CREATING, LOADING, SETUP, THROW, WAIT_PILOT, WATCH_PILOT, TO_RIFT, IN_RIFT, DONE }
 
     private static Step step = Step.TITLE;
     private static int ticks, stepTicks, shots;
@@ -126,7 +126,45 @@ public final class AutoTest {
                     log("open to LAN: " + lan);
                     if (sp != null) run(server, sp, "rift join");
                 });
-                go(Step.WAIT_PILOT);
+                go(Step.THROW);
+            }
+            case THROW -> {
+                // UNRENDERED's items in a Minecraft inventory, and a crab core thrown the way
+                // UNRENDERED throws one.
+                IntegratedServer server = mc.getServer();
+                String name = mc.player.getGameProfile().getName();
+                if (stepTicks == 1) {
+                    server.execute(() -> {
+                        run(server, null, "clear " + name);
+                        for (String id : new String[]{"crab_core", "battery 4", "bullet 20", "moonstone", "crab_fragment 3",
+                            "repair_kit 2", "copper_wire 12", "sun_fragment"})
+                            run(server, null, "give " + name + " unrendered_portal:" + id);
+                    });
+                }
+                if (stepTicks == 10 && mc.player != null) {
+                    mc.player.getInventory().selectedSlot = 0;
+                    mc.player.setPitch(0f);
+                    mc.setScreen(new net.minecraft.client.gui.screen.ingame.InventoryScreen(mc.player));
+                }
+                if (stepTicks == 30) shot(mc, "mc-inventory");
+                if (stepTicks == 50) {
+                    mc.setScreen(null);
+                    log("holding " + mc.player.getMainHandStack());
+                }
+                if (stepTicks == 60) shot(mc, "mc-holding");
+                if (stepTicks == 62) {
+                    var result = mc.interactionManager.interactItem(mc.player, net.minecraft.util.Hand.MAIN_HAND);
+                    log("threw the crab core: " + result);
+                }
+                if (stepTicks == 66 || stepTicks == 74 || stepTicks == 86 || stepTicks == 104) shot(mc, "mc-blast");
+                if (stepTicks == 70 || stepTicks == 100) {
+                    long blasts = mc.world.getEntitiesByClass(net.unrendered.rift.entity.CrabCoreBlastEntity.class,
+                        mc.player.getBoundingBox().expand(96), e -> true).size();
+                    long alive = mc.world.getEntitiesByClass(net.minecraft.entity.mob.MobEntity.class,
+                        mc.player.getBoundingBox().expand(96), e -> e.isAlive()).size();
+                    log("blasts in the air: " + blasts + ", mobs standing: " + alive);
+                }
+                if (stepTicks > 130) go(Step.WAIT_PILOT);
             }
             case WAIT_PILOT -> {
                 if (stepTicks % 100 == 0) log("waiting for the pilot; linked=" + Bridge.linked());

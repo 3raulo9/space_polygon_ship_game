@@ -61,3 +61,16 @@ for key, files in sorted(groups.items()):
         emit("last-" + key, img, 80)
     except Exception as e:
         print("could not show", files[-1], e)
+
+
+# The frames a check is about, each on its own and large enough to read.
+FEATURED = ("inventory", "holding", "blast", "pack")
+for key, files in sorted(groups.items()):
+    for f in files:
+        if any(w in os.path.basename(f) for w in FEATURED):
+            try:
+                img = Image.open(f).convert("RGB")
+                img.thumbnail((960, 540))
+                emit("big-" + os.path.basename(f)[:-4], img, 80)
+            except Exception as e:
+                print("could not show", f, e)

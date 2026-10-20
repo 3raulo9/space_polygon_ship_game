@@ -42,13 +42,22 @@ CI builds both. Download them from the latest green run of `rift-unrendered` and
      relic items you can craft UNRENDERED's recipes with in a crafting table. Mine the
      towers and enough of a tower brings it down. Walk back into the glowstone to go
      home.
-4. What a pilot carries home sits in the **pocket**, bottom left:
-   * **O** next item, **P** use, **I** drop it back into Minecraft.
-   * Food mends your hull.
-   * A sword, any mod's included, is rebuilt pixel by pixel from its own texture into an
-     UNRENDERED melee weapon for the SOLDIER.
-   * Iron, copper, gunpowder and UNRENDERED's own relics go straight into your pack as
-     salvage.
+4. Items cross as themselves, both ways.
+   * What a pilot picks up in Minecraft goes into UNRENDERED's own pack (**F**), drawn
+     with Minecraft's own sprite and stacking as high as Minecraft stacks it. The panel's
+     own moves work on it. Right-click eats food, which mends your hull, or takes a sword
+     in hand as a SOLDIER; any mod's sword is rebuilt pixel by pixel from its own texture.
+     Shift+right-click throws one out. In Minecraft it lands at your feet; at home it lands
+     in the rift. Iron, copper, gunpowder and UNRENDERED's own relics become that salvage.
+     The pack is UNRENDERED's, so it lasts as long as the run does.
+   * What a Minecraft player picks up in UNRENDERED is UNRENDERED's own item in their
+     inventory: the very model UNRENDERED's pack shows, turning in the slot the way it
+     does there, stacking as UNRENDERED stacks it, under UNRENDERED's name. Used, it does
+     what it does in UNRENDERED. A CRAB CORE is thrown flat and straight at UNRENDERED's
+     speed, then goes off as UNRENDERED's three-second burst of 32 tumbling lances, with
+     UNRENDERED's own sounds. It hurts everything in reach except whoever threw it, and
+     leaves the blocks alone. A MOONSTONE mends everything at once. Inside the rift,
+     UNRENDERED throws the core itself, from your seat.
 
 Chat commands in UNRENDERED: `{rift}`, `{rift join}`, `{rift leave}`,
 `{rift connect 192.168.1.20:25570}`. Settings live in `Mods/rift/portal.cfg`. Keys,

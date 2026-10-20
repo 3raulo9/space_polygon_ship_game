@@ -5,6 +5,7 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
+import net.unrendered.rift.entity.CrabCoreBlastEntity;
 import net.unrendered.rift.entity.CrabCoreEntity;
 import net.unrendered.rift.entity.EchoEntity;
 import net.unrendered.rift.entity.PilotEntity;
@@ -50,11 +51,20 @@ public final class RiftEntities {
         .trackingTickInterval(2)
         .build("unrendered_bolt");
 
+    /** A thrown CRAB CORE in flight. Fast, so it is sent every tick. */
     public static final EntityType<CrabCoreEntity> CRAB_CORE = EntityType.Builder.<CrabCoreEntity>create(CrabCoreEntity::new, SpawnGroup.MISC)
-        .dimensions(0.4f, 0.4f)
-        .maxTrackingRange(4)
-        .trackingTickInterval(10)
+        .dimensions(0.5f, 0.5f)
+        .maxTrackingRange(8)
+        .trackingTickInterval(1)
         .build("crab_core");
+
+    /** One going off: UNRENDERED's three-second burst of lances. */
+    public static final EntityType<CrabCoreBlastEntity> CRAB_CORE_BLAST = EntityType.Builder.<CrabCoreBlastEntity>create(CrabCoreBlastEntity::new, SpawnGroup.MISC)
+        .dimensions(0.5f, 0.5f)
+        .maxTrackingRange(16)
+        .trackingTickInterval(20)
+        .disableSummon()
+        .build("crab_core_blast");
 
     private RiftEntities() {}
 
@@ -62,6 +72,7 @@ public final class RiftEntities {
         Registry.register(Registries.ENTITY_TYPE, RiftMod.id("echo"), ECHO);
         Registry.register(Registries.ENTITY_TYPE, RiftMod.id("pilot"), PILOT);
         Registry.register(Registries.ENTITY_TYPE, RiftMod.id("crab_core"), CRAB_CORE);
+        Registry.register(Registries.ENTITY_TYPE, RiftMod.id("crab_core_blast"), CRAB_CORE_BLAST);
         Registry.register(Registries.ENTITY_TYPE, RiftMod.id("seat"), SEAT);
         Registry.register(Registries.ENTITY_TYPE, RiftMod.id("unrendered_enemy"), UNR_ENEMY);
         Registry.register(Registries.ENTITY_TYPE, RiftMod.id("unrendered_bolt"), UNR_BOLT);

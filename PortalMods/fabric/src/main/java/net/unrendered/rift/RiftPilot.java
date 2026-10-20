@@ -407,6 +407,7 @@ public final class RiftPilot {
         got.addProperty("item", Registries.ITEM.getId(stack.getItem()).toString());
         got.addProperty("name", stack.getName().getString());
         got.addProperty("count", stack.getCount());
+        got.addProperty("max", stack.getMaxCount());
         String tex = null;
         RiftHooks.Client c = RiftHooks.client;
         if (c != null) {
@@ -440,14 +441,17 @@ public final class RiftPilot {
     }
 
     public static void onDrop(MinecraftServer server, JsonObject m) {
-        ServerWorld w = world(server);
-        if (w == null && server.getOverworld() != null) w = server.getOverworld();
+        // Thrown out of a pack at home in UNRENDERED: it lands in the rift, where UNRENDERED's
+        // world is, at the same spot.
+        boolean rift = m.has("rift") && m.get("rift").getAsBoolean();
+        ServerWorld w = rift ? server.getWorld(RiftMod.RIFT) : world(server);
+        if (w == null && !rift && server.getOverworld() != null) w = server.getOverworld();
         if (w == null || !m.has("stack")) return;
         RegistryOps<JsonElement> ops = w.getRegistryManager().getOps(JsonOps.INSTANCE);
         ItemStack stack = ItemStack.CODEC.parse(ops, m.get("stack")).result().orElse(ItemStack.EMPTY);
         if (stack.isEmpty()) return;
         double x = m.has("x") ? m.get("x").getAsDouble() : pilotPos.x;
-        double y = m.has("y") ? m.get("y").getAsDouble() : pilotPos.y;
+        double y = m.has("y") ? m.get("y").getAsDouble() + (rift ? RiftMod.FLOOR_Y : 0) : pilotPos.y;
         double z = m.has("z") ? m.get("z").getAsDouble() : pilotPos.z;
         ItemEntity item = new ItemEntity(w, x, y + 0.5, z, stack);
         item.setPickupDelay(30);

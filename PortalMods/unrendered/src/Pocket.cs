@@ -8,76 +8,41 @@ using Unrendered.Rendering;
 namespace UnrenderedPortal;
 
 /// <summary>
-/// What the pilot has carried out of Minecraft. Anything UNRENDERED already has a name for
-/// (its own salvage come home as relics, a few plain metals) goes straight into the pack.
-/// Everything else is a Minecraft item, and stays one: it sits in this pocket with its
-/// Minecraft data untouched, it can be eaten, swung or carried, and it can be dropped back
-/// into Minecraft exactly as it came out.
-///
-/// O cycles, P uses, I drops (all rebindable in portal.cfg). The pocket survives quitting —
-/// it lives in Mods/Portal/pocket.json.
+/// What the pilot carries out of Minecraft goes into UNRENDERED's own pack. Anything
+/// UNRENDERED already has a name for (its own salvage come home as relics, a few plain
+/// metals) lands as that salvage. Everything else stays a Minecraft item: each kind of it
+/// becomes a kind the pack holds (see <see cref="ModItems"/>), with its Minecraft data
+/// untouched, Minecraft's own picture in the slot, Minecraft's stack size, and the panel's
+/// own moves — drag it, right-click to eat or take up a weapon, throw it out. Thrown, it goes
+/// back into Minecraft exactly as it came out.
 /// </summary>
 public static class Pocket
 {
     public sealed class Item
     {
-        public required JsonNode Stack;   // Minecraft's own encoding, opaque here
+        public required JsonNode Stack;   // Minecraft's own encoding, count left out; opaque here
         public required string Id;
         public required string Name;
-        public int Count;
+        public int Max = 64;
         public string Tex = "";
         public float Attack;              // MC attack damage, 0 if not a weapon
         public int Food;                  // MC nutrition, 0 if not food
         public float Speed = 1.6f;        // MC attack speed
-    }
-
-    private static readonly List<Item> _items = new();
-    private static int _sel;
-    private static bool _loaded;
-
-    public static IReadOnlyList<Item> Items => _items;
-    public static Item? Selected => _items.Count == 0 ? null : _items[Math.Clamp(_sel, 0, _items.Count - 1)];
-
-    private static string File => Path.Combine(Rift.Dir, "pocket.json");
-
-    private static void Load()
-    {
-        if (_loaded) return;
-        _loaded = true;
-        try
-        {
-            if (!System.IO.File.Exists(File) || JsonNode.Parse(System.IO.File.ReadAllText(File)) is not JsonArray arr) return;
-            foreach (var n in arr)
-                if (n is JsonObject o && FromJson(o) is { } it) _items.Add(it);
-        }
-        catch (Exception e) { Rift.Log("pocket: " + e.Message); }
-    }
-
-    private static void Save()
-    {
-        try
-        {
-            var arr = new JsonArray();
-            foreach (var it in _items)
-                arr.Add(new JsonObject
-                {
-                    ["stack"] = it.Stack.DeepClone(), ["item"] = it.Id, ["name"] = it.Name, ["count"] = it.Count,
-                    ["tex"] = it.Tex, ["attack"] = it.Attack, ["food"] = it.Food, ["speed"] = it.Speed,
-                });
-            System.IO.File.WriteAllText(File, arr.ToJsonString());
-        }
-        catch (Exception e) { Rift.Log("pocket save: " + e.Message); }
+        public ItemKind Kind;
     }
 
     private static Item? FromJson(JsonObject o)
     {
-        if (o["stack"] is not { } stack) return null;
+        if (o["stack"] is not JsonObject stack) return null;
+        var bare = (JsonObject)stack.DeepClone();
+        bare.Remove("count");
+        bool weapon = (o["attack"]?.GetValue<float>() ?? 0) > 0;
         return new Item
         {
-            Stack = stack.DeepClone(),
+            Stack = bare,
             Id = o["item"]?.GetValue<string>() ?? "minecraft:air",
             Name = (o["name"]?.GetValue<string>() ?? "ITEM").ToUpperInvariant(),
-            Count = o["count"]?.GetValue<int>() ?? 1,
+            Max = Math.Clamp(o["max"]?.GetValue<int>() ?? (weapon ? 1 : 64), 1, 99),
             Tex = o["tex"]?.GetValue<string>() ?? "",
             Attack = o["attack"]?.GetValue<float>() ?? 0,
             Food = o["food"]?.GetValue<int>() ?? 0,
@@ -85,125 +50,117 @@ public static class Pocket
         };
     }
 
+    /// <summary>The pack's kind for this Minecraft item — one per item and its data, so two
+    /// differently enchanted swords are two kinds and never stack into one.</summary>
+    private static ModItem? KindOf(Item it)
+    {
+        string key = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(
+            System.Text.Encoding.UTF8.GetBytes(it.Stack.ToJsonString())))[..16];
+        if (ModItems.Find("rift", key) is { } had) return had;
+        Textures.Get(it.Tex);
+        var made = ModItems.Register(new ModItem
+        {
+            ModId = "rift", Id = key, Name = Font.Clean(it.Name), MaxStack = it.Max, Tag = it,
+            DrawIcon = (size, _) => Icon(it, size),
+            Use = (w, craft, _) => Use(it, w, craft),
+            Thrown = (w, craft, at) => Throw(it, w, craft),
+        });
+        if (made != null) it.Kind = made.Kind;
+        return made;
+    }
+
+    /// <summary>Minecraft's own sprite, filling the slot the way Minecraft's GUI fills one.</summary>
+    private static void Icon(Item it, int size)
+    {
+        if (Textures.Get(it.Tex) is not { Missing: false } tex) return;
+        int m = size / 14;
+        Raylib.DrawTexturePro(tex.Gpu, new Rectangle(0, 0, tex.W, tex.H), new Rectangle(m, m, size - 2 * m, size - 2 * m),
+            Vector2.Zero, 0f, Color.White);
+    }
+
     internal static bool Handle(Msg m)
     {
         if (m.T != "got") return false;
-        Load();
         var it = FromJson(m.J);
-        if (it == null) return true;
+        int count = m.J["count"]?.GetValue<int>() ?? 1;
+        if (it == null || Rift.World is not { } w) return true;
 
-        // Salvage UNRENDERED knows goes into the pack proper.
-        if (UnrenderedPortal.Items.Salvage(it.Id) is { } kind && Rift.World is { } w)
+        ItemKind? kind = UnrenderedPortal.Items.Salvage(it.Id) ?? KindOf(it)?.Kind;
+        if (kind is not { } k) { Back(it, count, w); return true; }
+        int left = w.Inventory.Add(k, count);
+        int took = count - left;
+        if (took > 0)
         {
-            int left = w.Inventory.Add(kind, it.Count);
-            int took = it.Count - left;
-            if (took > 0)
-            {
-                CueBank.Play(Cue.Pickup, w.Player.Position, 0f);
-                Rift.Notice($"+{took} {ItemNames.Of(kind)}");
-            }
-            if (left <= 0) return true;
-            it.Count = left;
+            CueBank.Play(Cue.Pickup, w.Player.Position, 0f);
+            Rift.Notice($"+{took} {ItemNames.Of(k)}");
         }
-
-        _items.Add(it);
-        _sel = _items.Count - 1;
-        Save();
-        if (Rift.World is { } world) CueBank.Play(Cue.Pickup, world.Player.Position, 0f);
-        Rift.Notice($"+{it.Count} {it.Name}");
-        Textures.Get(it.Tex);
+        // What the pack has no room for goes back where it came from, not into the void.
+        if (left > 0)
+        {
+            Back(it, left, w);
+            Rift.Notice("PACK FULL");
+        }
         return true;
     }
 
-    internal static void Keys()
+    private static bool Use(Item it, Unrendered.World.World w, Unrendered.Entities.PlayerTank craft)
     {
-        Load();
-        if (_items.Count == 0) return;
-        if (Raylib.IsKeyPressed(Rift.Cfg.NextKey)) _sel = (_sel + 1) % _items.Count;
-        if (Raylib.IsKeyPressed(Rift.Cfg.UseKey)) Use();
-        if (Raylib.IsKeyPressed(Rift.Cfg.DropKey)) Drop();
-    }
-
-    internal static void UseSelected() => Use();
-
-    private static void Use()
-    {
-        if (Selected is not { } it || Rift.World is not { } w) return;
-        var craft = w.Player;
         if (it.Food > 0)
         {
             // Minecraft food mends the hull: a steak is worth a good chunk of a repair kit.
-            float mend = it.Food * 2.5f;
-            craft.Health = MathF.Min(craft.MaxHealth, craft.Health + mend);
-            Spend(it, 1);
+            if (craft.Health >= craft.MaxHealth) { Rift.Notice("NOT HUNGRY"); return false; }
+            craft.Health = MathF.Min(craft.MaxHealth, craft.Health + it.Food * 2.5f);
             CueBank.Play(Cue.Pickup, craft.Position, 0f);
             Rift.Notice($"ATE {it.Name}");
-            return;
+            return true;
         }
         if (it.Attack > 0)
         {
-            if (craft.Soldier == null)
-            {
-                Rift.Notice($"ONLY A SOLDIER CAN SWING A {it.Name}");
-                return;
-            }
+            if (craft.Soldier == null) { Rift.Notice($"ONLY A SOLDIER CAN SWING A {it.Name}"); return false; }
             var weapon = Arsenal.For(it);
-            if (weapon == null) { Rift.Notice($"{it.Name}: TRY AGAIN"); return; }
+            if (weapon == null) { Rift.Notice($"{it.Name}: TRY AGAIN"); return false; }
             craft.HeldWeapon = weapon.Index;
             Rift.Notice($"{it.Name} IN HAND");
-            return;
+            return false;   // held, not spent: it stays in the pack
         }
         Rift.Notice($"NO USE FOR {it.Name} HERE");
+        return false;
     }
 
-    private static void Drop()
+    /// <summary>Thrown out of the pack. In Minecraft it lands at the craft's feet; at home it
+    /// lands in the rift, which is this same field as Minecraft holds it.</summary>
+    private static void Throw(Item it, Unrendered.World.World w, Unrendered.Entities.PlayerTank craft)
     {
-        if (Selected is not { } it) return;
-        if (!Realm.Active || Rift.Live is not { } live || Rift.World is not { } w)
+        if (craft.HeldWeapon >= 0 && Arsenal.IsFrom(craft.HeldWeapon, it)
+            && !w.Inventory.Slots.Any(s => !s.IsEmpty && s.Kind == it.Kind)) craft.HeldWeapon = -1;
+        Back(it, 1, w);
+    }
+
+    private static void Back(Item it, int count, Unrendered.World.World w)
+    {
+        var craft = w.Player;
+        var stack = (JsonObject)it.Stack.DeepClone();
+        stack["count"] = count;
+        if (Rift.Live is not { } live)
         {
-            Rift.Notice("DROP IT IN MINECRAFT");
+            // Nowhere to put it down: it stays in the pack.
+            if (it.Kind != default) w.Inventory.Add(it.Kind, count);
+            Rift.Notice("NO MINECRAFT TO DROP IT IN");
             return;
         }
-        var craft = w.Player;
-        var at = Realm.Mc(craft.Position + craft.Forward * 1.6f, craft.Height + 0.5f);
-        live.Send("drop", "stack", it.Stack, "x", (double)at.X, "y", (double)at.Y, "z", (double)at.Z);
-        if (craft.HeldWeapon >= 0 && Arsenal.IsFrom(craft.HeldWeapon, it)) craft.HeldWeapon = -1;
-        _items.Remove(it);
-        _sel = Math.Max(0, _sel - 1);
-        Save();
-        Rift.Notice($"DROPPED {it.Name}");
+        var ahead = craft.Position + craft.Forward * 1.6f;
+        if (Realm.Active)
+        {
+            var at = Realm.Mc(ahead, craft.Height + 0.5f);
+            live.Send("drop", "stack", stack, "x", (double)at.X, "y", (double)at.Y, "z", (double)at.Z);
+        }
+        else
+            live.Send("drop", "stack", stack, "rift", true, "x", (double)ahead.X, "y", (double)craft.Height + 0.5, "z", (double)ahead.Y);
     }
 
-    private static void Spend(Item it, int n)
-    {
-        it.Count -= n;
-        if (it.Count <= 0) _items.Remove(it);
-        else if (it.Stack is JsonObject o) o["count"] = it.Count;
-        _sel = Math.Clamp(_sel, 0, Math.Max(0, _items.Count - 1));
-        Save();
-    }
-
-    /// <summary>Bottom-left, over the game's own HUD: the selected Minecraft item, framed
-    /// like a slot of Minecraft's hotbar.</summary>
-    internal static void Draw()
-    {
-        Load();
-        if (Selected is not { } it) return;
-        const int x = 6, w = 156, h = 30;
-        int y = Config.InternalHeight - 80;
-        Raylib.DrawRectangle(x - 2, y - 2, w, h, new Color(5, 7, 10, 180));
-        Raylib.DrawRectangleLines(x - 2, y - 2, w, h, new Color(139, 139, 139, 255));
-        Raylib.DrawRectangleLines(x - 1, y - 1, 24, 24, new Color(55, 55, 55, 255));
-        if (Textures.Get(it.Tex) is { } tex)
-            Raylib.DrawTexturePro(tex.Gpu, new Rectangle(0, 0, tex.W, tex.H), new Rectangle(x + 1, y + 1, 20, 20),
-                Vector2.Zero, 0f, Color.White);
-        string name = Font.Clean(it.Name);
-        if (name.Length > 21) name = name[..21];
-        Font.Draw(name, x + 26, y + 2, 1, Color.White);
-        Font.Draw($"X{it.Count}  {_sel + 1}/{_items.Count}", x + 26, y + 12, 1, new Color(170, 170, 170, 255));
-        Font.Draw($"{Rift.Cfg.NextKey}:NEXT {Rift.Cfg.UseKey}:USE {Rift.Cfg.DropKey}:DROP", x, y + h + 1, 1,
-            new Color(120, 130, 140, 255));
-    }
+    /// <summary>The first Minecraft item in the pack, for the test hatch.</summary>
+    internal static int FirstSlot(Unrendered.World.World w)
+        => Array.FindIndex(w.Inventory.Slots, s => !s.IsEmpty && ModItems.Get(s.Kind)?.Tag is Item);
 }
 
 /// <summary>

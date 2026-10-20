@@ -24,6 +24,7 @@ public sealed class RiftMod : IGameMod
         Rift.Boot(host);
         RiftConfig.WriteDefault(Path.Combine(Rift.Dir, "portal.cfg"));
         Hooks.Install();
+        ItemModels.ExportIfAsked();
     }
 
     public void WorldOpened(GameWorld world) { }

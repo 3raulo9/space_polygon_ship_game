@@ -10,6 +10,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Rarity;
 import net.unrendered.rift.item.BatteryItem;
 import net.unrendered.rift.item.CrabCoreItem;
+import net.unrendered.rift.item.MoonstoneItem;
 import net.unrendered.rift.item.RelicItem;
 import net.unrendered.rift.item.RepairKitItem;
 import net.unrendered.rift.item.RoundsItem;
@@ -34,12 +35,12 @@ public final class RiftItems {
     public static final Item LEAD = relic("lead", Rarity.COMMON);
     public static final Item ZINC = relic("zinc", Rarity.COMMON);
     public static final Item LITHIUM = relic("lithium", Rarity.COMMON);
-    public static final Item BATTERY = add("battery", new BatteryItem(new Item.Settings().maxCount(16).rarity(Rarity.UNCOMMON)));
-    public static final Item BULLET = add("bullet", new RoundsItem(new Item.Settings().maxCount(64)));
+    public static final Item BATTERY = add("battery", new BatteryItem(settings("battery").rarity(Rarity.UNCOMMON)));
+    public static final Item BULLET = add("bullet", new RoundsItem(settings("bullet")));
     public static final Item CRAB_FRAGMENT = relic("crab_fragment", Rarity.RARE);
-    public static final Item CRAB_CORE = add("crab_core", new CrabCoreItem(new Item.Settings().maxCount(4).rarity(Rarity.EPIC)));
-    public static final Item REPAIR_KIT = add("repair_kit", new RepairKitItem(new Item.Settings().maxCount(8).rarity(Rarity.UNCOMMON)));
-    public static final Item MOONSTONE = relic("moonstone", Rarity.RARE);
+    public static final Item CRAB_CORE = add("crab_core", new CrabCoreItem(settings("crab_core").rarity(Rarity.EPIC)));
+    public static final Item REPAIR_KIT = add("repair_kit", new RepairKitItem(settings("repair_kit").rarity(Rarity.UNCOMMON)));
+    public static final Item MOONSTONE = add("moonstone", new MoonstoneItem(settings("moonstone").rarity(Rarity.RARE)));
     public static final Item SUN_FRAGMENT = relic("sun_fragment", Rarity.EPIC);
     public static final Item MOON_FRAGMENT = relic("moon_fragment", Rarity.EPIC);
 
@@ -52,7 +53,12 @@ public final class RiftItems {
     private RiftItems() {}
 
     private static Item relic(String id, Rarity rarity) {
-        return add(id, new RelicItem(new Item.Settings().maxCount(64).rarity(rarity)));
+        return add(id, new RelicItem(settings(id).rarity(rarity)));
+    }
+
+    /** Stacks as high as UNRENDERED's pack stacks it. */
+    private static Item.Settings settings(String id) {
+        return new Item.Settings().maxCount(Math.max(1, Math.min(99, UnrModels.stack(id, 64))));
     }
 
     private static Item add(String id, Item item) {

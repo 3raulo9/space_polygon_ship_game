@@ -108,8 +108,8 @@ it.
 | U→M | `hit`     | `id, dmg` | a pilot's round struck entity `id` (MC HP) |
 | U→M | `break`   | `x, y, z` | a pilot's round struck a block |
 | U→M | `pickup`  | `id` | the pilot rolled over item entity `id` |
-| M→U | `got`     | `stack, item, name, count, tex, attack, food` | it's theirs. `stack` is opaque (Minecraft's own item codec) and comes back unchanged |
-| U→M | `drop`    | `stack, x, y, z` | the pilot dropped an item back into Minecraft |
+| M→U | `got`     | `stack, item, name, count, max, tex, attack, food` | it's theirs. `stack` is opaque (Minecraft's own item codec) and comes back unchanged. `max` is how high Minecraft stacks it; the pilot's pack stacks it the same |
+| U→M | `drop`    | `stack, x, y, z, rift?` | the pilot threw an item out of the pack. Without `rift` it lands in the pilot's Minecraft world at Minecraft coordinates; with `rift: true` the pilot is at home and x, y, z are UNRENDERED's (y above the floor), so it lands in the rift dimension at the same spot |
 | M→U | `hurt`    | `amount, by` | Minecraft hurt the pilot (MC HP) |
 | U→M | `leave`   | — | the pilot went home, died, or quit |
 
