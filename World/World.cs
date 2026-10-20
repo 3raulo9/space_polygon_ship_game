@@ -3521,6 +3521,8 @@ public sealed partial class World : IAnchorField
 
         PlayerTank who = Players[seat];
         Vector2 at = Torus.Wrap(who.Position + who.Forward * ThrowReach);
+        // Something a code mod added has no salvage here to become; its mod puts it down.
+        if (Modding.ModItems.Get(kind) is { } item) { item.Thrown?.Invoke(this, who, at); return true; }
         TossSalvage(at, SalvageOf(kind));
         return true;
     }
@@ -3647,6 +3649,15 @@ public sealed partial class World : IAnchorField
                 slot.Count -= Math.Min(loaded, slot.Count);
                 if (slot.Count <= 0) slot = ItemStack.Empty;
                 if (local) Audio.PlayPickup(player.Position);
+                return true;
+            }
+
+            // Something a code mod added does whatever its mod says spending it does.
+            case var kind when Modding.ModItems.Get(kind) is { Use: { } use }:
+            {
+                if (!use(this, player, index)) return false;
+                ref ItemStack after = ref inv.Slots[index];   // the mod may have moved things
+                if (!after.IsEmpty && after.Kind == kind && --after.Count <= 0) after = ItemStack.Empty;
                 return true;
             }
 

@@ -22,15 +22,27 @@ public sealed class ItemIconRenderer : IDisposable
     public const int Size = 28;
 
     private readonly Dictionary<ItemKind, RenderTexture2D> _tex = new();
-    private readonly Dictionary<ItemKind, PolyMesh> _mesh = new();
-    private readonly Dictionary<ItemKind, float> _scale = new();
+    private static readonly Dictionary<ItemKind, PolyMesh> _mesh = new();
+    private static readonly Dictionary<ItemKind, float> _scale = new();
     // Each mesh is built base-at-origin and extends upward; this is the model-space Y to
     // lift it by (negated) so it turns about its own centre instead of its feet.
-    private readonly Dictionary<ItemKind, float> _centerY = new();
+    private static readonly Dictionary<ItemKind, float> _centerY = new();
     private Camera3D _cam;
 
-    public ItemIconRenderer()
+    /// <summary>
+    /// Each kind's model as its icon shows it: the mesh, the scale it is framed at and the
+    /// model-space height it turns about. Public so anything that wants to show an item as
+    /// the game shows it can draw the same thing.
+    /// </summary>
+    public static (PolyMesh Mesh, float Scale, float CenterY)? Model(ItemKind kind)
     {
+        Build();
+        return _mesh.TryGetValue(kind, out var m) ? (m, _scale[kind], _centerY[kind]) : null;
+    }
+
+    private static void Build()
+    {
+        if (_mesh.Count > 0) return;
         // The salvage meshes, reusing the same shapes the world uses for pickups and the
         // boss's gem so a fragment and a crafted core read as what they are.
         _mesh[ItemKind.Battery] = Meshes.Battery(Palette.BatteryFill, Palette.BatteryCore);
@@ -75,7 +87,11 @@ public sealed class ItemIconRenderer : IDisposable
         // weaker cue to read instead of the one that actually works.
         _scale[ItemKind.SunFragment] = 1.30f;    _centerY[ItemKind.SunFragment] = 0.56f;
         _scale[ItemKind.MoonFragment] = 1.30f;   _centerY[ItemKind.MoonFragment] = 0.56f;
+    }
 
+    public ItemIconRenderer()
+    {
+        Build();
         foreach (var kind in _mesh.Keys)
         {
             var rt = Raylib.LoadRenderTexture(Size, Size);
@@ -111,11 +127,30 @@ public sealed class ItemIconRenderer : IDisposable
             Raylib.EndMode3D();
             Raylib.EndTextureMode();
         }
+
+        // What code mods added: each draws its own picture into its own slot texture.
+        foreach (var item in Modding.ModItems.All)
+        {
+            if (item.DrawIcon is null) continue;
+            Raylib.BeginTextureMode(Target(item.Kind));
+            Raylib.ClearBackground(new Color(0, 0, 0, 0));
+            item.DrawIcon(Size, elapsed);
+            Raylib.EndTextureMode();
+        }
+    }
+
+    private RenderTexture2D Target(ItemKind kind)
+    {
+        if (_tex.TryGetValue(kind, out var rt)) return rt;
+        rt = Raylib.LoadRenderTexture(Size, Size);
+        Raylib.SetTextureFilter(rt.Texture, TextureFilter.Point);
+        _tex[kind] = rt;
+        return rt;
     }
 
     /// <summary>The rendered icon for a kind. Render textures are stored bottom-up, so
     /// draw it with a negative-height source rectangle (as the panel does).</summary>
-    public Texture2D Texture(ItemKind kind) => _tex[kind].Texture;
+    public Texture2D Texture(ItemKind kind) => Target(kind).Texture;
 
     public void Dispose()
     {
