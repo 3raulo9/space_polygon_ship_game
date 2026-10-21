@@ -407,10 +407,10 @@ public final class RiftPilot {
     }
 
     public static void onPickup(MinecraftServer server, JsonObject m) {
-        int id = m.get("id").getAsInt();
-        ServerWorld w = worldOf(server, id);
+        int entityId = m.get("id").getAsInt();
+        ServerWorld w = worldOf(server, entityId);
         if (w == null) return;
-        Entity e = w.getEntityById(id);
+        Entity e = w.getEntityById(entityId);
         if (!(e instanceof ItemEntity item) || item.isRemoved()) return;
         // In the pilot's world it has to be within reach of the body; in the rift UNRENDERED has
         // already measured the reach against its own craft.
