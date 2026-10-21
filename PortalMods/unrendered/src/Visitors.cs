@@ -88,6 +88,7 @@ public static class Visitors
             case "strike": Strike(m); return true;
             case "mine": Mine(m); return true;
             case "use": Use(m); return true;
+            case "thrown": Thrown(m); return true;
             case "depart":
                 if (_all.Remove(m.Str("uuid"), out var gone))
                 {
@@ -335,6 +336,23 @@ public static class Visitors
         pack.Weapons[0] = new ItemStack(ItemKind.CrabCore, 1);
         w.UseWeaponSlot(0, v.Seat);
         pack.Weapons[0] = ItemStack.Empty;
+    }
+
+    /// <summary>
+    /// A crab core thrown in Minecraft flew through the portal into UNRENDERED's world. Here
+    /// it is UNRENDERED's own: the same slug, carrying on from where it came out on the line it
+    /// was flying, and when it goes off it is the game's own blast, billed to the thrower's
+    /// seat if they are standing in UNRENDERED.
+    /// </summary>
+    private static void Thrown(Msg m)
+    {
+        if (Home is not { } w || m.Str("item") != "crab_core") return;
+        var dir = new Vector2(m.F("dx"), m.F("dz"));
+        if (dir.LengthSquared() < 1e-6f) return;
+        int by = _all.TryGetValue(m.Str("uuid"), out var v) ? v.SeatIndex : Projectile.NoOwner;
+        if (w.Projectiles.FirstOrDefault(p => !p.Active) is not { } slug) return;
+        slug.FireCrabBomb(Torus.Wrap(new Vector2(m.F("x"), m.F("z"))), Vector2.Normalize(dir), by < 0 ? Projectile.NoOwner : by);
+        w.Emit(Cue.ThrowWhoosh, slug.Position);
     }
 
     /// <summary>20 Hz: where UNRENDERED's own players stand, so the rift dimension can hold

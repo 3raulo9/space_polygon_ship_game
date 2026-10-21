@@ -360,6 +360,22 @@ public final class RiftPortals {
         if (!dest.getBlockState(ap).getCollisionShape(dest, ap).isEmpty()) at = exitBeside(dest, there, 1.8);
         dest.getChunk(BlockPos.ofFloored(at));
 
+        // A thrown crab core going into UNRENDERED's world becomes UNRENDERED's own bomb there,
+        // flying on from the far side of UNRENDERED's portal on the same line.
+        if (entity instanceof net.unrendered.rift.entity.CrabCoreEntity core && dest.getRegistryKey() == RiftMod.RIFT) {
+            Vec3d v = core.getVelocity();
+            com.google.gson.JsonObject t = Bridge.msg("thrown");
+            t.addProperty("item", "crab_core");
+            t.addProperty("x", at.x);
+            t.addProperty("z", at.z);
+            t.addProperty("dx", v.x);
+            t.addProperty("dz", v.z);
+            if (core.getOwner() != null) t.addProperty("uuid", core.getOwner().getUuidAsString());
+            Bridge.send(t);
+            core.discard();
+            return;
+        }
+
         entity.setPortalCooldown(80);
         Entity moved = entity.teleportTo(new TeleportTarget(dest, at, entity.getVelocity(), entity.getYaw(), entity.getPitch(),
             TeleportTarget.NO_OP));

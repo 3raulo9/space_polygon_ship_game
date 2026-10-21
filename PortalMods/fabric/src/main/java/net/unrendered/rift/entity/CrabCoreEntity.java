@@ -65,6 +65,7 @@ public class CrabCoreEntity extends ThrownItemEntity {
         // over the same floor: the core goes up by the difference.
         Vec3d at = getPos().add(0, UnrModels.blastCoreHeight - UnrModels.throwHeight, 0);
         w.spawnEntity(new CrabCoreBlastEntity(w, at, getOwner()));
+        net.unrendered.rift.RiftMod.LOG.info("Rift: a crab core went off at {} after {} ticks", at, age);
         w.playSound(null, at.x, at.y, at.z, RiftSounds.CRAB_CORE_BLAST, SoundCategory.PLAYERS, 4.0f, 1.0f);
         discard();
     }

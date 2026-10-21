@@ -151,17 +151,23 @@ public final class AutoTest {
                     mc.setScreen(null);
                     log("holding " + mc.player.getMainHandStack());
                 }
+                if (stepTicks == 56 && mc.player != null) {
+                    // Away from the portal (which stands right in front), over open ground, so
+                    // the slug flies its full throw and the burst is seen whole from here.
+                    mc.player.setYaw(mc.player.getYaw() + 180f);
+                    mc.player.setPitch(-4f);
+                }
                 if (stepTicks == 60) shot(mc, "mc-holding");
-                if (stepTicks == 62) {
+                if (stepTicks == 64) {
                     var result = mc.interactionManager.interactItem(mc.player, net.minecraft.util.Hand.MAIN_HAND);
                     log("threw the crab core: " + result);
                 }
-                if (stepTicks == 66 || stepTicks == 74 || stepTicks == 86 || stepTicks == 104) shot(mc, "mc-blast");
-                if (stepTicks == 70 || stepTicks == 100) {
+                if (stepTicks == 70 || stepTicks == 82 || stepTicks == 90 || stepTicks == 100 || stepTicks == 114) shot(mc, "mc-blast");
+                if (stepTicks == 82 || stepTicks == 114) {
                     long blasts = mc.world.getEntitiesByClass(net.unrendered.rift.entity.CrabCoreBlastEntity.class,
-                        mc.player.getBoundingBox().expand(96), e -> true).size();
+                        mc.player.getBoundingBox().expand(128), e -> true).size();
                     long alive = mc.world.getEntitiesByClass(net.minecraft.entity.mob.MobEntity.class,
-                        mc.player.getBoundingBox().expand(96), e -> e.isAlive()).size();
+                        mc.player.getBoundingBox().expand(128), e -> e.isAlive()).size();
                     log("blasts in the air: " + blasts + ", mobs standing: " + alive);
                 }
                 if (stepTicks > 130) go(Step.WAIT_PILOT);
