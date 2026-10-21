@@ -38,9 +38,6 @@ public static class Realm
     private static Vector2 _homeAt;          // where the craft stood when it went
     private static float _homeFacing;
 
-    /// <summary>Where the craft comes back out at home when it was not the glowstone portal it
-    /// went through (a door some other mod opened), and which way it faces. Cleared on return.</summary>
-    public static (Vector2 At, float Facing)? ReturnAt { get; set; }
 
     public static readonly Terrain Land = new();
 
@@ -235,10 +232,9 @@ public static class Realm
         var craft = _craft!;
         home.Players[home.LocalIndex] = craft;
         craft.Rig?.ReleaseBoth();
-        // Out of the door it went in by: another mod's, the glowstone portal, or failing both
-        // the spot it left from — never wherever its Minecraft coordinates happen to land.
-        var (from, facing) = ReturnAt ?? (Portal.Open ? (Portal.Position, Portal.Facing) : (_homeAt, _homeFacing));
-        ReturnAt = null;
+        // Out of the glowstone portal, or if it has gone, the spot it left from — never wherever
+        // its Minecraft coordinates happen to land.
+        var (from, facing) = Portal.Open ? (Portal.Position, Portal.Facing) : (_homeAt, _homeFacing);
         Vector2 n = new(MathF.Sin(facing), MathF.Cos(facing));
         craft.Position = Torus.Wrap(from + n * 4f);
         craft.Heading = facing;
