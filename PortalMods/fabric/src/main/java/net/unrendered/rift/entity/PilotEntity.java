@@ -8,6 +8,7 @@ import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.damage.DamageTypes;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.mob.PathAwareEntity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.world.World;
 import net.unrendered.rift.RiftPilot;
 
@@ -46,10 +47,34 @@ public class PilotEntity extends PathAwareEntity {
             || source.isOf(DamageTypes.STARVE);
     }
 
+    private int grace;
+    private float graced;
+
+    /**
+     * How much of a blow gets through, the way Minecraft judges it for a player: none at all
+     * from another player while the server has PvP off, and for half a second after a hit only
+     * what a harder one adds on top of it — so lava, fire and a cactus hurt at Minecraft's own
+     * pace rather than every tick.
+     */
+    protected float through(DamageSource source, float amount) {
+        var server = getWorld().getServer();
+        if (source.getAttacker() instanceof PlayerEntity && server != null && !server.isPvpEnabled()) return 0f;
+        if (grace > 0) {
+            if (amount <= graced) return 0f;
+            float extra = amount - graced;
+            graced = amount;
+            return extra;
+        }
+        grace = 10;
+        graced = amount;
+        return amount;
+    }
+
     @Override
     public boolean damage(DamageSource source, float amount) {
         if (getWorld().isClient || isInvulnerableTo(source) || amount <= 0f) return false;
-        if (hurtTime > 0 && amount < 0.5f) return false;
+        amount = through(source, amount);
+        if (amount <= 0f) return false;
         RiftPilot.onPilotHurt(this, source, amount);
         getWorld().sendEntityDamage(this, source);
         hurtTime = 10;
@@ -67,6 +92,7 @@ public class PilotEntity extends PathAwareEntity {
     @Override
     public void tick() {
         super.tick();
+        if (grace > 0) grace--;
         if (!getWorld().isClient) checkBlockCollision();
     }
 

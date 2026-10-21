@@ -2,6 +2,7 @@ package net.unrendered.rift;
 
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
@@ -97,9 +98,13 @@ public final class RiftMod implements ModInitializer {
             server = s;
             RiftCity.load(s);
             RiftBuilt.load(s);
+            RiftVisitors.load(s);
+            RiftPortals.load(s);
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(s -> {
-            Bridge.stop("the Minecraft world closed");
+            // Nobody is saved standing in the rift: the world it shows is about to stop.
+            RiftVisitors.sendAllHome(s, "The world is closing. You were sent home.");
+            Bridge.stop(s, "the Minecraft world closed");
             RiftVisitors.clear();
             RiftPilot.clear();
             RiftSeats.clear();
@@ -108,14 +113,20 @@ public final class RiftMod implements ModInitializer {
         });
         ServerTickEvents.END_SERVER_TICK.register(RiftMod::tick);
         ServerPlayConnectionEvents.DISCONNECT.register((handler, s) -> RiftVisitors.onDisconnect(handler.getPlayer()));
-        ServerPlayConnectionEvents.JOIN.register((handler, sender, s) -> RiftEnemies.onJoin(handler.getPlayer()));
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, s) -> {
+            RiftEnemies.onJoin(handler.getPlayer());
+            RiftVisitors.onJoin(handler.getPlayer());
+        });
+        ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
+            if (entity instanceof net.minecraft.server.network.ServerPlayerEntity p) RiftVisitors.onDeath(p);
+        });
     }
 
     private static void tick(MinecraftServer s) {
         // A world opened to LAN (or any dedicated server) is a world UNRENDERED can find.
         boolean open = s.isDedicated() || s.isRemote();
         if (open && !Bridge.running()) Bridge.start(s);
-        else if (!open && Bridge.running()) Bridge.stop("the world is no longer open to LAN");
+        else if (!open && Bridge.running()) Bridge.stop(s, "the world is no longer open to LAN");
 
         Bridge.pump(s);
         RiftPortals.tick(s);

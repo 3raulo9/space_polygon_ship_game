@@ -1,6 +1,7 @@
 package net.unrendered.rift;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.Entity;
@@ -10,6 +11,9 @@ import net.unrendered.rift.entity.UnrEnemyEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.WorldSavePath;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -30,6 +34,9 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.unrendered.rift.bridge.Bridge;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -79,6 +86,65 @@ public final class RiftPortals {
         cooldown.values().removeIf(v -> v <= 0);
         lastTouch.replaceAll((k, v) -> v + 1);
         lastTouch.values().removeIf(v -> v > 100);
+    }
+
+    // --- Kept with the world -------------------------------------------------------------
+    // Which portal pilots come out of, and which one stands in the rift, outlive a restart:
+    // without them a reloaded world would build a second rift portal beside the first and
+    // turn every crossing enemy straight back.
+
+    private static MinecraftServer loadedFrom;
+
+    private static Path file(MinecraftServer server) {
+        return server.getSavePath(WorldSavePath.ROOT).resolve("unrendered_portal_portals.json");
+    }
+
+    public static void load(MinecraftServer server) {
+        loadedFrom = server;
+        lastPortal = null;
+        riftPortal = null;
+        Path f = file(server);
+        if (!Files.exists(f)) return;
+        try {
+            JsonObject o = JsonParser.parseString(Files.readString(f)).getAsJsonObject();
+            if (o.has("last")) lastPortal = spotOf(o.getAsJsonObject("last"));
+            if (o.has("rift")) riftPortal = spotOf(o.getAsJsonObject("rift"));
+        } catch (IOException | RuntimeException e) {
+            RiftMod.LOG.warn("Rift: could not read the saved portals: {}", e.toString());
+        }
+    }
+
+    /** After {@link #lastPortal} or {@link #riftPortal} changes. */
+    public static void save() {
+        MinecraftServer server = loadedFrom;
+        if (server == null) return;
+        JsonObject o = new JsonObject();
+        if (lastPortal != null) o.add("last", jsonOf(lastPortal));
+        if (riftPortal != null) o.add("rift", jsonOf(riftPortal));
+        try {
+            Files.writeString(file(server), o.toString());
+        } catch (IOException e) {
+            RiftMod.LOG.warn("Rift: could not save the portals: {}", e.toString());
+        }
+    }
+
+    private static JsonObject jsonOf(Spot s) {
+        JsonObject o = new JsonObject();
+        o.addProperty("dim", s.dim().getValue().toString());
+        o.addProperty("x", s.bottomLeft().getX());
+        o.addProperty("y", s.bottomLeft().getY());
+        o.addProperty("z", s.bottomLeft().getZ());
+        o.addProperty("axis", s.axis() == Direction.Axis.X ? "x" : "z");
+        o.addProperty("w", s.width());
+        o.addProperty("h", s.height());
+        return o;
+    }
+
+    private static Spot spotOf(JsonObject o) {
+        return new Spot(RegistryKey.of(RegistryKeys.WORLD, Identifier.of(o.get("dim").getAsString())),
+            new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt()),
+            "x".equals(o.get("axis").getAsString()) ? Direction.Axis.X : Direction.Axis.Z,
+            o.get("w").getAsInt(), o.get("h").getAsInt());
     }
 
     public static void broadcast(MinecraftServer server, Text body) {
@@ -209,6 +275,7 @@ public final class RiftPortals {
     public static void onOpened(ServerWorld world, Spot s) {
         if (world.getRegistryKey() == RiftMod.RIFT) return;
         lastPortal = s;
+        save();
         JsonObject p = portalJson();
         if (p != null) {
             p.addProperty("t", "portal");
@@ -330,6 +397,10 @@ public final class RiftPortals {
      */
     public static void onEntityEnter(Entity entity, ServerWorld world, BlockPos pos, Direction.Axis axis) {
         if (entity.isRemoved() || entity.hasPortalCooldown() || entity.hasVehicle()) return;
+        // A horse, a boat, a minecart carrying somebody: the riders get off in the water and cross
+        // on their own, as themselves, so UNRENDERED is told they came. The mount goes on alone.
+        for (Entity rider : new java.util.ArrayList<>(entity.getPassengerList()))
+            if (rider instanceof PlayerEntity) rider.stopRiding();
         if (entity.getType() == RiftEntities.ECHO || entity.getType() == RiftEntities.SEAT || entity.getType() == RiftEntities.PILOT) return;
         MinecraftServer server = world.getServer();
         if (entity instanceof UnrEnemyEntity enemy) {

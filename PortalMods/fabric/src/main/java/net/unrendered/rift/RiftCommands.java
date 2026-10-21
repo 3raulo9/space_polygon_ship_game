@@ -9,7 +9,8 @@ import net.minecraft.util.Formatting;
 import net.unrendered.rift.bridge.Bridge;
 import net.unrendered.rift.bridge.Session;
 
-/** /rift join, which builds a portal in front of you, and /rift status. */
+/** /rift join, which builds a portal in front of you, /rift status, and /rift home, the way
+ *  out of the rift that needs no portal. */
 public final class RiftCommands {
     private RiftCommands() {}
 
@@ -24,6 +25,16 @@ public final class RiftCommands {
                 RiftPortals.buildInFront(player);
                 ctx.getSource().sendFeedback(() -> Text.literal("A portal opened in front of you. Step into the water.")
                     .formatted(Formatting.LIGHT_PURPLE), false);
+                return 1;
+            }))
+            .then(CommandManager.literal("home").executes(ctx -> {
+                ServerPlayerEntity player = ctx.getSource().getPlayerOrThrow();
+                if (player.getServerWorld().getRegistryKey() != RiftMod.RIFT) {
+                    ctx.getSource().sendError(Text.literal("You're not in UNRENDERED."));
+                    return 0;
+                }
+                RiftVisitors.sendHome(player);
+                ctx.getSource().sendFeedback(() -> Text.literal("Back the way you came.").formatted(Formatting.LIGHT_PURPLE), false);
                 return 1;
             }))
             .then(CommandManager.literal("status").executes(ctx -> {

@@ -2,12 +2,17 @@ package net.unrendered.rift;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.WorldSavePath;
+import net.minecraft.world.TeleportTarget;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -24,6 +29,9 @@ import net.unrendered.rift.bridge.Session;
 import net.unrendered.rift.entity.EchoEntity;
 import net.unrendered.rift.net.ScenePayload;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -67,10 +75,59 @@ public final class RiftVisitors {
 
     public static void clear() {
         homes.clear();
+        loadedFrom = null;
         pending.clear();
         echoes.clear();
         swings.clear();
         wasSwinging.clear();
+    }
+
+    // --- Where everyone came from, kept with the world --------------------------------
+    // A visitor's way home must outlive a restart: the world can be closed with them still
+    // standing in the rift, and the next time they log in that is where they will be.
+
+    private static MinecraftServer loadedFrom;
+
+    private static Path homesFile(MinecraftServer server) {
+        return server.getSavePath(WorldSavePath.ROOT).resolve("unrendered_portal_homes.json");
+    }
+
+    public static void load(MinecraftServer server) {
+        homes.clear();
+        loadedFrom = server;
+        Path f = homesFile(server);
+        if (!Files.exists(f)) return;
+        try {
+            JsonObject o = JsonParser.parseString(Files.readString(f)).getAsJsonObject();
+            for (Map.Entry<String, JsonElement> e : o.entrySet()) {
+                JsonObject h = e.getValue().getAsJsonObject();
+                RegistryKey<World> dim = RegistryKey.of(RegistryKeys.WORLD, Identifier.of(h.get("dim").getAsString()));
+                homes.put(UUID.fromString(e.getKey()), new Home(dim,
+                    new Vec3d(h.get("x").getAsDouble(), h.get("y").getAsDouble(), h.get("z").getAsDouble()), h.get("yaw").getAsFloat()));
+            }
+        } catch (IOException | RuntimeException e) {
+            RiftMod.LOG.warn("Rift: could not read where visitors came from: {}", e.toString());
+        }
+    }
+
+    private static void saveHomes() {
+        MinecraftServer server = loadedFrom;
+        if (server == null) return;
+        JsonObject o = new JsonObject();
+        homes.forEach((id, h) -> {
+            JsonObject j = new JsonObject();
+            j.addProperty("dim", h.dim().getValue().toString());
+            j.addProperty("x", h.pos().x);
+            j.addProperty("y", h.pos().y);
+            j.addProperty("z", h.pos().z);
+            j.addProperty("yaw", h.yaw());
+            o.add(id.toString(), j);
+        });
+        try {
+            Files.writeString(homesFile(server), o.toString());
+        } catch (IOException e) {
+            RiftMod.LOG.warn("Rift: could not save where visitors came from: {}", e.toString());
+        }
     }
 
     // --- Arriving and leaving -----------------------------------------------------------
@@ -78,6 +135,7 @@ public final class RiftVisitors {
     /** A player stepped into the water. UNRENDERED is told, and they cross when it answers with `place`. */
     public static void requestArrival(ServerPlayerEntity player, RegistryKey<World> dim, Vec3d back, float yaw) {
         homes.put(player.getUuid(), new Home(dim, back, yaw));
+        saveHomes();
         pending.put(player.getUuid(), new Pending(player.getUuid()));
         JsonObject a = Bridge.msg("arrive");
         a.addProperty("uuid", player.getUuidAsString());
@@ -141,6 +199,7 @@ public final class RiftVisitors {
         }
         if (existing != null) RiftPortals.unbuild(rift, existing, RiftBlocks.RIFT_FLOOR.getDefaultState());
         RiftPortals.riftPortal = RiftPortals.build(rift, bottomLeft, right);
+        RiftPortals.save();
     }
 
     /** Back the way they came. */
@@ -148,16 +207,24 @@ public final class RiftVisitors {
         MinecraftServer server = player.getServer();
         if (server == null) return;
         Home home = homes.remove(player.getUuid());
-        ServerWorld world = home == null ? server.getOverworld() : server.getWorld(home.dim());
-        if (world == null) world = server.getOverworld();
+        saveHomes();
+        ServerWorld world = home == null ? null : server.getWorld(home.dim());
         Vec3d pos;
         float yaw;
-        if (home != null) {
+        if (home != null && world != null) {
             pos = home.pos();
             yaw = home.yaw();
         } else {
-            BlockPos spawn = world.getSpawnPos();
-            pos = Vec3d.ofBottomCenter(world.getTopPosition(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, spawn));
+            // No way back on record (or its world is gone): wherever they would respawn — their
+            // bed or anchor if they have one, the world's spawn if not.
+            TeleportTarget respawn = player.getRespawnTarget(true, TeleportTarget.NO_OP);
+            world = respawn.world();
+            if (world == null || world.getRegistryKey() == RiftMod.RIFT) {
+                world = server.getOverworld();
+                pos = Vec3d.ofBottomCenter(world.getTopPosition(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, world.getSpawnPos()));
+            } else {
+                pos = respawn.pos();
+            }
             yaw = player.getYaw();
         }
         JsonObject d = Bridge.msg("depart");
@@ -177,16 +244,49 @@ public final class RiftVisitors {
         }
     }
 
-    /** UNRENDERED went away: nobody can stay in a world that is no longer being drawn. */
-    public static void onLinkLost(MinecraftServer server) {
+    /** A visitor died. Minecraft respawns them at home; UNRENDERED must stop holding their seat. */
+    public static void onDeath(ServerPlayerEntity player) {
+        pending.remove(player.getUuid());
+        if (player.getServerWorld().getRegistryKey() != RiftMod.RIFT) return;
+        JsonObject d = Bridge.msg("depart");
+        d.addProperty("uuid", player.getUuidAsString());
+        Bridge.send(d);
+        if (homes.remove(player.getUuid()) != null) saveHomes();
+    }
+
+    /**
+     * Somebody logged in standing in the rift. With UNRENDERED linked they are a visitor again
+     * (it is told, as if they had just stepped through). Without it there is nothing there to
+     * stand in, so they go home.
+     */
+    public static void onJoin(ServerPlayerEntity player) {
+        if (player.getServerWorld().getRegistryKey() != RiftMod.RIFT) return;
+        if (Bridge.linked()) {
+            pending.put(player.getUuid(), new Pending(player.getUuid()));
+            JsonObject a = Bridge.msg("arrive");
+            a.addProperty("uuid", player.getUuidAsString());
+            a.addProperty("name", player.getGameProfile().getName());
+            Bridge.send(a);
+            return;
+        }
+        sendHome(player);
+        player.sendMessage(Text.literal("The rift is closed \u2014 you were sent home.").formatted(Formatting.DARK_PURPLE), false);
+    }
+
+    /** Everybody in the rift goes home: the world is closing, or the link is about to go. */
+    public static void sendAllHome(MinecraftServer server, String why) {
         pending.clear();
         ServerWorld rift = server.getWorld(RiftMod.RIFT);
-        if (rift != null) {
-            for (ServerPlayerEntity p : new ArrayList<>(rift.getPlayers())) {
-                p.sendMessage(Text.literal("UNRENDERED let go of you.").formatted(Formatting.DARK_PURPLE), true);
-                sendHome(p);
-            }
+        if (rift == null) return;
+        for (ServerPlayerEntity p : new ArrayList<>(rift.getPlayers())) {
+            p.sendMessage(Text.literal(why).formatted(Formatting.DARK_PURPLE), true);
+            sendHome(p);
         }
+    }
+
+    /** UNRENDERED went away: nobody can stay in a world that is no longer being drawn. */
+    public static void onLinkLost(MinecraftServer server) {
+        sendAllHome(server, "UNRENDERED let go of you.");
         for (EchoEntity e : echoes.values()) e.discard();
         echoes.clear();
     }
@@ -346,7 +446,9 @@ public final class RiftVisitors {
     /** UNRENDERED hit a visitor. */
     public static void onHarm(MinecraftServer server, JsonObject m) {
         ServerPlayerEntity p = player(server, m);
-        if (p == null) return;
+        // Only somebody actually standing in UNRENDERED's world can be hurt by it: not a visitor
+        // who died and respawned at home while their seat there was still being shot at.
+        if (p == null || !p.isAlive() || p.getServerWorld().getRegistryKey() != RiftMod.RIFT) return;
         float amount = m.has("amount") ? m.get("amount").getAsFloat() : 0f;
         if (amount > 0f) p.damage(RiftDamage.source(p.getServerWorld()), amount);
         // The world they were standing in ended (a run over, a match, no seat left): home.
@@ -360,9 +462,11 @@ public final class RiftVisitors {
         if (p == null) return;
         Item item = RiftItems.fromUnrendered(Session.str(m, "item"));
         if (item == null) return;
-        int count = m.has("count") ? Math.max(1, m.get("count").getAsInt()) : 1;
-        ItemStack stack = new ItemStack(item, Math.min(count, 64 * 4));
-        p.getInventory().offerOrDrop(stack);
+        // As many stacks as it takes (a whole inventory's worth at most): a large give is not
+        // one oversized stack and is not cut short.
+        int count = Math.min(m.has("count") ? Math.max(1, m.get("count").getAsInt()) : 1, 64 * 36);
+        int max = Math.max(1, item.getMaxCount());
+        for (int left = count; left > 0; left -= max) p.getInventory().offerOrDrop(new ItemStack(item, Math.min(max, left)));
         p.getServerWorld().playSound(null, p.getX(), p.getY(), p.getZ(), SoundEvents.ENTITY_ITEM_PICKUP,
             SoundCategory.PLAYERS, 0.3f, 1.4f);
     }

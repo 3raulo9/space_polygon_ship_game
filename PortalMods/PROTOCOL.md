@@ -144,7 +144,7 @@ colour.
 | U→M | `give`    | `uuid, item, count` | the visitor collected salvage (`scrap_metal`, `battery`…) |
 | M→U | `mine`    | `uuid, x, y, z` | the visitor broke a piece of the city (UNR coords) |
 | U→M | `fell`    | `i` | structure `i` came down; clear its collision |
-| M→U | `depart`  | `uuid` | the visitor went home |
+| M→U | `depart`  | `uuid` | the visitor is gone from UNRENDERED's world: walked home, died, logged out, or was sent home because the link or the world is closing. Drop their seat |
 
 Structure: `{ "i", "h", "legs": [[x, z, r], ...] }`. Each leg is a solid circle,
 `h` metres tall.

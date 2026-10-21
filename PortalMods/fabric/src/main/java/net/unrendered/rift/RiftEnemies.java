@@ -13,7 +13,9 @@ import net.unrendered.rift.bridge.Session;
 import net.unrendered.rift.entity.UnrEnemyEntity;
 import net.unrendered.rift.net.ModelPayload;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -80,6 +82,15 @@ public final class RiftEnemies {
         r.addProperty("hp", hp);
         r.addProperty("max", max);
         Bridge.send(r);
+    }
+
+    /** UNRENDERED went away: what it sent over has nowhere to go back to, so it goes. */
+    public static void onLinkLost(MinecraftServer server) {
+        for (ServerWorld w : server.getWorlds()) {
+            List<UnrEnemyEntity> found = new ArrayList<>();
+            for (var e : w.iterateEntities()) if (e instanceof UnrEnemyEntity u) found.add(u);
+            found.forEach(UnrEnemyEntity::fade);
+        }
     }
 
     public static void clear() {

@@ -123,6 +123,18 @@ public final class Bridge {
         }
     }
 
+    /**
+     * Stops listening, and if UNRENDERED was linked does everything a lost link does first —
+     * visitors home, the pilot's body gone, crossed enemies gone — so a world closed, or no
+     * longer open to LAN, never leaves anybody standing in a rift nothing is drawing.
+     */
+    public static void stop(MinecraftServer server, String reason) {
+        Session s = session;
+        boolean wasLinked = s != null && s.isOpen() && s.welcomed;
+        if (wasLinked) onLinkLost(server);
+        stop(reason);
+    }
+
     public static void stop(String reason) {
         Session s = session;
         if (s != null) s.close(reason);
@@ -225,6 +237,7 @@ public final class Bridge {
     private static void onLinkLost(MinecraftServer server) {
         RiftPilot.onLinkLost(server);
         RiftVisitors.onLinkLost(server);
+        RiftEnemies.onLinkLost(server);
         RiftSeats.clear();
         for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
             p.sendMessage(Text.literal("[RIFT] ").formatted(Formatting.LIGHT_PURPLE)

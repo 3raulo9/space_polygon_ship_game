@@ -131,6 +131,29 @@ public class UnrEnemyEntity extends HostileEntity {
         if (nbt.contains("UnrMax")) unrMax = nbt.getFloat("UnrMax");
     }
 
+    /** Ticks it has gone without UNRENDERED on the other end. */
+    private int unlinked;
+
+    /**
+     * It belongs to a world that is no longer there: after half a minute with no UNRENDERED on
+     * the wire (a crash, a closed game, a reload of this world without it) it fades out rather
+     * than haunting Minecraft forever.
+     */
+    @Override
+    public void tick() {
+        super.tick();
+        if (getWorld().isClient) return;
+        if (net.unrendered.rift.bridge.Bridge.linked()) unlinked = 0;
+        else if (++unlinked > 20 * 30) fade();
+    }
+
+    /** Gone in a puff, the way a mob that despawns would be if you were looking. */
+    public void fade() {
+        if (getWorld() instanceof net.minecraft.server.world.ServerWorld sw)
+            sw.spawnParticles(net.minecraft.particle.ParticleTypes.POOF, getX(), getBodyY(0.5), getZ(), 20, 0.6, 0.6, 0.6, 0.02);
+        discard();
+    }
+
     @Override
     public boolean cannotDespawn() {
         return true;

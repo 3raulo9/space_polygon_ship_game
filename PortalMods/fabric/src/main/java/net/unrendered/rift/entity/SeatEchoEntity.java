@@ -66,7 +66,8 @@ public class SeatEchoEntity extends PilotEntity {
     @Override
     public boolean damage(DamageSource source, float amount) {
         if (getWorld().isClient || isInvulnerableTo(source) || amount <= 0f) return false;
-        if (hurtTime > 0 && amount < 0.5f) return false;
+        amount = through(source, amount);
+        if (amount <= 0f) return false;
         RiftSeats.onHurt(this, source, amount);
         getWorld().sendEntityDamage(this, source);
         hurtTime = 10;

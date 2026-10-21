@@ -22,6 +22,11 @@ else is needed.
    off).
 
 `/rift join` builds a portal in front of you, and `/rift status` says what is linked.
+`/rift home` takes you out of UNRENDERED's world the way you came in, with no portal needed.
+
+Nobody is left standing in the rift with nothing drawing it: closing the world, closing it to
+LAN, or losing UNRENDERED sends every visitor home, and somebody who logs in inside the rift
+with UNRENDERED gone is sent home too. Where each visitor came from is kept with the world.
 
 ## Building
 

@@ -369,14 +369,30 @@ public final class RiftPilot {
         });
     }
 
-    public static void onHit(MinecraftServer server, JsonObject m) {
+    /**
+     * The world an entity UNRENDERED names is in: the pilot's, while the pilot is in Minecraft,
+     * else the rift (the pilot at home, shooting at what stands in UNRENDERED's world). Entity
+     * ids are unique across the server, so looking in the pilot's world first is never wrong.
+     */
+    private static ServerWorld worldOf(MinecraftServer server, int id) {
         ServerWorld w = world(server);
+        if (w != null && w.getEntityById(id) != null) return w;
+        ServerWorld rift = server.getWorld(RiftMod.RIFT);
+        return rift != null && rift.getEntityById(id) != null ? rift : null;
+    }
+
+    public static void onHit(MinecraftServer server, JsonObject m) {
+        int id = m.get("id").getAsInt();
+        ServerWorld w = worldOf(server, id);
+        if (w == null) return;
+        Entity target = w.getEntityById(id);
         PilotEntity p = pilot;
-        if (w == null || p == null) return;
-        Entity target = w.getEntityById(m.get("id").getAsInt());
         if (target == null || target == p) return;
+        // A Minecraft player is only fair game when this server allows players to fight.
+        if (target instanceof ServerPlayerEntity && !server.isPvpEnabled()) return;
         float dmg = m.has("dmg") ? m.get("dmg").getAsFloat() : 1f;
-        target.damage(w.getDamageSources().mobAttack(p), dmg);
+        boolean here = active && p != null && !p.isRemoved() && p.getWorld() == w;
+        target.damage(here ? w.getDamageSources().mobAttack(p) : RiftDamage.source(w), dmg);
     }
 
     public static void onBreak(MinecraftServer server, JsonObject m) {
@@ -391,11 +407,14 @@ public final class RiftPilot {
     }
 
     public static void onPickup(MinecraftServer server, JsonObject m) {
-        ServerWorld w = world(server);
+        int id = m.get("id").getAsInt();
+        ServerWorld w = worldOf(server, id);
         if (w == null) return;
-        Entity e = w.getEntityById(m.get("id").getAsInt());
+        Entity e = w.getEntityById(id);
         if (!(e instanceof ItemEntity item) || item.isRemoved()) return;
-        if (item.getPos().squaredDistanceTo(pilotPos) > 6.0 * 6.0) return;
+        // In the pilot's world it has to be within reach of the body; in the rift UNRENDERED has
+        // already measured the reach against its own craft.
+        if (w.getRegistryKey() != RiftMod.RIFT && item.getPos().squaredDistanceTo(pilotPos) > 6.0 * 6.0) return;
         ItemStack stack = item.getStack();
         if (stack.isEmpty()) return;
         RegistryOps<JsonElement> ops = w.getRegistryManager().getOps(JsonOps.INSTANCE);
