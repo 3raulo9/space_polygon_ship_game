@@ -3,19 +3,28 @@
   "id": "dimension_hopper",
   "version": "${version}",
   "name": "Dimension Hopper",
-  "description": "A handheld portal gun. Dial a destination - any dimension this world has, or a realm another game opens to it - and fire: a swirling green portal opens where the shot lands, and its twin opens somewhere safe on the other side.",
-  "authors": ["UNRENDERED"],
+  "description": "Portal guns. Press nine ender pearls into a reinforced pearl, brew it into a concentrated teleportation potion (do not drink it) and that into unstable portal fluid; build a chamber around the fluid, a handle, a nether star at the tip: a Portal Gun, which opens a swirling green portal to a random dimension. Bolt a dimensional computer onto it for the Dimension Hopper, which dials any dimension - and coordinates in it - or a realm another game opens to this world.",
+  "authors": [
+    "UNRENDERED"
+  ],
   "license": "All-Rights-Reserved",
   "icon": "assets/dimension_hopper/icon.png",
   "environment": "*",
   "entrypoints": {
-    "main": ["net.hopper.HopperMod"],
-    "client": ["net.hopper.client.HopperClient"]
+    "main": [
+      "net.hopper.HopperMod"
+    ],
+    "client": [
+      "net.hopper.client.HopperClient"
+    ]
   },
   "depends": {
     "fabricloader": ">=0.16.0",
     "minecraft": "~1.21.1",
     "java": ">=21",
     "fabric-api": "*"
-  }
+  },
+  "mixins": [
+    "dimension_hopper.mixins.json"
+  ]
 }

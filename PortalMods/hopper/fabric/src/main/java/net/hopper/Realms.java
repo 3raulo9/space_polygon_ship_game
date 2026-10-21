@@ -116,10 +116,10 @@ public final class Realms {
         return b + " (" + id.getNamespace() + ")";
     }
 
-    public static RealmsPayload payload(MinecraftServer server, boolean open, String selected) {
+    public static RealmsPayload payload(MinecraftServer server, boolean open, String selected, String coords) {
         List<RealmsPayload.Entry> entries = new ArrayList<>();
         for (Realm r : all(server))
             entries.add(new RealmsPayload.Entry(r.id(), r.name(), r.game(), r.realm(), r.isClear(), r.statusText()));
-        return new RealmsPayload(open, selected == null ? "" : selected, entries);
+        return new RealmsPayload(open, selected == null ? "" : selected, coords == null ? "" : coords, entries);
     }
 }

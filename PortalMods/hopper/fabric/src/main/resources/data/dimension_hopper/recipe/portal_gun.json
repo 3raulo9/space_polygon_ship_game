@@ -1,0 +1,23 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    "NC",
+    " H"
+  ],
+  "key": {
+    "N": {
+      "item": "minecraft:nether_star"
+    },
+    "C": {
+      "item": "dimension_hopper:portal_chamber"
+    },
+    "H": {
+      "item": "dimension_hopper:portal_gun_handle"
+    }
+  },
+  "result": {
+    "id": "dimension_hopper:portal_gun",
+    "count": 1
+  }
+}

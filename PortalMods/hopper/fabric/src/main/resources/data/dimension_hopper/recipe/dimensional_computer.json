@@ -1,0 +1,27 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    " M ",
+    "CBC",
+    "III"
+  ],
+  "key": {
+    "M": {
+      "item": "dimension_hopper:monitor"
+    },
+    "C": {
+      "item": "minecraft:comparator"
+    },
+    "B": {
+      "item": "minecraft:redstone_block"
+    },
+    "I": {
+      "item": "minecraft:iron_ingot"
+    }
+  },
+  "result": {
+    "id": "dimension_hopper:dimensional_computer",
+    "count": 1
+  }
+}

@@ -40,6 +40,9 @@ public class HopperItem extends Item {
         else if (dest.startsWith("realm:")) shown = dest.substring(6).toUpperCase();
         else shown = Realms.friendly(Identifier.of(dest));
         tooltip.add(Text.literal("Dialled: " + shown).formatted(Formatting.GREEN));
+        String at = HopperMod.coords(stack);
+        if (!at.isEmpty() && !dest.startsWith("realm:"))
+            tooltip.add(Text.literal("At: " + at.replace(",", ", ").replaceAll("(^|, )(?=,|$)", "$1~")).formatted(Formatting.DARK_GREEN));
         tooltip.add(Text.translatable("item.dimension_hopper.hopper.desc").formatted(Formatting.GRAY));
     }
 }

@@ -12,6 +12,11 @@ import net.minecraft.command.argument.EntityAnchorArgumentType;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.integrated.IntegratedServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.hopper.scatter.Scatter;
+import net.minecraft.client.option.Perspective;
+import net.minecraft.component.type.PotionContentsComponent;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.item.Items;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.Vec3d;
 
@@ -68,8 +73,26 @@ final class AutoTest {
         t++;
         if (mc.player == null) return;
         switch (t) {
-            case 1 -> server(mc, sp -> sp.setStackInHand(Hand.MAIN_HAND, new ItemStack(HopperMod.HOPPER)));
+            case 1 -> {
+                mc.player.getInventory().selectedSlot = 0;
+                server(mc, sp -> {
+                    // Everything the mod adds, along the hotbar: the Hopper in hand.
+                    ItemStack[] bar = {
+                        new ItemStack(HopperMod.HOPPER), new ItemStack(HopperMod.PORTAL_GUN),
+                        new ItemStack(HopperMod.REINFORCED_PEARL, 9), new ItemStack(HopperMod.HANDLE),
+                        new ItemStack(HopperMod.CHAMBER), new ItemStack(HopperMod.MONITOR), new ItemStack(HopperMod.COMPUTER),
+                        PotionContentsComponent.createStack(Items.POTION, HopperMod.CONCENTRATED),
+                        PotionContentsComponent.createStack(Items.POTION, HopperMod.UNSTABLE),
+                    };
+                    sp.getInventory().selectedSlot = 0;
+                    for (int i = 0; i < bar.length; i++) sp.getInventory().setStack(i, bar[i]);
+                });
+            }
             case 5 -> mc.player.setPitch(12f);
+            case 8 -> mc.player.getInventory().selectedSlot = 1;
+            case 20 -> shot(mc, "mc-portal-gun-hand");
+            case 24 -> mc.player.getInventory().selectedSlot = 0;
+            case 32 -> shot(mc, "mc-hopper-items");
             case 30 -> shot(mc, "mc-hopper-hand");
             case 34 -> ClientPlayNetworking.send(new DialPayload("open", ""));
             case 60 -> {
@@ -86,6 +109,13 @@ final class AutoTest {
             case 86 -> {
                 if (mc.currentScreen instanceof DialScreen dial) dial.pick("minecraft:the_nether");
             }
+            case 94 -> {
+                if (mc.currentScreen instanceof DialScreen dial) {
+                    dial.setCoords("120", "", "-60");
+                    log("dialled coordinates 120, ~, -60");
+                }
+            }
+            case 100 -> shot(mc, "mc-dial-coords");
             case 104 -> shot(mc, "mc-dial");
             case 110 -> {
                 mc.setScreen(null);
@@ -121,10 +151,48 @@ final class AutoTest {
             case 250 -> shot(mc, "mc-hopper-far");
             case 262 -> mc.player.setYaw(mc.player.getYaw() + 180f);
             case 270 -> shot(mc, "mc-hopper-far");
-            case 280 -> log("over in " + mc.world.getRegistryKey().getValue() + "; waiting for a realm to lose its signal");
+            case 280 -> log("over in " + mc.world.getRegistryKey().getValue() + "; now the potion");
             default -> {
-                if (t > 280) unclear(mc);
+                if (t > 280 && !scattered) scatter(mc);
+                else if (t > 280) unclear(mc);
             }
+        }
+    }
+
+    private static boolean scattered;
+    private static int scatterAt = -1, apart = -1, unclearFrom;
+
+    /**
+     * The concentrated potion's doom, twenty times faster (hopper.fastScatter), on the test
+     * player — in creative, so the jumps and tears cost nothing. Once both arms have gone it is
+     * photographed from the front, and then the effect is taken away and the body is whole.
+     */
+    private static void scatter(MinecraftClient mc) {
+        if (scatterAt < 0) {
+            scatterAt = t;
+            System.setProperty("hopper.fastScatter", "true");
+            server(mc, sp -> sp.addStatusEffect(new StatusEffectInstance(HopperMod.SCATTER, Scatter.TOTAL)));
+            log("drank the concentrated teleportation potion (fast)");
+            return;
+        }
+        int stage = ScatterClient.stage(mc.player.getId());
+        if (apart < 0 && (stage >= 2 || t - scatterAt > 20 * 40)) {
+            apart = t;
+            log("stage " + stage + " after " + (t - scatterAt) + " ticks, at " + mc.player.getPos());
+            mc.options.setPerspective(Perspective.THIRD_PERSON_FRONT);
+            mc.player.setPitch(10f);
+        }
+        if (apart < 0) return;
+        if (t - apart == 6) shot(mc, "mc-scatter");
+        if (t - apart == 12) {
+            server(mc, sp -> sp.removeStatusEffect(HopperMod.SCATTER));
+            System.clearProperty("hopper.fastScatter");
+            mc.options.setPerspective(Perspective.FIRST_PERSON);
+        }
+        if (t - apart == 40) {
+            log("whole again: stage " + ScatterClient.stage(mc.player.getId()) + "; waiting for a realm to lose its signal");
+            scattered = true;
+            unclearFrom = t;
         }
     }
 
@@ -145,7 +213,7 @@ final class AutoTest {
                 lost = t;
                 unclearId = realm;
                 log(realm + " has no clear connection now");
-            } else if (t > 280 + 20 * 70) {
+            } else if (t > unclearFrom + 20 * 70) {
                 log("every realm stayed clear");
                 finish(mc);
             }

@@ -1,0 +1,656 @@
+{
+  "credit": "Dimension Hopper, made by PortalMods/hopper/tools/make_hopper.py",
+  "texture_size": [
+    128,
+    128
+  ],
+  "textures": {
+    "body": "dimension_hopper:item/hopper",
+    "particle": "dimension_hopper:item/hopper",
+    "fluid": "dimension_hopper:item/hopper_fluid",
+    "glow": "dimension_hopper:item/hopper_glow",
+    "screen": "dimension_hopper:item/hopper_screen"
+  },
+  "elements": [
+    {
+      "name": "grip",
+      "from": [
+        6.5,
+        3.5,
+        6.5
+      ],
+      "to": [
+        9.5,
+        10.5,
+        9.5
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0.0,
+            5.5,
+            0.75,
+            7.25
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            0.5,
+            6.0,
+            1.25,
+            7.75
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            1.75,
+            4.5,
+            2.5,
+            6.25
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            1.25,
+            5.25,
+            2.0,
+            7.0
+          ],
+          "texture": "#body"
+        },
+        "up": {
+          "uv": [
+            2.0,
+            5.25,
+            2.75,
+            6.0
+          ],
+          "texture": "#body"
+        },
+        "down": {
+          "uv": [
+            1.0,
+            5.5,
+            1.75,
+            6.25
+          ],
+          "texture": "#body"
+        }
+      },
+      "rotation": {
+        "origin": [
+          8,
+          10.5,
+          8
+        ],
+        "axis": "x",
+        "angle": -22.5
+      }
+    },
+    {
+      "name": "grip plate",
+      "from": [
+        6.3,
+        4.5,
+        7
+      ],
+      "to": [
+        6.5,
+        9.5,
+        9
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            7.0,
+            0.25,
+            7.05,
+            1.5
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            6.0,
+            0.5,
+            6.05,
+            1.75
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            4.5,
+            2.0,
+            5.0,
+            3.25
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            4.75,
+            0.5,
+            5.25,
+            1.75
+          ],
+          "texture": "#body"
+        },
+        "up": {
+          "uv": [
+            5.0,
+            2.25,
+            5.05,
+            2.75
+          ],
+          "texture": "#body"
+        },
+        "down": {
+          "uv": [
+            5.0,
+            2.5,
+            5.05,
+            3.0
+          ],
+          "texture": "#body"
+        }
+      },
+      "rotation": {
+        "origin": [
+          8,
+          10.5,
+          8
+        ],
+        "axis": "x",
+        "angle": -22.5
+      }
+    },
+    {
+      "name": "grip butt",
+      "from": [
+        6.3,
+        2.9,
+        6.3
+      ],
+      "to": [
+        9.7,
+        3.9,
+        9.7
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            4.5,
+            1.5,
+            5.35,
+            1.75
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            6.0,
+            0.5,
+            6.85,
+            0.75
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            5.75,
+            0.75,
+            6.6,
+            1.0
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            6.75,
+            1.0,
+            7.6,
+            1.25
+          ],
+          "texture": "#body"
+        },
+        "up": {
+          "uv": [
+            4.25,
+            0.25,
+            5.1,
+            1.1
+          ],
+          "texture": "#body"
+        },
+        "down": {
+          "uv": [
+            4.75,
+            1.0,
+            5.6,
+            1.85
+          ],
+          "texture": "#body"
+        }
+      },
+      "rotation": {
+        "origin": [
+          8,
+          10.5,
+          8
+        ],
+        "axis": "x",
+        "angle": -22.5
+      }
+    },
+    {
+      "name": "grip bolt",
+      "from": [
+        6.1,
+        8.1,
+        7.6
+      ],
+      "to": [
+        6.3,
+        9.1,
+        8.6
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            6,
+            7,
+            7,
+            8
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            6,
+            7,
+            7,
+            8
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            6,
+            7,
+            7,
+            8
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            6,
+            7,
+            7,
+            8
+          ],
+          "texture": "#body"
+        },
+        "up": {
+          "uv": [
+            6,
+            7,
+            7,
+            8
+          ],
+          "texture": "#body"
+        },
+        "down": {
+          "uv": [
+            6,
+            7,
+            7,
+            8
+          ],
+          "texture": "#body"
+        }
+      },
+      "rotation": {
+        "origin": [
+          8,
+          10.5,
+          8
+        ],
+        "axis": "x",
+        "angle": -22.5
+      }
+    },
+    {
+      "name": "trigger",
+      "from": [
+        7.6,
+        8.1,
+        4.8
+      ],
+      "to": [
+        8.4,
+        10.5,
+        5.6
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            5.5,
+            8.5,
+            5.7,
+            9.1
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            5.0,
+            8.25,
+            5.2,
+            8.85
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            4.0,
+            8.75,
+            4.2,
+            9.35
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            7.25,
+            8.25,
+            7.45,
+            8.85
+          ],
+          "texture": "#body"
+        },
+        "up": {
+          "uv": [
+            4.75,
+            10.75,
+            4.95,
+            10.95
+          ],
+          "texture": "#body"
+        },
+        "down": {
+          "uv": [
+            6.25,
+            8.25,
+            6.45,
+            8.45
+          ],
+          "texture": "#body"
+        }
+      }
+    },
+    {
+      "name": "trigger guard",
+      "from": [
+        7.6,
+        7.4,
+        4
+      ],
+      "to": [
+        8.4,
+        7.9,
+        6.6
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            5.5,
+            1.25,
+            5.7,
+            1.375
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            6.75,
+            1.0,
+            6.95,
+            1.125
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            5.0,
+            2.0,
+            5.65,
+            2.125
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            4.75,
+            2.5,
+            5.4,
+            2.625
+          ],
+          "texture": "#body"
+        },
+        "up": {
+          "uv": [
+            5.5,
+            0.5,
+            5.7,
+            1.15
+          ],
+          "texture": "#body"
+        },
+        "down": {
+          "uv": [
+            5.25,
+            2.0,
+            5.45,
+            2.65
+          ],
+          "texture": "#body"
+        }
+      }
+    },
+    {
+      "name": "guard front",
+      "from": [
+        7.6,
+        7.9,
+        4
+      ],
+      "to": [
+        8.4,
+        10.5,
+        4.5
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            7.0,
+            2.25,
+            7.2,
+            2.9
+          ],
+          "texture": "#body"
+        },
+        "south": {
+          "uv": [
+            5.25,
+            0.5,
+            5.45,
+            1.15
+          ],
+          "texture": "#body"
+        },
+        "east": {
+          "uv": [
+            7.0,
+            1.75,
+            7.125,
+            2.4
+          ],
+          "texture": "#body"
+        },
+        "west": {
+          "uv": [
+            6.0,
+            2.5,
+            6.125,
+            3.15
+          ],
+          "texture": "#body"
+        },
+        "up": {
+          "uv": [
+            7.0,
+            0.25,
+            7.2,
+            0.375
+          ],
+          "texture": "#body"
+        },
+        "down": {
+          "uv": [
+            4.75,
+            2.0,
+            4.95,
+            2.125
+          ],
+          "texture": "#body"
+        }
+      }
+    }
+  ],
+  "display": {
+    "gui": {
+      "rotation": [
+        20,
+        130,
+        0
+      ],
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.95,
+        0.95,
+        0.95
+      ]
+    },
+    "ground": {
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "translation": [
+        0,
+        3,
+        0
+      ],
+      "scale": [
+        0.4,
+        0.4,
+        0.4
+      ]
+    },
+    "fixed": {
+      "rotation": [
+        0,
+        90,
+        0
+      ],
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.7,
+        0.7,
+        0.7
+      ]
+    },
+    "thirdperson_righthand": {
+      "rotation": [
+        75,
+        45,
+        0
+      ],
+      "translation": [
+        0,
+        2.5,
+        0
+      ],
+      "scale": [
+        0.45,
+        0.45,
+        0.45
+      ]
+    },
+    "thirdperson_lefthand": {
+      "rotation": [
+        75,
+        45,
+        0
+      ],
+      "translation": [
+        0,
+        2.5,
+        0
+      ],
+      "scale": [
+        0.45,
+        0.45,
+        0.45
+      ]
+    },
+    "firstperson_righthand": {
+      "rotation": [
+        0,
+        45,
+        0
+      ],
+      "translation": [
+        0,
+        2,
+        0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "firstperson_lefthand": {
+      "rotation": [
+        0,
+        225,
+        0
+      ],
+      "translation": [
+        0,
+        2,
+        0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    }
+  }
+}

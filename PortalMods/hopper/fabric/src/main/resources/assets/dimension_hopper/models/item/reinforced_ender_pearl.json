@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "dimension_hopper:item/reinforced_ender_pearl"
+  }
+}

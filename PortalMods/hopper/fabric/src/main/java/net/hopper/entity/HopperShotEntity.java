@@ -30,6 +30,7 @@ public class HopperShotEntity extends ThrownEntity {
     public static final int REACH_TICKS = 26;   // ~64 blocks
 
     private String destination;
+    private String coords = "";
     private UUID gun;
     private float shooterYaw;
 
@@ -37,13 +38,14 @@ public class HopperShotEntity extends ThrownEntity {
         super(type, world);
     }
 
-    public static HopperShotEntity fire(ServerWorld world, LivingEntity by, String destination, UUID gun) {
+    public static HopperShotEntity fire(ServerWorld world, LivingEntity by, String destination, String coords, UUID gun) {
         HopperShotEntity shot = new HopperShotEntity(HopperMod.SHOT, world);
         shot.setOwner(by);
         Vec3d look = by.getRotationVector();
         shot.setPosition(by.getEyePos().add(look.multiply(0.8)).subtract(0, 0.15, 0));
         shot.setVelocity(look.multiply(SPEED));
         shot.destination = destination;
+        shot.coords = coords == null ? "" : coords;
         shot.gun = gun;
         shot.shooterYaw = by.getYaw();
         return shot;
@@ -87,7 +89,7 @@ public class HopperShotEntity extends ThrownEntity {
 
     private void land(Vec3d at, Direction side) {
         if (getWorld() instanceof ServerWorld world && destination != null) {
-            HopperMod.openPortals(world, at, side, shooterYaw, destination, gun, getOwner());
+            HopperMod.openPortals(world, at, side, shooterYaw, destination, coords, gun, getOwner());
         }
         discard();
     }
@@ -103,6 +105,7 @@ public class HopperShotEntity extends ThrownEntity {
         super.readCustomDataFromNbt(nbt);
         if (nbt.contains("Destination")) destination = nbt.getString("Destination");
         if (nbt.containsUuid("Gun")) gun = nbt.getUuid("Gun");
+        coords = nbt.getString("Coords");
         shooterYaw = nbt.getFloat("ShooterYaw");
     }
 
@@ -111,6 +114,7 @@ public class HopperShotEntity extends ThrownEntity {
         super.writeCustomDataToNbt(nbt);
         if (destination != null) nbt.putString("Destination", destination);
         if (gun != null) nbt.putUuid("Gun", gun);
+        nbt.putString("Coords", coords);
         nbt.putFloat("ShooterYaw", shooterYaw);
     }
 }
