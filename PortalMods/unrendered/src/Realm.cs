@@ -193,6 +193,7 @@ public static class Realm
         RefY = Land.GroundBelow((int)Math.Floor(Ox), (int)Math.Floor(Oz), y + 0.5f);
         ShownRef = RefY;
 
+        Dim = Portal.Linked?["dim"]?.GetValue<string>() ?? "minecraft:overworld";
         HomeWorld = home;
         RealmWorld = realm;
         _craft = craft;
@@ -245,6 +246,19 @@ public static class Realm
         craft.GroundHeight = 0f;
         Rift.World = home;
         CueBank.Play(Cue.PortalEnter, craft.Position, 0f);
+
+        // Whatever the craft spilled while it was over there (a life spent in Minecraft drops
+        // the fragments it carried) lay on a field nobody can see. It comes home with it.
+        int brought = 0;
+        foreach (var pk in RealmWorld!.Pickups)
+        {
+            if (pk.Consumed) continue;
+            float a = brought * 2.4f;
+            home.Pickups.Add(new Pickup(Torus.Wrap(craft.Position + new Vector2(MathF.Cos(a), MathF.Sin(a)) * 2.5f),
+                pk.Kind, pk.Amount, thrown: true));
+            brought++;
+        }
+        if (brought > 0) Rift.Notice("WHAT YOU DROPPED OVER THERE CAME BACK WITH YOU");
         Cleanup();
     }
 
@@ -276,8 +290,22 @@ public static class Realm
         Collect(craft);
         Recentre(world, craft);
 
-        // The way home is the portal Minecraft stands on its side.
         var feet = Mc(craft.Position, craft.Height);
+
+        // Spent in Minecraft: the run is lost at home, not over a world that is not UNRENDERED's.
+        if (!craft.Alive)
+        {
+            Leave("YOUR CRAFT FELL IN MINECRAFT");
+            return;
+        }
+        // Out of the bottom of the world: the void puts it back where it came from.
+        if (feet.Y < Land.Bottom((int)MathF.Floor(feet.X), (int)MathF.Floor(feet.Z)) - Terrain.Void * 0.6f)
+        {
+            Leave("THE VOID SPAT YOU BACK OUT");
+            return;
+        }
+
+        // The way home is the portal Minecraft stands on its side.
         SendView(feet.X, feet.Z, force: false);
         if (Land.PortalNear(feet, craft.Soldier != null ? 0.5f : 1.0f))
         {
@@ -336,11 +364,11 @@ public static class Realm
 
     /// <summary>Puts the craft down on the surface at a Minecraft X/Z (the test hatch's
     /// shortcut; a player walks).</summary>
-    internal static void PlaceAt(double mcX, double mcZ)
+    internal static void PlaceAt(double mcX, double mcZ, float fromY = 320f)
     {
         if (!Active || _craft is not { } craft) return;
         craft.Position = new Vector2((float)(mcX - Ox), (float)(mcZ - Oz));
-        RefY = Land.GroundBelow((int)Math.Floor(mcX), (int)Math.Floor(mcZ), 320f);
+        RefY = Land.GroundBelow((int)Math.Floor(mcX), (int)Math.Floor(mcZ), fromY);
         ShownRef = RefY;
         craft.Height = 0f;
     }
@@ -485,6 +513,9 @@ public static class Realm
     private static void Collect(PlayerTank craft)
     {
         if (Rift.Live is not { } live) return;
+        // A full pack (or one that just had to give something back) takes nothing: what it
+        // gave back would land at its feet and be taken again, forever.
+        if (Raylib.GetTime() < Pocket.RefuseUntil || RealmWorld is not { } w || w.Inventory.Slots.All(s => !s.IsEmpty)) return;
         var feet = Mc(craft.Position, craft.Height);
         float reach = BodyRadius(craft) + 0.9f;
         foreach (var e in Ents)
@@ -555,11 +586,20 @@ public static class Realm
         live.SendBin("craft", ms.GetBuffer().AsSpan(0, (int)ms.Length), droppable: true);
     }
 
-    /// <summary>Minecraft's daylight: 1 at noon, its night floor at midnight.</summary>
+    /// <summary>Which of Minecraft's dimensions the pilot is in: the one the portal stands in.</summary>
+    public static string Dim { get; private set; } = "minecraft:overworld";
+
+    private static bool Nether => Dim == "minecraft:the_nether";
+    private static bool End => Dim == "minecraft:the_end";
+
+    /// <summary>Minecraft's daylight: 1 at noon, its night floor at midnight. The Nether and the
+    /// End have no day: one even light each, as Minecraft gives them.</summary>
     public static float Daylight
     {
         get
         {
+            if (Nether) return 0.6f;
+            if (End) return 0.5f;
             float t = (DayTime % 24000) / 24000f;
             float angle = t - 0.25f;
             float c = MathF.Cos(angle * MathF.Tau) * 2f + 0.5f;
@@ -571,8 +611,10 @@ public static class Realm
     /// so the end of the world is never seen — the way Minecraft hides its render distance.</summary>
     private static float FogEnd => ViewChunks * 16f - 10f;
 
-    private static Color SkyColor => Lerp(new Color(10, 12, 24, 255), new Color(120, 167, 255, 255), Daylight);
-    private static Color FogColor => Lerp(new Color(8, 10, 18, 255), new Color(192, 216, 255, 255), Daylight);
+    private static Color SkyColor => Nether ? new Color(51, 8, 8, 255) : End ? new Color(22, 12, 30, 255)
+        : Lerp(new Color(10, 12, 24, 255), new Color(120, 167, 255, 255), Daylight);
+    private static Color FogColor => Nether ? new Color(51, 8, 8, 255) : End ? new Color(15, 10, 20, 255)
+        : Lerp(new Color(8, 10, 18, 255), new Color(192, 216, 255, 255), Daylight);
 
     private static Color Lerp(Color a, Color b, float t)
         => new((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t), 255);
@@ -644,7 +686,7 @@ public static class Realm
         var origin = new Vector3((float)Ox, ShownRef, (float)Oz);
         var mcEye = cam.Position + origin;
         Medium(mcEye);
-        if (sky && _inside == null) DrawSky(cam);
+        if (sky && _inside == null && !Nether) DrawSky(cam);
 
         Rlgl.DrawRenderBatchActive();
         Rlgl.EnableBackfaceCulling();
@@ -682,6 +724,8 @@ public static class Realm
         {
             "water" => (0f, 36f),
             "lava" => (0f, 2f),
+            // The Nether's air is thick: it closes in at half the distance.
+            _ when Nether => (8f, FogEnd * 0.5f),
             _ => (FogEnd * 0.6f, FogEnd),
         };
     }
@@ -719,6 +763,7 @@ public static class Realm
         }
         Rlgl.End();
 
+        if (End) { Rlgl.DrawRenderBatchActive(); Rlgl.EnableDepthMask(); return; }   // no sun, no moon
         float t = (DayTime % 24000) / 24000f;
         float angle = (t - 0.25f) * MathF.Tau;   // 0 at noon
         var sunDir = new Vector3(-MathF.Sin(angle), MathF.Cos(angle), 0);

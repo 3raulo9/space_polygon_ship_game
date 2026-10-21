@@ -242,6 +242,13 @@ public sealed unsafe class Terrain : IDisposable
     /// <summary>The lowest Y any column holds, for a fall with nothing under it.</summary>
     private int Floor(int x, int z) => _cols.TryGetValue((x >> 4, z >> 4), out var c) ? c.Y0 : -64;
 
+    /// <summary>The bottom of the world under this column (Minecraft's minimum Y there).</summary>
+    public int Bottom(int x, int z) => Floor(x, z);
+
+    /// <summary>How far under the bottom of the world nothing at all is: past here the pilot has
+    /// fallen out of it.</summary>
+    public const float Void = 64f;
+
     // --- Collision, for UNRENDERED's crafts ------------------------------------------
 
     /// <summary>The top of whatever can be stood on in this column at or below
@@ -254,7 +261,9 @@ public sealed unsafe class Terrain : IDisposable
             var e = At(x, y, z);
             if (e is { Collide: true } && y + e.Top <= fromY + 1e-3f) return y + e.Top;
         }
-        return bottom;
+        // Nothing to stand on all the way down (the End's islands, a hole to the void): no
+        // floor is made up for it. The craft falls.
+        return bottom - Void;
     }
 
     /// <summary>True if anything collidable occupies [y0, y1) in this column — and a column

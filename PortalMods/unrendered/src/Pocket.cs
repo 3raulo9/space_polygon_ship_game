@@ -136,8 +136,12 @@ public static class Pocket
         Back(it, 1, w);
     }
 
+    /// <summary>Until when the pilot should not pick anything up: something was just given back.</summary>
+    internal static double RefuseUntil;
+
     private static void Back(Item it, int count, Unrendered.World.World w)
     {
+        RefuseUntil = Raylib.GetTime() + 4;
         var craft = w.Player;
         var stack = (JsonObject)it.Stack.DeepClone();
         stack["count"] = count;

@@ -189,8 +189,26 @@ public sealed class Link
 
     /// <summary>Hands every message that arrived since the last frame to whoever handles
     /// its type. On the game's own thread, so handlers may touch the world freely.</summary>
+    private double _lastPump;
+
     public void Pump()
     {
+        // Not pumped for a while (paused, a panel up, the run-over screen): Minecraft kept
+        // hitting a body nobody was flying. Those hits are stale — landing them all at once
+        // would spend lives in a single frame for a fight the pilot never saw.
+        double now = Raylib_cs.Raylib.GetTime();
+        bool stale = now - _lastPump > 1.0 && _lastPump > 0;
+        _lastPump = now;
+        if (stale)
+        {
+            int dropped = 0;
+            var keep = new List<Msg>();
+            while (_in.TryDequeue(out var q))
+                if (q.T == "hurt") dropped++;
+                else keep.Add(q);
+            foreach (var q in keep) _in.Enqueue(q);
+            if (dropped > 0) Rift.Log($"dropped {dropped} stale hits after a pause");
+        }
         int budget = 256;
         while (budget-- > 0 && _in.TryDequeue(out var m))
         {

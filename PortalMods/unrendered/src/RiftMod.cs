@@ -35,10 +35,18 @@ public sealed class RiftMod : IGameMod
         if (Realm.Active && ReferenceEquals(world, Realm.HomeWorld) && ReferenceEquals(Rift.World, Realm.RealmWorld)) return;
         if (Realm.Active && ReferenceEquals(world, Realm.RealmWorld) && ReferenceEquals(Rift.World, Realm.HomeWorld)) return;
 
+        // The run ended while the pilot was in Minecraft: the world closing is the stand-in, but
+        // the run that is over is the home world behind it — its visitors go home, its portal
+        // is forgotten, exactly as if it had closed on its own.
+        var home = Realm.Active ? Realm.HomeWorld : null;
         if (Realm.Active && (ReferenceEquals(world, Realm.RealmWorld) || ReferenceEquals(world, Realm.HomeWorld)))
             Realm.Abort("THE RUN ENDED");
-        if (ReferenceEquals(world, Portal.World)) Portal.Forget();
-        Visitors.WorldGone(world);
+        foreach (var gone in new[] { world, home })
+        {
+            if (gone == null) continue;
+            if (ReferenceEquals(gone, Portal.World)) Portal.Forget();
+            Visitors.WorldGone(gone);
+        }
     }
 
     public void Step(GameWorld world, float dt, in InputFrame input) => Guard("step", () => Rift.Step(world, dt));

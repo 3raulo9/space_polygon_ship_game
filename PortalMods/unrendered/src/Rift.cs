@@ -147,9 +147,10 @@ public static class Rift
             Notice("SOLO RUNS ONLY");
             return;
         }
+        // In Minecraft, B is the way home — whatever has happened to the portal there.
         if (Realm.Active)
         {
-            Notice("ALREADY IN MINECRAFT");
+            Realm.Leave();
             return;
         }
 

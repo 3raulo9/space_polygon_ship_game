@@ -214,7 +214,8 @@ public static class TestHatch
                 // Into the water: the portal's first water cell.
                 _left = true;
                 var portal = Portal.Linked!;
-                Realm.PlaceAt(portal["x"]!.GetValue<int>() + 0.5, portal["z"]!.GetValue<int>() + 0.5);
+                Realm.PlaceAt(portal["x"]!.GetValue<int>() + 0.5, portal["z"]!.GetValue<int>() + 0.5,
+                    portal["y"]!.GetValue<int>() + 1.5f);   // in the water, not on the frame's top
                 Rift.Log("test hatch: walking into the portal");
             }
             else if (inside >= 44 && _left)
