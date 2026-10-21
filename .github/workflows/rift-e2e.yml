@@ -39,6 +39,11 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew build --no-daemon
+      - name: Build the Dimension Hopper
+        working-directory: PortalMods/hopper/fabric
+        run: |
+          chmod +x gradlew
+          ./gradlew build --no-daemon
       - name: Build UNRENDERED and its mod
         run: |
           dotnet build -c Release

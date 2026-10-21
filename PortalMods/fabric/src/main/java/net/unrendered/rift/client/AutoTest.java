@@ -33,7 +33,7 @@ public final class AutoTest {
     private static int ticks, stepTicks, shots;
     private static long pilotSince = -1;
     private static int blastSeen = -1;
-    private static boolean pilotSeenLeaving;
+    private static boolean pilotSeenLeaving, stopping;
 
     private AutoTest() {}
 
@@ -235,8 +235,21 @@ public final class AutoTest {
                 if (stepTicks > 20 * 30) go(Step.DONE);
             }
             case DONE -> {
-                if (stepTicks == 1) log("done after " + shots + " screenshots");
-                if (stepTicks == 40) mc.scheduleStop();
+                // With the Dimension Hopper installed too, its own autotest takes the player
+                // next (it waits for this property), and Minecraft stops when it is through.
+                boolean hopper = net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("dimension_hopper");
+                if (stepTicks == 1) {
+                    log("done after " + shots + " screenshots");
+                    if (hopper) {
+                        log("handing the player to the Dimension Hopper's autotest");
+                        System.setProperty("hopper.autotest.go", "1");
+                    }
+                }
+                boolean waiting = hopper && System.getProperty("hopper.autotest.done") == null && stepTicks < 20 * 90;
+                if (stepTicks >= 40 && !waiting && !stopping) {
+                    stopping = true;
+                    mc.scheduleStop();
+                }
             }
         }
     }

@@ -64,7 +64,7 @@ for key, files in sorted(groups.items()):
 
 
 # The frames a check is about, each on its own and large enough to read.
-FEATURED = ("inventory", "holding", "blast", "pack")
+FEATURED = ("inventory", "holding", "blast", "pack", "dial", "hopper")
 for key, files in sorted(groups.items()):
     for f in files:
         if any(w in os.path.basename(f) for w in FEATURED):

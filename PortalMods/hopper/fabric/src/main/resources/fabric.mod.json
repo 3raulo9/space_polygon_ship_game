@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "dimension_hopper",
+  "version": "${version}",
+  "name": "Dimension Hopper",
+  "description": "A handheld portal gun. Dial a destination - any dimension this world has, or a realm another game opens to it - and fire: a swirling green portal opens where the shot lands, and its twin opens somewhere safe on the other side.",
+  "authors": ["UNRENDERED"],
+  "license": "All-Rights-Reserved",
+  "icon": "assets/dimension_hopper/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["net.hopper.HopperMod"],
+    "client": ["net.hopper.client.HopperClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

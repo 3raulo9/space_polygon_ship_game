@@ -35,6 +35,13 @@ renderClouds:"false"
 soundCategory_master:0.0
 pauseOnLostFocus:false
 OPT
+# The Dimension Hopper rides along when it has been built (PortalMods/hopper/fabric): the
+# client loads it from run/mods like any mod a player drops in, and its own autotest takes
+# over the player when the rift's is done.
+HOPPER_JAR="$(ls "$ROOT"/PortalMods/hopper/fabric/build/libs/dimension-hopper-*.jar 2>/dev/null | grep -v sources | head -1)"
+mkdir -p run/mods
+rm -f run/mods/dimension-hopper-*.jar
+[ -n "$HOPPER_JAR" ] && cp "$HOPPER_JAR" run/mods/ && echo "with $(basename "$HOPPER_JAR")"
 RIFT_AUTOTEST=true ./gradlew runClient --no-daemon --console=plain >"$OUT/mc.log" 2>&1 &
 MC=$!
 
@@ -74,7 +81,7 @@ cp -f "$ROOT/PortalMods/fabric/run/logs/latest.log" "$OUT/mc-latest.log" 2>/dev/
 cp -f "$ROOT/PortalMods/fabric/run/screenshots/"*.png "$OUT/" 2>/dev/null
 cp -f "$ROOT/bin/Release/net10.0/Mods/rift/rift.log" "$OUT/rift.log" 2>/dev/null
 echo "--- RIFT-E2E lines from Minecraft ---"
-grep -a "RIFT-E2E\|Rift:" "$OUT/mc-latest.log" | cut -c1-400 | tail -150
+grep -a "RIFT-E2E\|Rift:\|HOPPER-E2E\|Dimension Hopper" "$OUT/mc-latest.log" | cut -c1-400 | tail -150
 echo "--- Minecraft warnings and errors ---"
 grep -a "WARN\|ERROR\|Exception\|at net.unrendered" "$OUT/mc-latest.log" | grep -v "Missing sound\|Unable to play\|narrator" | cut -c1-300 | tail -60
 echo "--- UNRENDERED stdout tail ---"

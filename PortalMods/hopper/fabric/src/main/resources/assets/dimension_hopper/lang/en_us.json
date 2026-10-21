@@ -1,0 +1,9 @@
+{
+  "item.dimension_hopper.hopper": "Dimension Hopper",
+  "item.dimension_hopper.hopper.desc": "Sneak + use (or V) to dial a destination. Use to open a portal there.",
+  "entity.dimension_hopper.portal": "Hopper Portal",
+  "entity.dimension_hopper.shot": "Hopper Shot",
+  "key.dimension_hopper.dial": "Open the Dimension Hopper's dial",
+  "category.dimension_hopper": "Dimension Hopper",
+  "itemGroup.dimension_hopper": "Dimension Hopper"
+}
