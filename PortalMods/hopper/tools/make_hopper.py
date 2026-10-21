@@ -55,7 +55,7 @@ def texture():
     fill("metal", (176, 184, 190), 10)
     fill("dark", (44, 48, 54), 6)
     fill("fluid", (70, 235, 90), 18)
-    fill("glass", (190, 240, 235), 8, alpha=110)
+    fill("glass", (200, 245, 240), 6, alpha=55)
     fill("glow", (190, 255, 170), 10)
     fill("brass", (196, 150, 64), 12)
     fill("screen", (18, 60, 30), 6)
