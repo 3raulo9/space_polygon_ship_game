@@ -32,6 +32,7 @@ public final class AutoTest {
     private static Step step = Step.TITLE;
     private static int ticks, stepTicks, shots;
     private static long pilotSince = -1;
+    private static int blastSeen = -1;
     private static boolean pilotSeenLeaving;
 
     private AutoTest() {}
@@ -122,9 +123,6 @@ public final class AutoTest {
                     run(server, null, at + "summon pig ^-1 ^ ^7 {PersistenceRequired:1b}");
                     run(server, null, at + "summon villager ^2 ^ ^8 {PersistenceRequired:1b,NoAI:1b}");
                     run(server, null, at + "summon item ^1 ^1 ^4 {Item:{id:\"minecraft:diamond_sword\",count:1},PickupDelay:32767}");
-                    boolean lan = server.openToLan(GameMode.CREATIVE, true, 25565);
-                    log("open to LAN: " + lan);
-                    if (sp != null) run(server, sp, "rift join");
                 });
                 go(Step.THROW);
             }
@@ -162,15 +160,30 @@ public final class AutoTest {
                     var result = mc.interactionManager.interactItem(mc.player, net.minecraft.util.Hand.MAIN_HAND);
                     log("threw the crab core: " + result);
                 }
-                if (stepTicks == 70 || stepTicks == 82 || stepTicks == 90 || stepTicks == 100 || stepTicks == 114) shot(mc, "mc-blast");
-                if (stepTicks == 82 || stepTicks == 114) {
-                    long blasts = mc.world.getEntitiesByClass(net.unrendered.rift.entity.CrabCoreBlastEntity.class,
-                        mc.player.getBoundingBox().expand(128), e -> true).size();
-                    long alive = mc.world.getEntitiesByClass(net.minecraft.entity.mob.MobEntity.class,
-                        mc.player.getBoundingBox().expand(128), e -> e.isAlive()).size();
-                    log("blasts in the air: " + blasts + ", mobs standing: " + alive);
+                if (stepTicks > 64 && blastSeen < 0 && mc.world.getEntitiesByClass(net.unrendered.rift.entity.CrabCoreBlastEntity.class,
+                        mc.player.getBoundingBox().expand(160), e -> true).size() > 0) {
+                    blastSeen = ticks;
+                    log("the blast is in the air, " + stepTicks + " ticks after the step began");
                 }
-                if (stepTicks > 130) go(Step.WAIT_PILOT);
+                if (stepTicks > 64 && blastSeen < 0 && stepTicks % 10 == 0) shot(mc, "mc-flight");
+                if (blastSeen > 0) {
+                    int since = ticks - blastSeen;
+                    if (since == 3 || since == 10 || since == 20 || since == 35 || since == 52) shot(mc, "mc-blast");
+                    if (since == 60) {
+                        long alive = mc.world.getEntitiesByClass(net.minecraft.entity.mob.MobEntity.class,
+                            mc.player.getBoundingBox().expand(160), e -> e.isAlive()).size();
+                        log("after the blast, mobs standing: " + alive);
+                    }
+                }
+                if (stepTicks > 20 * 40 || (blastSeen > 0 && ticks - blastSeen > 70)) {
+                    server.execute(() -> {
+                        ServerPlayerEntity sp = server.getPlayerManager().getPlayer(name);
+                        boolean lan = server.openToLan(GameMode.CREATIVE, true, 25565);
+                        log("open to LAN: " + lan);
+                        if (sp != null) run(server, sp, "rift join");
+                    });
+                    go(Step.WAIT_PILOT);
+                }
             }
             case WAIT_PILOT -> {
                 if (stepTicks % 100 == 0) log("waiting for the pilot; linked=" + Bridge.linked());

@@ -109,7 +109,7 @@ public static class Composite
         {
             Raylib.ClearBackground(new Color(0, 0, 0, 0));
             Raylib.BeginMode3D(_cam);
-            Overlays.Draw(_world, _cam.Position, keyed: false);
+            Overlays.Draw(_world!, _cam.Position, keyed: false);
             Raylib.EndMode3D();
         }
         Raylib.EndTextureMode();
