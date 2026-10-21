@@ -513,11 +513,13 @@ def gun(computer, spin=0.0):
 
 
 # First person draws an item with no turn of its own: the model's north is straight into the
-# screen. The barrels point north, so the gun aims forward as it is, low on the right; a few
-# degrees of yaw angle it in toward the crosshair and show its inner flank, a touch of pitch
-# lifts the muzzle onto the line of sight. The left hand is this pose mirrored, which
-# Minecraft does itself when no left-hand pose is given.
-FIRST_PERSON = {"rotation": [4, 5, 0], "translation": [0.8, 3.6, -4.5], "scale": [0.4, 0.4, 0.4]}
+# screen. The barrels point north, so the gun aims forward as it is. Held near the middle and
+# low, it runs away from the eye into the picture the way a gun in a shooter does; a few
+# degrees of yaw outward keep its long side from lying across the view (perspective already
+# draws it in toward the crosshair), and a touch of pitch lifts the muzzle onto the line of
+# sight. The left hand is this pose mirrored, which Minecraft does itself when no left-hand
+# pose is given.
+FIRST_PERSON = {"rotation": [4, -6, 0], "translation": [-1.5, 3.4, -3.5], "scale": [0.4, 0.4, 0.4]}
 
 
 def recoil(pose, kick):
