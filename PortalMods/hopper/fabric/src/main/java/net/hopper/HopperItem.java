@@ -26,10 +26,8 @@ public class HopperItem extends Item {
         ItemStack stack = user.getStackInHand(hand);
         if (user instanceof ServerPlayerEntity player && world instanceof ServerWorld sw) {
             if (player.isSneaking()) HopperMod.showDial(player, stack);
-            else {
-                HopperMod.fire(sw, player, stack);
-                player.getItemCooldownManager().set(this, 10);
-            }
+            // The cooldown is the recoil: the client plays the kick off it (see HopperClient).
+            else if (HopperMod.fire(sw, player, stack)) player.getItemCooldownManager().set(this, 10);
         }
         return TypedActionResult.success(stack, world.isClient());
     }

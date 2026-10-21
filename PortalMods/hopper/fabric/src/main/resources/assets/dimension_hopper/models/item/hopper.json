@@ -2,7 +2,10 @@
   "credit": "Dimension Hopper, made by PortalMods/hopper/tools/make_hopper.py",
   "textures": {
     "body": "dimension_hopper:item/hopper",
-    "particle": "dimension_hopper:item/hopper"
+    "particle": "dimension_hopper:item/hopper",
+    "fluid": "dimension_hopper:item/hopper_fluid_idle",
+    "glow": "dimension_hopper:item/hopper_glow",
+    "screen": "dimension_hopper:item/hopper_screen"
   },
   "elements": [
     {
@@ -443,57 +446,57 @@
       "faces": {
         "north": {
           "uv": [
-            12,
-            8,
-            16,
-            12
+            0.0,
+            2.0,
+            16.0,
+            14.0
           ],
-          "texture": "#body"
+          "texture": "#glow"
         },
         "south": {
           "uv": [
-            12,
-            8,
-            16,
-            12
+            0.0,
+            2.0,
+            16.0,
+            14.0
           ],
-          "texture": "#body"
+          "texture": "#glow"
         },
         "east": {
           "uv": [
-            12,
-            8,
-            16,
-            12
+            1.333,
+            0.0,
+            14.667,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#glow"
         },
         "west": {
           "uv": [
-            12,
-            8,
-            16,
-            12
+            1.333,
+            0.0,
+            14.667,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#glow"
         },
         "up": {
           "uv": [
-            12,
-            8,
-            16,
-            12
+            0.0,
+            3.0,
+            16.0,
+            13.0
           ],
-          "texture": "#body"
+          "texture": "#glow"
         },
         "down": {
           "uv": [
-            12,
-            8,
-            16,
-            12
+            0.0,
+            3.0,
+            16.0,
+            13.0
           ],
-          "texture": "#body"
+          "texture": "#glow"
         }
       }
     },
@@ -707,13 +710,13 @@
     {
       "name": "vial glass",
       "from": [
-        6.5,
+        6.25,
         11.5,
         5.5
       ],
       "to": [
-        9.5,
-        14.5,
+        9.75,
+        15,
         11
       ],
       "faces": {
@@ -776,82 +779,82 @@
     {
       "name": "vial fluid",
       "from": [
-        7,
+        6.75,
         11.75,
         6
       ],
       "to": [
-        9,
-        14,
+        9.25,
+        14.75,
         10.5
       ],
       "faces": {
         "north": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            1.333,
+            0.0,
+            14.667,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "south": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            1.333,
+            0.0,
+            14.667,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "east": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            0.0,
+            2.667,
+            16.0,
+            13.333
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "west": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            0.0,
+            2.667,
+            16.0,
+            13.333
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "up": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            3.556,
+            0.0,
+            12.444,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "down": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            3.556,
+            0.0,
+            12.444,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         }
       }
     },
     {
       "name": "vial cap front",
       "from": [
-        6.25,
+        6,
         11.25,
         5
       ],
       "to": [
-        9.75,
-        14.75,
+        10,
+        15.25,
         5.5
       ],
       "faces": {
@@ -914,13 +917,13 @@
     {
       "name": "vial cap back",
       "from": [
-        6.25,
+        6,
         11.25,
         11
       ],
       "to": [
-        9.75,
-        14.75,
+        10,
+        15.25,
         11.5
       ],
       "faces": {
@@ -1133,57 +1136,57 @@
       "faces": {
         "north": {
           "uv": [
-            12,
-            12,
-            16,
-            16
+            0.0,
+            2.286,
+            16.0,
+            13.714
           ],
-          "texture": "#body"
+          "texture": "#screen"
         },
         "south": {
           "uv": [
-            12,
-            12,
-            16,
-            16
+            0.0,
+            2.286,
+            16.0,
+            13.714
           ],
-          "texture": "#body"
+          "texture": "#screen"
         },
         "east": {
           "uv": [
-            12,
-            12,
-            16,
-            16
+            6.4,
+            0.0,
+            9.6,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#screen"
         },
         "west": {
           "uv": [
-            12,
-            12,
-            16,
-            16
+            6.4,
+            0.0,
+            9.6,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#screen"
         },
         "up": {
           "uv": [
-            12,
-            12,
-            16,
-            16
+            0.0,
+            6.857,
+            16.0,
+            9.143
           ],
-          "texture": "#body"
+          "texture": "#screen"
         },
         "down": {
           "uv": [
-            12,
-            12,
-            16,
-            16
+            0.0,
+            6.857,
+            16.0,
+            9.143
           ],
-          "texture": "#body"
+          "texture": "#screen"
         }
       }
     },
@@ -1202,57 +1205,57 @@
       "faces": {
         "north": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            5.333,
+            0.0,
+            10.667,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "south": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            5.333,
+            0.0,
+            10.667,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "east": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            0.0,
+            7.25,
+            16.0,
+            8.75
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "west": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            0.0,
+            7.25,
+            16.0,
+            8.75
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "up": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            7.75,
+            0.0,
+            8.25,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         },
         "down": {
           "uv": [
-            0,
-            8,
-            8,
-            16
+            7.75,
+            0.0,
+            8.25,
+            16.0
           ],
-          "texture": "#body"
+          "texture": "#fluid"
         }
       }
     }
@@ -1364,12 +1367,12 @@
       "rotation": [
         0,
         -82,
-        4
+        4.0
       ],
       "translation": [
         1.5,
-        2,
-        -1
+        2.0,
+        -1.0
       ],
       "scale": [
         0.6,
@@ -1381,12 +1384,12 @@
       "rotation": [
         0,
         82,
-        -4
+        -4.0
       ],
       "translation": [
         1.5,
-        2,
-        -1
+        2.0,
+        -1.0
       ],
       "scale": [
         0.6,
@@ -1394,5 +1397,25 @@
         0.6
       ]
     }
-  }
+  },
+  "overrides": [
+    {
+      "predicate": {
+        "dimension_hopper:dialled": 1
+      },
+      "model": "dimension_hopper:item/hopper_ready"
+    },
+    {
+      "predicate": {
+        "dimension_hopper:fire": 0.01
+      },
+      "model": "dimension_hopper:item/hopper_fire_settle"
+    },
+    {
+      "predicate": {
+        "dimension_hopper:fire": 0.55
+      },
+      "model": "dimension_hopper:item/hopper_fire_kick"
+    }
+  ]
 }

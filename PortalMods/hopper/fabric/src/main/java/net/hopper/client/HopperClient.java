@@ -9,7 +9,9 @@ import net.hopper.HopperMod;
 import net.hopper.net.DialPayload;
 import net.hopper.net.RealmsPayload;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.item.ModelPredicateProviderRegistry;
 import net.minecraft.client.option.KeyBinding;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.util.Hand;
 import org.lwjgl.glfw.GLFW;
@@ -39,6 +41,17 @@ public final class HopperClient implements ClientModInitializer {
                 if (mc.player != null && holding(mc)) ClientPlayNetworking.send(new DialPayload("open", ""));
             }
         });
+
+        // The gun's look follows its state: the vial wakes when it is dialled, and a shot's
+        // cooldown is the recoil — the first half kicks with the flash, the second settles.
+        ModelPredicateProviderRegistry.register(HopperMod.HOPPER, HopperMod.id("dialled"),
+            (stack, world, entity, seed) -> HopperMod.destination(stack).isEmpty() ? 0f : 1f);
+        ModelPredicateProviderRegistry.register(HopperMod.HOPPER, HopperMod.id("fire"),
+            (stack, world, entity, seed) -> {
+                if (!(entity instanceof PlayerEntity p)) return 0f;
+                float tick = MinecraftClient.getInstance().getRenderTickCounter().getTickDelta(false);
+                return p.getItemCooldownManager().getCooldownProgress(HopperMod.HOPPER, tick);
+            });
 
         AutoTest.install();
     }

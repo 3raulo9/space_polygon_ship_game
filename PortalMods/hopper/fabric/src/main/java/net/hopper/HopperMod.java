@@ -151,20 +151,29 @@ public final class HopperMod implements ModInitializer {
         return here.getRegistryKey() == World.OVERWORLD ? World.NETHER.getValue().toString() : World.OVERWORLD.getValue().toString();
     }
 
-    static void fire(ServerWorld world, ServerPlayerEntity player, ItemStack gun) {
+    /** True when it fired. */
+    static boolean fire(ServerWorld world, ServerPlayerEntity player, ItemStack gun) {
         String dest = destination(gun);
         if (dest.isEmpty() || Realms.find(world.getServer(), dest) == null) dest = fallback(world);
         Realms.Realm r = Realms.find(world.getServer(), dest);
-        if (r == null) return;
+        if (r == null) return false;
         if (r.realm() && !r.isClear()) {
             player.sendMessage(Text.literal("ESTABLISH A CLEAR CONNECTION WITH THIS REALM").formatted(Formatting.GREEN), true);
             world.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.BLOCK_BEACON_DEACTIVATE,
                 SoundCategory.PLAYERS, 0.7f, 1.9f);
-            return;
+            return false;
         }
         world.spawnEntity(HopperShotEntity.fire(world, player, dest, gunId(gun)));
         world.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.BLOCK_BEACON_ACTIVATE,
             SoundCategory.PLAYERS, 0.6f, 2.0f);
+        // Green sparks off the muzzle, spat forward.
+        net.minecraft.util.math.Vec3d look = player.getRotationVec(1f);
+        net.minecraft.util.math.Vec3d muzzle = player.getEyePos().add(look.multiply(0.9)).add(0, -0.15, 0);
+        world.spawnParticles(new net.minecraft.particle.DustParticleEffect(new org.joml.Vector3f(0.35f, 1f, 0.4f), 1.1f),
+            muzzle.x, muzzle.y, muzzle.z, 14, 0.08, 0.08, 0.08, 0.02);
+        world.spawnParticles(net.minecraft.particle.ParticleTypes.GLOW, muzzle.x, muzzle.y, muzzle.z, 4,
+            look.x * 0.2, look.y * 0.2, look.z * 0.2, 0.15);
+        return true;
     }
 
     /**

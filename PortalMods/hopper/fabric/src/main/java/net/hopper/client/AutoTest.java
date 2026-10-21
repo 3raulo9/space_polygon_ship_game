@@ -92,6 +92,7 @@ final class AutoTest {
                 mc.player.setPitch(38f);
             }
             case 116 -> log("fired: " + mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND));
+            case 119 -> shot(mc, "mc-hopper-kick");
             case 150 -> {
                 PortalEntity p = nearest(mc);
                 if (p != null) {
