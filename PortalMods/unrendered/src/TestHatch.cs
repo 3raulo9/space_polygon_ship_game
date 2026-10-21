@@ -19,6 +19,13 @@ public static class TestHatch
         double.TryParse(Environment.GetEnvironmentVariable("RIFT_QUIT_AFTER"), System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out double q) ? q : 0;
     private static double _lastShot = -100, _started = -1;
+    private static readonly double Delay =
+        double.TryParse(Environment.GetEnvironmentVariable("RIFT_TEST_DELAY"), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out double d) ? d : 0;
+
+    /// <summary>A picture on the next presented frame under this name — for another mod's test
+    /// (found by name, so no mod depends on this one).</summary>
+    public static void Want(string label) { if (Shots != null) _pending = label; }
     private static int _shotN;
 
     public static bool ShotDue => Shots != null && (_pending != null || Raylib_cs.Raylib.GetTime() - _lastShot > 4.0);
@@ -94,6 +101,9 @@ public static class TestHatch
             me.Health = me.MaxHealth;
             me.Shield = me.MaxShield;
         }
+        // RIFT_TEST_DELAY: seconds to hold the plan back, so another mod's own test can run first.
+        if (Raylib_cs.Raylib.GetTime() - _started < Delay) return;
+
         if (Plan.Contains("portal") && !_opened)
         {
             _opened = true;

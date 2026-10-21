@@ -62,8 +62,10 @@ done
 
 # --- UNRENDERED ---------------------------------------------------------------------------
 cd "$ROOT/bin/Release/net10.0"
+# The Dimension Hopper's UNRENDERED half plays itself first (HOPPER_TEST), then the rift's plan.
 UNRENDERED_CAPTURE="$OUT/unr-final.png" UNRENDERED_CAPTURE_FRAME=100000000 \
-RIFT_CONNECT=127.0.0.1:25570 RIFT_TEST=portal,link,enter,pickup,tour,pack,lookvisitor RIFT_SHOTS="$OUT/unr" RIFT_QUIT_AFTER=140 \
+HOPPER_TEST=1 RIFT_TEST_DELAY=16 \
+RIFT_CONNECT=127.0.0.1:25570 RIFT_TEST=portal,link,enter,pickup,tour,pack,lookvisitor RIFT_SHOTS="$OUT/unr" RIFT_QUIT_AFTER=156 \
   timeout 200 dotnet Unrendered.dll >"$OUT/unr.log" 2>&1 &
 UNR=$!
 

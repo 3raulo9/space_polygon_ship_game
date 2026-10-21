@@ -94,6 +94,11 @@ public static class Discovery
         return j < 0 ? null : s[i..j];
     }
 
+    /// <summary>Every world heard in the last few seconds, rift or not.</summary>
+    public static IReadOnlyList<Found> All()
+        => _found.Values.Where(f => Now - f.Seen < 6).GroupBy(f => f.World + ":" + f.Port + f.Rift)
+            .Select(g => g.OrderByDescending(f => f.Seen).First()).ToList();
+
     /// <summary>The freshest joinable world, if any has been heard in the last few seconds.</summary>
     public static Found? Best()
         => _found.Values.Where(f => f.Rift && Now - f.Seen < 6).OrderByDescending(f => f.Seen).FirstOrDefault();

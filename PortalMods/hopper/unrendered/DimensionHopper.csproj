@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- DIMENSION HOPPER, UNRENDERED side: a code mod of its own, dimension-hopper.dll, dropped
+       into the game's Mods folder. On its own it hops between UNRENDERED's five worlds; with
+       the glowstone rift installed too it also reaches the Minecraft worlds the rift can hear.
+       It compiles against the game only to see its types and ships nothing else. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>dimension-hopper</AssemblyName>
+    <RootNamespace>DimensionHopper</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Unrendered.csproj" Private="false" />
+  </ItemGroup>
+
+  <!-- The finished mod, ready to drop into <UNRENDERED>/Mods/. -->
+  <Target Name="PackHopper" AfterTargets="Build">
+    <Copy SourceFiles="$(OutDir)dimension-hopper.dll" DestinationFolder="$(MSBuildProjectDirectory)\out" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

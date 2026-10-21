@@ -35,6 +35,12 @@ public static class Realm
     public static GameWorld? RealmWorld { get; private set; }
     private static PlayerTank? _craft;
     private static PlayerTank? _stand;      // what holds the craft's seat back home
+    private static Vector2 _homeAt;          // where the craft stood when it went
+    private static float _homeFacing;
+
+    /// <summary>Where the craft comes back out at home when it was not the glowstone portal it
+    /// went through (a door some other mod opened), and which way it faces. Cleared on return.</summary>
+    public static (Vector2 At, float Facing)? ReturnAt { get; set; }
 
     public static readonly Terrain Land = new();
 
@@ -178,6 +184,8 @@ public static class Realm
         float y = (float)spawn["y"]!.GetValue<double>();
         float yaw = (float)(spawn["yaw"]?.GetValue<double>() ?? 0);
         craft.Rig?.ReleaseBoth();
+        _homeAt = craft.Position;
+        _homeFacing = craft.Heading;
         craft.Position = Vector2.Zero;
         craft.Heading = -yaw * MathF.PI / 180f;
         craft.Height = 0f;
@@ -226,9 +234,12 @@ public static class Realm
         var craft = _craft!;
         home.Players[home.LocalIndex] = craft;
         craft.Rig?.ReleaseBoth();
-        float facing = Portal.Open ? Portal.Facing : craft.Heading;
+        // Out of the door it went in by: another mod's, the glowstone portal, or failing both
+        // the spot it left from — never wherever its Minecraft coordinates happen to land.
+        var (from, facing) = ReturnAt ?? (Portal.Open ? (Portal.Position, Portal.Facing) : (_homeAt, _homeFacing));
+        ReturnAt = null;
         Vector2 n = new(MathF.Sin(facing), MathF.Cos(facing));
-        craft.Position = Portal.Open ? Torus.Wrap(Portal.Position + n * 4f) : craft.Position;
+        craft.Position = Torus.Wrap(from + n * 4f);
         craft.Heading = facing;
         craft.Height = 0f;
         craft.GroundHeight = 0f;

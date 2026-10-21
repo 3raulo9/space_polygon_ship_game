@@ -139,6 +139,7 @@ public static class Composite
         int dw = Config.InternalWidth * scale, dh = Config.InternalHeight * scale;
         Raylib.DrawTexturePro(target.Texture, new Rectangle(0, 0, Config.InternalWidth, -Config.InternalHeight),
             new Rectangle((sw - dw) / 2, (sh - dh) / 2, dw, dh), Vector2.Zero, 0f, Color.White);
+        Rlgl.DrawRenderBatchActive();   // the picture is read straight off the buffer: flush first
         TestHatch.Shoot("unrendered");
         Raylib.EndDrawing();
     }

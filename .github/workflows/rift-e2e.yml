@@ -50,6 +50,8 @@ jobs:
           dotnet build PortalMods/unrendered -c Release
           mkdir -p bin/Release/net10.0/Mods
           cp PortalMods/unrendered/out/glowstone-rift.dll bin/Release/net10.0/Mods/
+          dotnet build PortalMods/hopper/unrendered -c Release
+          cp PortalMods/hopper/unrendered/out/dimension-hopper.dll bin/Release/net10.0/Mods/
       - name: Play both
         run: PortalMods/e2e/run.sh "$RUNNER_TEMP/e2e"
       - name: Show screenshots
