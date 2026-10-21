@@ -4022,7 +4022,7 @@
     "firstperson_righthand": {
       "rotation": [
         0,
-        8,
+        -38,
         20.0
       ],
       "translation": [
@@ -4039,7 +4039,7 @@
     "firstperson_lefthand": {
       "rotation": [
         0,
-        -8,
+        38,
         -20.0
       ],
       "translation": [

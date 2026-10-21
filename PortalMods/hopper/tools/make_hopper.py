@@ -512,8 +512,8 @@ def gun(computer, spin=0.0):
     return els
 
 
-FIRST_PERSON_R = {"rotation": [0, 8, 4], "translation": [2.5, 3.2, -2.5], "scale": [0.42, 0.42, 0.42]}
-FIRST_PERSON_L = {"rotation": [0, -8, -4], "translation": [2.5, 3.2, -2.5], "scale": [0.42, 0.42, 0.42]}
+FIRST_PERSON_R = {"rotation": [0, -38, 4], "translation": [2.5, 3.2, -2.5], "scale": [0.42, 0.42, 0.42]}
+FIRST_PERSON_L = {"rotation": [0, 38, -4], "translation": [2.5, 3.2, -2.5], "scale": [0.42, 0.42, 0.42]}
 
 
 def recoil(pose, kick, hand):
