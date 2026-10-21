@@ -512,8 +512,8 @@ def gun(computer, spin=0.0):
     return els
 
 
-FIRST_PERSON_R = {"rotation": [0, -82, 4], "translation": [2.5, 3.2, -2.5], "scale": [0.42, 0.42, 0.42]}
-FIRST_PERSON_L = {"rotation": [0, 82, -4], "translation": [2.5, 3.2, -2.5], "scale": [0.42, 0.42, 0.42]}
+FIRST_PERSON_R = {"rotation": [0, 8, 4], "translation": [2.5, 3.2, -2.5], "scale": [0.42, 0.42, 0.42]}
+FIRST_PERSON_L = {"rotation": [0, -8, -4], "translation": [2.5, 3.2, -2.5], "scale": [0.42, 0.42, 0.42]}
 
 
 def recoil(pose, kick, hand):
@@ -540,8 +540,7 @@ def gun_model(computer, fluid="hopper_fluid", glow="hopper_glow", kick=0.0, spin
             # Held like a pistol: barrels forward from the fist.
             "thirdperson_righthand": {"rotation": [90, 0, 0], "translation": [0, 3, -1], "scale": [0.38, 0.38, 0.38]},
             "thirdperson_lefthand": {"rotation": [90, 0, 0], "translation": [0, 3, -1], "scale": [0.38, 0.38, 0.38]},
-            # Pointing into the screen, angled in toward the crosshair. (First person turns
-            # an item a quarter round before these apply, hence the -82.)
+            # Pointing into the screen, angled a touch in toward the crosshair.
             "firstperson_righthand": recoil(FIRST_PERSON_R, kick, 1),
             "firstperson_lefthand": recoil(FIRST_PERSON_L, kick, -1),
         },
@@ -638,6 +637,24 @@ def models():
     return out
 
 
+def effect_icon():
+    """Unstable teleportation's icon by the hotbar: a figure with an arm flying off it."""
+    img = Image.new("RGBA", (18, 18), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    purple, dark, red = (150, 60, 230, 255), (60, 20, 100, 255), (190, 20, 20, 255)
+    d.rectangle((7, 2, 10, 5), fill=purple)           # head
+    d.rectangle((7, 6, 10, 11), fill=purple)          # body
+    d.rectangle((11, 6, 12, 10), fill=purple)         # the arm still on
+    d.rectangle((7, 12, 8, 16), fill=purple)          # legs
+    d.rectangle((9, 12, 10, 16), fill=dark)
+    d.rectangle((2, 3, 3, 7), fill=dark)              # the arm already gone
+    for p in ((4, 5), (5, 6), (3, 9), (5, 9), (6, 7)):
+        d.point(p, fill=red)
+    for p in ((1, 2), (4, 1), (0, 6), (13, 14), (15, 12)):
+        d.point(p, fill=(200, 150, 255, 255))
+    return img
+
+
 def icon():
     img = Image.new("RGBA", (128, 128), (10, 20, 12, 255))
     d = ImageDraw.Draw(img)
@@ -658,6 +675,8 @@ def main():
     for name, m in models().items():
         (ROOT / f"models/item/{name}.json").write_text(json.dumps(m, indent=2) + "\n")
     icon().save(ROOT / "icon.png")
+    (ROOT / "textures/mob_effect").mkdir(parents=True, exist_ok=True)
+    effect_icon().save(ROOT / "textures/mob_effect/unstable_teleportation.png")
     print("wrote", ROOT)
 
 

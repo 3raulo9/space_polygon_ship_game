@@ -164,7 +164,11 @@ public class DialScreen extends Screen {
             ctx.drawTextWrapped(textRenderer, Text.literal("A dimension of this world. Fire, and the portal's twin opens somewhere safe there."),
                 dx, 68, 188, 0xFFB0FFB8);
             ctx.drawTextWithShadow(textRenderer, Text.literal("COORDINATES").formatted(Formatting.BOLD), dx, 106, GREEN);
-            String at = realms.coords().isEmpty() ? "wherever is natural" : realms.coords().replace(",", ", ");
+            String at = "wherever is natural";
+            if (!realms.coords().isEmpty()) {
+                String[] c = (realms.coords() + ",,").split(",", -1);
+                at = (c[0].isEmpty() ? "~" : c[0]) + ", " + (c[1].isEmpty() ? "~" : c[1]) + ", " + (c[2].isEmpty() ? "~" : c[2]);
+            }
             ctx.drawTextWithShadow(textRenderer, Text.literal("Set: " + at), dx, 166, 0xFFB0FFB8);
             ctx.drawTextWithShadow(textRenderer, Text.literal(sel.id()), dx, 186, 0xFF6F9F74);
             return;
