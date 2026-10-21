@@ -512,20 +512,25 @@ def gun(computer, spin=0.0):
     return els
 
 
-FIRST_PERSON_R = {"rotation": [0, -62, 4], "translation": [2.5, 3.6, -2.5], "scale": [0.42, 0.42, 0.42]}
-FIRST_PERSON_L = {"rotation": [0, 62, -4], "translation": [2.5, 3.6, -2.5], "scale": [0.42, 0.42, 0.42]}
+# First person draws an item with no turn of its own: the model's north is straight into the
+# screen. The barrels point north, so the gun aims forward as it is, low on the right; a few
+# degrees of yaw angle it in toward the crosshair and show its inner flank, a touch of pitch
+# lifts the muzzle onto the line of sight. The left hand is this pose mirrored, which
+# Minecraft does itself when no left-hand pose is given.
+FIRST_PERSON = {"rotation": [4, 5, 0], "translation": [0.8, 3.6, -4.5], "scale": [0.4, 0.4, 0.4]}
 
 
-def recoil(pose, kick, hand):
+def recoil(pose, kick):
+    """The kick: muzzle thrown up, the gun shoved back toward the eye and lifted a little."""
     r, t = pose["rotation"], pose["translation"]
-    return {"rotation": [r[0], r[1], r[2] + hand * 16 * kick],
-            "translation": [t[0], t[1] + 1.2 * kick, t[2] + 2.5 * kick],
+    return {"rotation": [r[0] + 7 * kick, r[1], r[2]],
+            "translation": [t[0], t[1] + 0.5 * kick, t[2] + 1.1 * kick],
             "scale": pose["scale"]}
 
 
 def gun_model(computer, fluid="hopper_fluid", glow="hopper_glow", kick=0.0, spin=0.0):
-    """kick 0..1: how far into the recoil this pose is — the gun pulled back toward the eye,
-    lifted, and rolled up off the line of fire."""
+    """kick 0..1: how far into the recoil this pose is — the muzzle thrown up and the gun
+    pulled back toward the eye."""
     return {
         "credit": "Dimension Hopper, made by PortalMods/hopper/tools/make_hopper.py",
         "texture_size": [128, 128],
@@ -541,8 +546,7 @@ def gun_model(computer, fluid="hopper_fluid", glow="hopper_glow", kick=0.0, spin
             "thirdperson_righthand": {"rotation": [90, 0, 0], "translation": [0, 3, -1], "scale": [0.38, 0.38, 0.38]},
             "thirdperson_lefthand": {"rotation": [90, 0, 0], "translation": [0, 3, -1], "scale": [0.38, 0.38, 0.38]},
             # Pointing into the screen, angled a touch in toward the crosshair.
-            "firstperson_righthand": recoil(FIRST_PERSON_R, kick, 1),
-            "firstperson_lefthand": recoil(FIRST_PERSON_L, kick, -1),
+            "firstperson_righthand": recoil(FIRST_PERSON, kick),
         },
     }
 
