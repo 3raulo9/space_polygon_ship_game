@@ -35,10 +35,10 @@ renderClouds:"false"
 soundCategory_master:0.0
 pauseOnLostFocus:false
 OPT
-# The Dimension Hopper rides along when it has been built (PortalMods/hopper/fabric): the
-# client loads it from run/mods like any mod a player drops in, and its own autotest takes
-# over the player when the rift's is done.
-HOPPER_JAR="$(ls "$ROOT"/PortalMods/hopper/fabric/build/libs/dimension-hopper-*.jar 2>/dev/null | grep -v sources | head -1)"
+# The Dimension Hopper (its own repository, 3raulo9/diminsion_hopper) rides along when
+# HOPPER_JAR names a built jar: the client loads it from run/mods like any mod a player drops
+# in, and its own autotest takes over the player when the rift's is done.
+HOPPER_JAR="${HOPPER_JAR:-}"
 mkdir -p run/mods
 rm -f run/mods/dimension-hopper-*.jar
 [ -n "$HOPPER_JAR" ] && cp "$HOPPER_JAR" run/mods/ && echo "with $(basename "$HOPPER_JAR")"

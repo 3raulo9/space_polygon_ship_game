@@ -70,6 +70,9 @@ rounds break blocks are all there.
   DEFLATEd binary frames).
 * `unrendered/` is the UNRENDERED code mod, built on the game's `IGameMod` API.
 * `fabric/` is the Fabric mod. See its README.
+* The Dimension Hopper portal gun is a Minecraft mod of its own, in
+  [3raulo9/diminsion_hopper](https://github.com/3raulo9/diminsion_hopper). With both installed,
+  its dial lists UNRENDERED as a realm (the rift offers it through `HopperRealms`).
 * `tools/fake_minecraft.py` plays the Minecraft side for developing and testing
   UNRENDERED's half without Minecraft. It writes what a visitor would see to
   `scene.png`.
