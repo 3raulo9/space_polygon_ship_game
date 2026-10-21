@@ -120,13 +120,73 @@ final class AutoTest {
             case 250 -> shot(mc, "mc-hopper-far");
             case 262 -> mc.player.setYaw(mc.player.getYaw() + 180f);
             case 270 -> shot(mc, "mc-hopper-far");
-            case 280 -> {
-                log("done in " + mc.world.getRegistryKey().getValue());
-                finished = true;
-                System.setProperty("hopper.autotest.done", "1");
+            case 280 -> log("over in " + mc.world.getRegistryKey().getValue() + "; waiting for a realm to lose its signal");
+            default -> {
+                if (t > 280) unclear(mc);
             }
+        }
+    }
+
+    private static int lost = -1;
+
+    /**
+     * The second half: a realm from another game with no clear connection. It waits for one
+     * (UNRENDERED's test run quits a minute or so after the rift's test is done), shows it on
+     * the dial with its message, asks it to connect, and tries to fire at it.
+     */
+    private static void unclear(MinecraftClient mc) {
+        if (lost < 0) {
+            if (t % 20 == 0) ClientPlayNetworking.send(new DialPayload("list", ""));
+            RealmsPayload l = HopperClient.last;
+            String realm = l == null ? null : l.entries().stream().filter(e -> e.realm() && !e.clear())
+                .map(RealmsPayload.Entry::id).findFirst().orElse(null);
+            if (realm != null) {
+                lost = t;
+                unclearId = realm;
+                log(realm + " has no clear connection now");
+            } else if (t > 280 + 20 * 70) {
+                log("every realm stayed clear");
+                finish(mc);
+            }
+            return;
+        }
+        int s = t - lost;
+        switch (s) {
+            case 2 -> ClientPlayNetworking.send(new DialPayload("open", ""));
+            case 22 -> {
+                if (mc.currentScreen instanceof DialScreen dial) dial.pick(unclearId);
+                else log("the dial did not open; screen is " + mc.currentScreen);
+            }
+            case 40 -> shot(mc, "mc-dial-unclear");
+            case 44 -> {
+                if (mc.currentScreen instanceof DialScreen dial) {
+                    dial.establish(unclearId);
+                    log("asked " + unclearId + " to connect");
+                }
+            }
+            case 70 -> {
+                RealmsPayload l = HopperClient.last;
+                if (l != null) l.entries().stream().filter(e -> e.id().equals(unclearId)).findFirst()
+                    .ifPresent(e -> log("its status: " + e.status() + (e.clear() ? " (clear)" : " (not clear)")));
+                shot(mc, "mc-dial-unclear");
+            }
+            case 76 -> {
+                mc.setScreen(null);
+                mc.player.setPitch(20f);
+            }
+            case 82 -> log("fired at it: " + mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND));
+            case 86 -> shot(mc, "mc-hopper-refused");
+            case 100 -> finish(mc);
             default -> { }
         }
+    }
+
+    private static String unclearId;
+
+    private static void finish(MinecraftClient mc) {
+        log("done in " + mc.world.getRegistryKey().getValue());
+        finished = true;
+        System.setProperty("hopper.autotest.done", "1");
     }
 
     private static PortalEntity nearest(MinecraftClient mc) {

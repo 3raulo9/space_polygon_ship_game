@@ -16,6 +16,8 @@ import org.lwjgl.glfw.GLFW;
 
 public final class HopperClient implements ClientModInitializer {
     public static KeyBinding dialKey;
+    /** The newest list the server sent, for the autotest. */
+    static volatile RealmsPayload last;
 
     @Override
     public void onInitializeClient() {
@@ -27,6 +29,7 @@ public final class HopperClient implements ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(RealmsPayload.ID, (payload, ctx) -> {
             MinecraftClient mc = ctx.client();
+            last = payload;
             if (mc.currentScreen instanceof DialScreen dial) dial.update(payload);
             else if (payload.open()) mc.setScreen(new DialScreen(payload));
         });

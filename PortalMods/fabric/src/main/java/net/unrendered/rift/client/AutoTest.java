@@ -245,7 +245,7 @@ public final class AutoTest {
                         System.setProperty("hopper.autotest.go", "1");
                     }
                 }
-                boolean waiting = hopper && System.getProperty("hopper.autotest.done") == null && stepTicks < 20 * 90;
+                boolean waiting = hopper && System.getProperty("hopper.autotest.done") == null && stepTicks < 20 * 160;
                 if (stepTicks >= 40 && !waiting && !stopping) {
                     stopping = true;
                     mc.scheduleStop();

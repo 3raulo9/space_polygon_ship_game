@@ -23,6 +23,8 @@ public class DialScreen extends Screen {
     private final List<ButtonWidget> rows = new ArrayList<>();
     private ButtonWidget connect;
     private int ticks;
+    /** What was clicked last, shown at once while the server catches up. */
+    private String focus;
 
     public DialScreen(RealmsPayload realms) {
         super(Text.literal("DIMENSION HOPPER"));
@@ -40,7 +42,9 @@ public class DialScreen extends Screen {
 
     /** Dials a destination, as clicking it would. */
     public void pick(String id) {
+        focus = id;
         ClientPlayNetworking.send(new DialPayload("select", id));
+        if (client != null) clearAndInit();
     }
 
     public void establish(String id) {
@@ -56,7 +60,7 @@ public class DialScreen extends Screen {
         rows.clear();
         int y = 44;
         for (RealmsPayload.Entry e : realms.entries()) {
-            boolean on = e.id().equals(realms.selected());
+            boolean on = e.id().equals(shown());
             String label = (on ? "> " : "") + e.name() + (e.realm() ? (e.clear() ? "" : "  (no signal)") : "");
             ButtonWidget b = ButtonWidget.builder(Text.literal(label).formatted(on ? Formatting.GREEN : Formatting.WHITE),
                 btn -> pick(e.id())).dimensions(left(), y, 180, 20).build();
@@ -74,8 +78,12 @@ public class DialScreen extends Screen {
             .dimensions(width / 2 - 50, height - 28, 100, 20).build());
     }
 
+    private String shown() {
+        return focus != null ? focus : realms.selected();
+    }
+
     private RealmsPayload.Entry selected() {
-        for (RealmsPayload.Entry e : realms.entries()) if (e.id().equals(realms.selected())) return e;
+        for (RealmsPayload.Entry e : realms.entries()) if (e.id().equals(shown())) return e;
         return null;
     }
 

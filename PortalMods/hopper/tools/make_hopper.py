@@ -116,9 +116,10 @@ def model():
             # Held like a pistol: barrel forward from the fist, vial up.
             "thirdperson_righthand": {"rotation": [90, 0, 0], "translation": [0, 1, -3], "scale": [0.6, 0.6, 0.6]},
             "thirdperson_lefthand": {"rotation": [90, 0, 0], "translation": [0, 1, -3], "scale": [0.6, 0.6, 0.6]},
-            # Pointing into the screen, angled in toward the crosshair.
-            "firstperson_righthand": {"rotation": [0, 8, 0], "translation": [2, 1, -2], "scale": [0.75, 0.75, 0.75]},
-            "firstperson_lefthand": {"rotation": [0, -8, 0], "translation": [2, 1, -2], "scale": [0.75, 0.75, 0.75]},
+            # Pointing into the screen, angled in toward the crosshair. (First person turns
+            # an item a quarter round before these apply, hence the -82.)
+            "firstperson_righthand": {"rotation": [0, -82, 4], "translation": [1.5, 2, -1], "scale": [0.6, 0.6, 0.6]},
+            "firstperson_lefthand": {"rotation": [0, 82, -4], "translation": [1.5, 2, -1], "scale": [0.6, 0.6, 0.6]},
         },
     }
 
