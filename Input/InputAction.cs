@@ -61,6 +61,12 @@ public enum InputAction : byte
     /// put the blade down.</summary>
     DropWeapon,
 
+    /// <summary>Breaks into a sprint, the way the blocky-avatar game this body is built after
+    /// does it: pressed while walking forward, and held for as long as forward is, whether or
+    /// not this stays down. A second tap of FORWARD does the same. Whatever button this is on
+    /// stops being a trigger while the soldier is on foot — see <see cref="InputSampler"/>.</summary>
+    Sprint,
+
     // --- FISH ------------------------------------------------------------------------
     // The roll is the turn bindings and the spit is FIRE; what is its own is the tail.
     Beat,
@@ -116,7 +122,7 @@ public static class InputActions
         <= InputAction.Ready => InputSection.General,
         <= InputAction.TankSlug => InputSection.Tank,
         <= InputAction.SpiderPounce => InputSection.Spider,
-        <= InputAction.DropWeapon => InputSection.Soldier,
+        <= InputAction.Sprint => InputSection.Soldier,
         <= InputAction.Brake => InputSection.Fish,
         <= InputAction.Replant => InputSection.Flower,
         <= InputAction.Slot4 => InputSection.Virus,
@@ -183,6 +189,7 @@ public static class InputActions
         InputAction.RightHook => "RIGHT HOOK",
         InputAction.HighJump => "HIGH JUMP",
         InputAction.DropWeapon => "DROP WEAPON",
+        InputAction.Sprint => "SPRINT",
 
         InputAction.Beat => "TAIL BEAT",
         InputAction.Brake => "BRAKE",

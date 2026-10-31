@@ -23,6 +23,18 @@ public sealed class Bindings
     }
 
     public bool Down(InputAction a) => _binds[(int)a].Down();
+
+    /// <summary>Whether <paramref name="a"/> is held on a button that is <em>not</em> also one
+    /// of <paramref name="taken"/>'s — the read for an action that has given up its share
+    /// of a button to another one.</summary>
+    public bool DownExcept(InputAction a, InputAction taken)
+        => HeldExcept(_binds[(int)a], _binds[(int)taken], code => code.Down());
+
+    /// <summary>The rule itself, with the devices handed in — so it can be checked without
+    /// anybody's finger on a key.</summary>
+    internal static bool HeldExcept(InputBind bind, InputBind taken, Func<InputCode, bool> held)
+        => (!bind.Primary.IsNone && held(bind.Primary) && !taken.Uses(bind.Primary))
+        || (!bind.Secondary.IsNone && held(bind.Secondary) && !taken.Uses(bind.Secondary));
     public bool Pressed(InputAction a) => _binds[(int)a].Pressed();
 
     /// <summary>Puts every row back to the shipped layout.</summary>
@@ -84,6 +96,10 @@ public sealed class Bindings
             // Z, which no chassis reads: under the left hand beside the hooks, and far enough
             // from Q that letting go of a blade is never a hook thrown by mistake.
             InputAction.DropWeapon => One(KeyboardKey.Z),
+            // Left Ctrl, where the game this body is built after puts it. FIRE has Ctrl as its
+            // second key on every other chassis; on foot the sprint takes it — the rifle is
+            // the mouse's alone. See InputSampler.
+            InputAction.Sprint => One(KeyboardKey.LeftControl),
 
             InputAction.Beat => K(KeyboardKey.W, KeyboardKey.Space),
             InputAction.Brake => One(KeyboardKey.S),

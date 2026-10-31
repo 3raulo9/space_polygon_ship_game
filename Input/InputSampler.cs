@@ -24,6 +24,18 @@ public sealed class InputSampler
     private InputFrame _frame;
     private bool _fresh;
 
+    /// <summary>
+    /// Whether the seat at this keyboard is a SOLDIER on foot, set by the loop before each
+    /// <see cref="Sample"/>. The one thing the sampler is told about what is being driven,
+    /// and only because a button cannot mean two things to the same hand: FIRE ships with
+    /// Left Ctrl as its second key, and on foot Left Ctrl is SPRINT. So while this is set,
+    /// whatever SPRINT is bound to is taken away from both triggers — Ctrl runs, the mouse
+    /// shoots — and every other chassis keeps Ctrl on the trigger as it always had it. A
+    /// controls.cfg written before SPRINT existed still has Ctrl on FIRE, which is why this
+    /// is a rule about buttons rather than a change to the shipped layout.
+    /// </summary>
+    public bool OnFoot { get; set; }
+
     /// <summary>Reads the devices. Call once per render frame, before the fixed-step loop.</summary>
     public void Sample()
     {
@@ -43,8 +55,10 @@ public sealed class InputSampler
         if (b.Down(InputAction.TurnLeft)) down |= Btn.TurnLeft;
         if (b.Down(InputAction.TurnRight)) down |= Btn.TurnRight;
         if (b.Down(InputAction.Jump)) down |= Btn.Jump;
-        if (b.Down(InputAction.Fire)) down |= Btn.Fire;
-        if (b.Down(InputAction.Secondary)) down |= Btn.Secondary;
+        if (OnFoot ? b.DownExcept(InputAction.Fire, InputAction.Sprint) : b.Down(InputAction.Fire))
+            down |= Btn.Fire;
+        if (OnFoot ? b.DownExcept(InputAction.Secondary, InputAction.Sprint) : b.Down(InputAction.Secondary))
+            down |= Btn.Secondary;
         if (b.Down(InputAction.Hyperspace)) down |= Btn.Hyperspace;
 
         if (b.Down(InputAction.TankLurch)) down |= Btn.TankLurch;
@@ -57,6 +71,7 @@ public sealed class InputSampler
         if (b.Down(InputAction.RightHook)) down |= Btn.RightHook;
         if (b.Down(InputAction.HighJump)) down |= Btn.HighJump;
         if (b.Down(InputAction.DropWeapon)) down |= Btn.DropWeapon;
+        if (b.Down(InputAction.Sprint)) down |= Btn.Sprint;
 
         if (b.Down(InputAction.Beat)) down |= Btn.Beat;
         if (b.Down(InputAction.Brake)) down |= Btn.Brake;

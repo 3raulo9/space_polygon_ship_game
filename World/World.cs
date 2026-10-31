@@ -1607,6 +1607,8 @@ public sealed partial class World : IAnchorField
         if (who.Soldier is { } rig)
         {
             rig.MoveInput = (local ? ScriptedSoldierMove : null) ?? input.SoldierMove;
+            rig.SprintHeld = (local && ScriptedSoldierSprint) || input.SprintDown;
+            rig.ForwardTapped = input.ForwardTapped;
             if (live && !who.Captured) UpdateMouseLook(input, who);
         }
 
@@ -5319,6 +5321,10 @@ public sealed partial class World : IAnchorField
     /// swing builds, and there is nobody at the keys during a capture run.
     /// </summary>
     public Vector2? ScriptedSoldierMove;
+
+    /// <summary>And SPRINT held down, for the self-test — the same latch a player's Ctrl
+    /// goes through.</summary>
+    public bool ScriptedSoldierSprint;
 
     /// <summary>Pulls the rifle's trigger without a mouse — the capture harness and the
     /// self-test's way in. Honours the cooldown and the magazine exactly as a click

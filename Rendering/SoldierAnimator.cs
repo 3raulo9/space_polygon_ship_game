@@ -356,9 +356,12 @@ public sealed class SoldierAnimator
     private const float MinDuty = 0.2f;
 
     /// <summary>The ground speeds across which a walk becomes a run: the arms come up and
-    /// bend, the knees drive, the body leans and starts to bounce.</summary>
-    private const float RunFrom = 2.0f;
-    private const float RunFull = 4.2f;
+    /// bend, the knees drive, the body leans and starts to bounce. Set between the
+    /// soldier's walk and its sprint (4.5 and 5.9 in the figure's own metres — it is drawn
+    /// twice life size), so pressing SPRINT is visibly breaking into a run; the squads,
+    /// which only have the one ground speed, run most of the way.</summary>
+    private const float RunFrom = 4.8f;
+    private const float RunFull = 5.6f;
 
     /// <summary>How high a boot is carried through a step. A walk barely clears the floor;
     /// a run kicks the heel up behind it before the knee drives it through.</summary>

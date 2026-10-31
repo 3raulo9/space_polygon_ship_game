@@ -79,6 +79,10 @@ public enum Btn : uint
 
     /// <summary>The SOLDIER lets go of a modded weapon. Read only while one is in hand.</summary>
     DropWeapon = 1u << 25,
+
+    /// <summary>The SOLDIER breaks into a sprint. Latched by the rig, not held: see
+    /// <c>SoldierRig.Sprinting</c>.</summary>
+    Sprint     = 1u << 26,
 }
 
 /// <summary>
@@ -265,6 +269,14 @@ public readonly struct InputFrame
     /// <summary>Let go of the modded weapon in hand. While one is held, FIRE swings it
     /// instead of the rifle — see <see cref="RifleDown"/>'s use in the soldier's triggers.</summary>
     public bool DropWeaponPressed => Hit(Btn.DropWeapon);
+
+    /// <summary>SPRINT, held. The rig latches the sprint off it, so this only has to be down
+    /// for the step the run starts on.</summary>
+    public bool SprintDown => this[Btn.Sprint];
+
+    /// <summary>FORWARD going down this step — two of them close together are the other way
+    /// into a sprint.</summary>
+    public bool ForwardTapped => Hit(Btn.Forward);
 
     /// <summary>Movement as (strafe, forward), each -1..1. A body, not a vehicle: the turn
     /// bindings step sideways here, since the mouse is already doing the turning.</summary>

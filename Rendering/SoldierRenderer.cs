@@ -506,7 +506,9 @@ public sealed class SoldierRenderer
             // The eyes and the body point the same way on this chassis — the mouse turns
             // both — so all the look-at has to carry is the pitch.
             LookYaw: 0f, LookPitch: p.Pitch,
-            GroundY: p.GroundHeight, Scale: 1f, Time: elapsed),
+            // The size every other machine draws this body at, so the gait it reads off its
+            // own speed — a walk or a run — is the gait they see.
+            GroundY: p.GroundHeight, Scale: EnemySoldier.Scale, Time: elapsed),
             Raylib.GetFrameTime());
     }
 

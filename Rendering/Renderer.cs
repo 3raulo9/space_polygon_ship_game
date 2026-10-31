@@ -33,6 +33,28 @@ public sealed class Renderer : IDisposable
     /// come in at, so that chassis's "this is fast now" language also arrives as one
     /// change rather than three.</summary>
     private const float FishFovSpeed = 22f;
+
+    // --- On foot, the way the game this body is built after does it ------------------
+
+    /// <summary>How much wider the lens opens while sprinting: the original's fifteen
+    /// percent, which is most of why breaking into a run there feels like a change of gear
+    /// rather than a slightly faster walk.</summary>
+    private const float SprintFovGain = 0.15f;
+
+    /// <summary>The walk's bob, in the original's terms: a dip of a tenth of a block at every
+    /// step and half that sideways across each stride, with a small nod and lean riding on
+    /// it. A block here is measured against the eye rather than the body — the camera is at
+    /// a person's eye height — so a tenth of one is about ten centimetres.</summary>
+    private const float BobDrop = 0.10f;
+    private const float BobSway = 0.05f;
+    private const float BobRoll = 0.0105f;
+    private const float BobNod = 0.014f;
+
+    /// <summary>The original's step: one dip for every one and two-thirds of its blocks
+    /// walked.</summary>
+    private const float BobPerMetre = 0.6f * MathF.PI / SoldierRig.BlockMetres;
+
+    private float _sprintLens, _bobAmp, _bobPhase;
     private Camera3D _camera;
     private readonly EntityRenderer _entities = new();
     // Renders the inventory's items as small rotating 3D models (see DrawInventory).
@@ -219,12 +241,30 @@ public sealed class Renderer : IDisposable
             // Knees buckling under a landing: the whole eye drops and springs back.
             eye.Y += rig.Dip;
 
+            // Walking bobs the eye — down at every footfall, across and back over each
+            // stride, with a small nod and lean on top — and sprinting opens the lens. Both
+            // eased on the render clock, both straight out of the game this body is built
+            // after, and together they are most of what being on foot there feels like.
+            float frame = Raylib.GetFrameTime();
+            _sprintLens += ((rig.Sprinting ? 1f : 0f) - _sprintLens) * (1f - MathF.Exp(-12f * frame));
+            float walking = rig.Grounded ? Math.Clamp(rig.PlanarSpeed / SoldierRig.WalkSpeed, 0f, 1f) : 0f;
+            _bobAmp += (walking - _bobAmp) * (1f - MathF.Exp(-10f * frame));
+            if (rig.Grounded) _bobPhase = (_bobPhase + rig.PlanarSpeed * BobPerMetre * frame) % (MathF.Tau * 64f);
+            if (_bobAmp > 0.001f)
+            {
+                var screenRight = new Vector3(-fwd.Y, 0f, fwd.X);
+                eye += screenRight * (MathF.Sin(_bobPhase) * BobSway * _bobAmp);
+                eye.Y -= MathF.Abs(MathF.Cos(_bobPhase)) * BobDrop * _bobAmp;
+                roll += MathF.Sin(_bobPhase) * BobRoll * _bobAmp;
+                pitch -= MathF.Abs(MathF.Cos(_bobPhase - 0.2f)) * BobNod * _bobAmp;
+            }
+
             // Field of view stretching with speed. Nothing else in the game moves the
             // lens, and it is worth the exception: widening the frame as the player
             // accelerates is what makes thirty metres a second feel like thirty metres a
             // second rather than like a faster walk.
             float fast = Math.Clamp((rig.PlanarSpeed - SoldierFovSpeed) / 16f, 0f, 1f);
-            fov *= 1f + 0.28f * fast * fast;
+            fov *= (1f + 0.28f * fast * fast) * (1f + SprintFovGain * _sprintLens);
         }
 
         // The FISH owns its camera in the same three ways and pushes two of them harder.

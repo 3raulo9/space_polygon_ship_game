@@ -24,7 +24,7 @@ public static class GameCapture
     public static EntityRenderer? Entities { get; set; }
 
     public sealed record Entry(string Id, string Label, DesignKind Kind, PlayerClass Class,
-        Action<EntityRenderer, float> Draw, Walk? Move = null);
+        Action<EntityRenderer, float> Draw, Walk? Move = null, Walk? Sprint = null);
 
     /// <summary>
     /// A character's walk, for the ones whose walk the game draws as a pure function of
@@ -46,7 +46,11 @@ public static class GameCapture
         Player("spider", "SPIDER", DesignKind.Creature, PlayerClass.Spider) with { Move = SpiderWalk() },
         Player("virus", "VIRUS", DesignKind.Creature, PlayerClass.Virus),
         Player("fish", "FISH", DesignKind.Creature, PlayerClass.Fish),
-        Player("soldier", "SOLDIER", DesignKind.Creature, PlayerClass.Soldier) with { Move = SoldierRun() },
+        Player("soldier", "SOLDIER", DesignKind.Creature, PlayerClass.Soldier) with
+        {
+            Move = SoldierGait(SoldierRig.WalkSpeed),
+            Sprint = SoldierGait(SoldierRig.SprintSpeed),
+        },
         Player("flower", "FLOWER", DesignKind.Creature, PlayerClass.Flower),
     };
 
@@ -74,15 +78,17 @@ public static class GameCapture
     private const int SoldierStrides = 2;
 
     /// <summary>
-    /// The SOLDIER at a run, at the chassis's own ground speed: the gait the game draws, with
-    /// its springs and planted feet, copied rather than a gait the creator makes up for a
-    /// body it does not understand. The loop is a whole number of strides; the breath runs
-    /// on a clock of its own, so that clock is nudged until the loop is a whole number of
-    /// breaths too, and the seam closes.
+    /// The SOLDIER on foot at one of the chassis's two ground speeds — the walk for MOVE, the
+    /// sprint for RUN: the gait the game draws, with its springs and planted feet, copied
+    /// rather than a gait the creator makes up for a body it does not understand. The speed
+    /// is the world's, read at the figure's own size, since the world draws it at twice the
+    /// size the creator does. The loop is a whole number of strides; the breath runs on a
+    /// clock of its own, so that clock is nudged until the loop is a whole number of breaths
+    /// too, and the seam closes.
     /// </summary>
-    private static Walk SoldierRun()
+    private static Walk SoldierGait(float worldSpeed)
     {
-        float speed = SoldierRig.GroundSpeed;
+        float speed = worldSpeed / EnemySoldier.Scale;
         float seconds = SoldierStrides * SoldierAnimator.StrideFor(speed) / speed;
         float rate = SoldierAnimator.BreathRate(speed);
         float breaths = MathF.Max(1f, MathF.Round(rate * seconds / MathF.Tau));
@@ -207,6 +213,9 @@ public static class GameCapture
         // back round the long way at the seam.
         if (e.Move is { } walk)
             d.Clips.Add(Record("MOVE", walk.Seconds, d, RunWalk(walk, er), shots, parent, scale0, extent0, wholeTurns: true));
+        // And the sprint, for a body that has one: a clip of its own beside the walk.
+        if (e.Sprint is { } sprint)
+            d.Clips.Add(Record("RUN", sprint.Seconds, d, RunWalk(sprint, er), shots, parent, scale0, extent0, wholeTurns: true));
 
         // The creator's own built-ins (MOVE, ATTACK...) join it; the game's idle keeps its name
         // and wins over the generated one.
