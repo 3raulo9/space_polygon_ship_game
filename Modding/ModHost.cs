@@ -15,7 +15,7 @@ public sealed class ModHost
     /// <summary>The mod's id, as it gave it.</summary>
     public string Id { get; }
 
-    /// <summary>The .dll it was loaded from, e.g. "glowstone-rift.dll".</summary>
+    /// <summary>The .dll it was loaded from, e.g. "my-mod.dll".</summary>
     public string File { get; }
 
     /// <summary>

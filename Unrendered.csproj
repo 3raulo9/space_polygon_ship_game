@@ -10,14 +10,6 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
-  <!-- PortalMods/ holds separate mod projects with their own builds. None of it is part of
-       the game, so the game's build looks past it. -->
-  <ItemGroup>
-    <Compile Remove="PortalMods\**" />
-    <None Remove="PortalMods\**" />
-    <EmbeddedResource Remove="PortalMods\**" />
-  </ItemGroup>
-
   <ItemGroup>
     <PackageReference Include="Raylib-cs" Version="8.0.0" />
     <PackageReference Include="Steamworks.NET" Version="2024.8.0" />

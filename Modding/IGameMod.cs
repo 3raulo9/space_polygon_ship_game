@@ -76,7 +76,7 @@ public interface IGameMod
     void DrawHud(World.World world, ModScene scene) { }
 
     /// <summary>
-    /// A chat line in braces the game itself does not know — <c>{rift}</c>, say. Return the
+    /// A chat line in braces the game itself does not know — <c>{weather}</c>, say. Return the
     /// reply for the console, or null when the line is not this mod's. Solo only: in a match
     /// the host's session reads commands, and it does not ask mods.
     /// </summary>
