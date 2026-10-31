@@ -833,6 +833,51 @@ public sealed class EntityRenderer
     }
 
     /// <summary>
+    /// The SOLDIER running flat out on the spot, for the creator to copy as its walk:
+    /// <paramref name="t"/> seconds into a run at <paramref name="speed"/>, drawn at
+    /// <paramref name="pos"/> while the body it is posed from runs on ahead of it — so the
+    /// planted boots slide back under the figure as they would on a treadmill, which is
+    /// exactly what a walk cycle is.
+    ///
+    /// A run is not a function of where in the stride it is — it is a live animator with
+    /// springs in it, and its arms arrive late and swing past — so this keeps one of its own
+    /// and steps it in order. Asked for an earlier moment than the last, it starts again
+    /// from rest and runs a few seconds in first, so every copy is of the run as it looks
+    /// once it has got going, and two copies are the same copy. <paramref name="clock"/>
+    /// scales the clock the breath is read off, which is how a recording brings the breath
+    /// round with the stride.
+    /// </summary>
+    internal void DrawSoldierRun(Loadout loadout, Vector2 pos, float heading, Vector3 cameraPos,
+        float t, float speed, float clock)
+    {
+        const float runIn = 3f;
+        if (t <= _runAt)
+        {
+            _runner = new SoldierAnimator();
+            _runAt = -runIn;
+        }
+
+        while (_runAt < t - 1e-5f)
+        {
+            float dt = MathF.Min(1f / 120f, t - _runAt);
+            _runAt += dt;
+            _runner.Step(new SoldierAnimator.Signals(
+                Position: new Vector2(0f, speed * _runAt), Height: 0f, Heading: 0f,
+                Velocity: new Vector3(0f, 0f, speed),
+                Grounded: true, Perched: false, Anchored: false, Reeling: false,
+                LeftTension: 0f, RightTension: 0f, LeftOut: false, RightOut: false,
+                LeftHook: Vector3.Zero, RightHook: Vector3.Zero,
+                Bank: 0f, Stagger: 0f, Blades: false,
+                LookYaw: 0f, LookPitch: 0f, GroundY: 0f, Scale: 1f, Time: _runAt * clock), dt);
+        }
+
+        _soldierModel.Draw(loadout, pos, heading, cameraPos, _runner.Pose);
+    }
+
+    private SoldierAnimator _runner = new();
+    private float _runAt = float.MaxValue;
+
+    /// <summary>
     /// Another player's body out in the world, posed for what it is actually doing.
     ///
     /// This is the one draw in the file that had been quietly wrong. Every craft goes

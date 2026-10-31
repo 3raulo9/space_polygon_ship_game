@@ -159,19 +159,26 @@ public sealed class CreatorScreen
     /// <summary>World transform of every part this frame, as drawn and as clicked.</summary>
     public Dictionary<int, Matrix4x4> Pose { get; private set; } = new();
 
-    private (LibraryEntry Entry, string Page, string Clip)? _captureOpen;
+    private (LibraryEntry Entry, string Page, string Clip, float? At, float? Yaw)? _captureOpen;
 
     public CreatorScreen()
     {
         RefreshLibrary();
-        // Capture harness: UNRENDERED_CREATOR=<id>[:page[:clip]] opens straight onto a game
-        // character (or "blank"/"vehicle"), so the bench can be photographed without input.
-        // Deferred to the first update, because copying a game character needs the renderer.
+        // Capture harness: UNRENDERED_CREATOR=<id>[:page[:clip[:t[:yaw]]]] opens straight onto
+        // a game character (or "blank"/"vehicle"), so the bench can be photographed without
+        // input. A <c>t</c> (0..1 through the clip) holds the clip still at that moment, and a
+        // <c>yaw</c> (radians) walks the camera round — the only way to photograph a stride
+        // from the side, or any moment of it but the first. Deferred to the first update,
+        // because copying a game character needs the renderer.
         if (Environment.GetEnvironmentVariable("UNRENDERED_CREATOR") is { } open)
         {
             var bits = open.Split(':');
             var entry = Library.FirstOrDefault(e => string.Equals(e.Note, bits[0], StringComparison.OrdinalIgnoreCase));
-            if (entry != null) _captureOpen = (entry, bits.Length > 1 ? bits[1] : "", bits.Length > 2 ? bits[2] : "");
+            static float? Num(string[] b, int i) => b.Length > i && float.TryParse(b[i],
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float v) ? v : null;
+            if (entry != null)
+                _captureOpen = (entry, bits.Length > 1 ? bits[1] : "", bits.Length > 2 ? bits[2] : "",
+                    Num(bits, 3), Num(bits, 4));
         }
     }
 
@@ -234,6 +241,13 @@ public sealed class CreatorScreen
                 ClipIndex = Math.Max(0, Design.Clips.FindIndex(c => c.Name == co.Clip.ToUpperInvariant()));
             if (co.Page is "select" or "animate" && Design != null)
                 Selected = Design.Parts.FirstOrDefault(p => p.Parent >= 0 && p.Role != PartRole.Spine)?.Id ?? -1;
+            if (co.At is { } at && SelectedClip is { } held)
+            {
+                Playing = false;
+                Selected = -1;
+                Time = Math.Clamp(at, 0f, 0.999f) * held.Duration;
+            }
+            if (co.Yaw is { } yaw) _yaw = _yawT = yaw;
         }
 
         if (_statusTime > 0f) _statusTime -= dt;

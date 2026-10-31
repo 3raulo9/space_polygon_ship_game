@@ -332,9 +332,52 @@ public sealed class SoldierAnimator
     private const float BankPerTurn = 0.55f;
     private const float MaxBodyBank = 0.95f;
 
-    /// <summary>One full stride, in metres. Sets how fast the legs cycle for a given
-    /// ground speed, and getting it wrong is what makes feet skate.</summary>
-    private const float StrideLength = 1.55f;
+    // --- The gait ---
+    //
+    // A stride is two steps, and how long it is grows with speed: a walk is short quick
+    // steps with a foot always down, a run is long ones with both feet off the floor
+    // between them. Everything below is in the model's own metres, so a squad member
+    // drawn twice the size strides twice as far rather than churning twice as fast.
+
+    /// <summary>One full stride — left foot down to left foot down — at a given ground
+    /// speed. Sets how fast the legs cycle, and getting it wrong is what makes feet
+    /// skate.</summary>
+    public static float StrideFor(float speed) => 0.55f + 0.40f * speed;
+
+    /// <summary>How far ahead of its hip a boot comes down, and so how far behind it the
+    /// boot is when it leaves. Short legs on this convention: anything longer and the body
+    /// has to squat to reach its own footprints.</summary>
+    private const float MaxReach = 0.34f;
+
+    /// <summary>The share of a stride each boot spends on the ground. Over a half is a walk —
+    /// there is always a foot down — and well under it is a run, with a moment in every
+    /// step where nothing is.</summary>
+    private const float MaxDuty = 0.65f;
+    private const float MinDuty = 0.2f;
+
+    /// <summary>The ground speeds across which a walk becomes a run: the arms come up and
+    /// bend, the knees drive, the body leans and starts to bounce.</summary>
+    private const float RunFrom = 2.0f;
+    private const float RunFull = 4.2f;
+
+    /// <summary>How high a boot is carried through a step. A walk barely clears the floor;
+    /// a run kicks the heel up behind it before the knee drives it through.</summary>
+    private const float WalkLift = 0.06f;
+    private const float RunLift = 0.24f;
+
+    /// <summary>Below this the body is standing, not striding: the feet stay where they are
+    /// and only step when the body has drifted off them. Two numbers, so a speed hovering
+    /// at the line does not flicker between the two.</summary>
+    private const float StrideOn = 0.6f;
+    private const float StrideOff = 0.35f;
+
+    /// <summary>A standing body's own small steps: how far a planted boot may end up from
+    /// where it belongs under the hip before it is picked up and put back, how long that
+    /// takes, and how high it lifts. These are what a turn on the spot and the last stride
+    /// of a run are made of.</summary>
+    private const float SettleSlack = 0.11f;
+    private const float SettleTime = 0.22f;
+    private const float SettleLift = 0.07f;
 
     // --- Landings ---
 
@@ -442,10 +485,46 @@ public sealed class SoldierAnimator
     // rate the body is actually covering ground.
     private float _stride;
 
-    // Where each boot is currently nailed down, in world coordinates, and how firmly.
-    private Vector2 _leftPlant, _rightPlant;
-    private float _leftPlantY, _rightPlantY;
-    private bool _leftPlanted, _rightPlanted;
+    // The gait this frame: ground speed in the model's own metres, how far it is from a
+    // walk to a run, and whether the body is striding at all or standing.
+    private float _gait, _run, _duty = MaxDuty;
+    private Vector2 _gaitDir = new(0f, 1f);
+    private bool _striding;
+
+    /// <summary>
+    /// One boot. Either it is <see cref="Down"/> — nailed to a spot on the world and staying
+    /// there while the body travels over it — or it is in the air on a step, travelling in
+    /// the body's own frame from where it left to where it is going to land.
+    /// </summary>
+    private sealed class Foot
+    {
+        public bool Down;
+        public Vector2 Plant;
+        public float PlantY;
+        /// <summary>Where the sole is this frame, in the body's own frame.</summary>
+        public Vector3 Cur;
+        /// <summary>Where the step in progress left from, in the body's own frame.</summary>
+        public Vector3 From;
+        /// <summary>How far through the stride's swing it already was when it left — so a
+        /// boot picked up late runs the rest of its step from where it actually is instead
+        /// of jumping to where an on-time one would be.</summary>
+        public float Q0;
+        /// <summary>A step of the standing body's own rather than one of the stride's, and
+        /// how far through it.</summary>
+        public bool Settling;
+        public float SettleT;
+        public bool Known;
+    }
+
+    private readonly Foot _left = new(), _right = new();
+
+    /// <summary>How much the feet get to overrule the legs: all of it on the ground,
+    /// fading out over a moment after leaving it.</summary>
+    private float _footHold;
+
+    /// <summary>How far the hips are lowered so both boots can reach the floor they are
+    /// planted on — the dip of a long step, and the crouch of a run.</summary>
+    private Spring _hipDrop;
 
     // The one-shot layers.
     private float _fire, _fireSide = 1f;
@@ -475,7 +554,7 @@ public sealed class SoldierAnimator
             _prevVel = s.Velocity;
             _prevDir = Facing(s.Heading);
             _hadGround = s.Grounded;
-            _leftPlant = _rightPlant = s.Position;
+            _footHold = s.Grounded ? 1f : 0f;
         }
 
         ReadSignals(s, dt);
@@ -538,13 +617,34 @@ public sealed class SoldierAnimator
             _turn = Lerp(_turn, 0f, 1f - MathF.Exp(-6f * dt));
         }
 
-        // The stride, advanced by ground covered. A figure whose legs cycle on the clock
-        // skates whenever it is going any speed but the one the cycle was tuned for.
-        if (s.Grounded)
-            _stride += _planar / StrideLength * MathF.Tau * dt;
-        else
-            _stride += dt * 2f;   // idles on in the air so the legs never resume mid-step
-        if (_stride > MathF.Tau * 1024f) _stride -= MathF.Tau * 1024f;
+        // The gait, read in the body's own frame and the model's own metres: which way the
+        // ground is going past under it, and how fast. A body strafing steps sideways and
+        // one backing off steps backward, off the same cycle.
+        {
+            float c = MathF.Cos(s.Heading), sn = MathF.Sin(s.Heading);
+            float scale = MathF.Max(1e-3f, s.Scale);
+            var local = new Vector2(
+                (s.Velocity.X * c - s.Velocity.Z * sn) / scale,
+                (s.Velocity.X * sn + s.Velocity.Z * c) / scale);
+            _gait = local.Length();
+            if (_gait > 0.05f) _gaitDir = local / _gait;
+            _run = SmoothStep(RunFrom, RunFull, _gait);
+
+            // Each boot spends long enough on the floor to sweep from its reach in front
+            // to the same distance behind; the rest of the stride it is in the air.
+            float stride = StrideFor(_gait);
+            _duty = Math.Clamp(2f * MaxReach / stride, MinDuty, MaxDuty);
+
+            if (_gait > StrideOn) _striding = true;
+            else if (_gait < StrideOff) _striding = false;
+
+            // The stride, advanced by ground covered. A figure whose legs cycle on the
+            // clock skates whenever it is going any speed but the one the cycle was tuned
+            // for.
+            if (s.Grounded) _stride += _gait / stride * MathF.Tau * dt;
+            else _stride += dt * 2f;   // idles on in the air so the legs never resume mid-step
+            if (_stride > MathF.Tau * 1024f) _stride -= MathF.Tau * 1024f;
+        }
 
         // Leaving the ground and arriving back on it, worked out rather than reported —
         // which means it is right for a remote body whose one-frame flags never crossed
@@ -555,12 +655,11 @@ public sealed class SoldierAnimator
             _squash.Kick(-3.1f * Math.Clamp(impact / FullSquashSpeed, 0.12f, 1.5f));
             _sinceLand = 0f;
             _airTime = 0f;
-            _leftPlanted = _rightPlanted = false;
+            _justLanded = true;
         }
         else if (!s.Grounded && _hadGround)
         {
             _sinceLaunch = 0f;
-            _leftPlanted = _rightPlanted = false;
         }
 
         _prevVelY = s.Velocity.Y;
@@ -582,6 +681,10 @@ public sealed class SoldierAnimator
     }
 
     private float _prevVelY;
+
+    /// <summary>Set on the frame the body arrives, so the feet are put down where the legs
+    /// actually are rather than where the last stride left them.</summary>
+    private bool _justLanded;
 
     // ================================================================================
     //  The base locomotion layer
@@ -644,30 +747,20 @@ public sealed class SoldierAnimator
         pose.PelvisRoll += _bank.Value * 0.45f;
         pose.HeadTilt -= _bank.Value * 0.22f;   // the head stays nearer level than the body
 
-        ReadFootLoad(s);
         return pose;
     }
 
     /// <summary>
-    /// Which boot is carrying, in one place rather than written by whichever pose function
-    /// happened to run last. Only meaningful with weight on the ground: in the air both
-    /// are zero, which is what anything reading this — the viewmodel's footfall bob, a
-    /// step cue — should see.
+    /// Which boot is carrying, read off the feet themselves once they have been placed —
+    /// one answer, from the thing that actually decided it. Only meaningful with weight on
+    /// the ground: in the air both are zero, which is what anything reading this — the
+    /// viewmodel's footfall bob, a step cue — should see.
     /// </summary>
     private void ReadFootLoad(in Signals s)
     {
-        if (!s.Grounded && !s.Perched) { LeftFootLoad = RightFootLoad = 0f; return; }
         if (s.Perched) { LeftFootLoad = RightFootLoad = 0.5f; return; }
-
-        // Standing, both feet share it and the share follows the slow weight shift; moving,
-        // it alternates with the stride.
-        float pace = Math.Clamp(_planar / 5.5f, 0f, 1f);
-        float swing = MathF.Sin(_stride);
-        float shift = MathF.Sin(s.Time * 0.55f);
-        float still = 0.5f - shift * 0.35f;
-        float striding = MathF.Max(0f, -swing);
-        LeftFootLoad = Lerp(still, striding, pace);
-        RightFootLoad = Lerp(1f - still, MathF.Max(0f, swing), pace);
+        LeftFootLoad = _left.Down ? _footHold : 0f;
+        RightFootLoad = _right.Down ? _footHold : 0f;
     }
 
     /// <summary>
@@ -682,8 +775,9 @@ public sealed class SoldierAnimator
 
         if (s.Grounded)
         {
-            // The stand and the stride, shared out by how fast the boots are moving.
-            float pace = Math.Clamp(_planar / 5.5f, 0f, 1f);
+            // The stand and the stride, shared out by how fast the boots are moving. The
+            // stride covers the walk as well as the run, so it takes over early.
+            float pace = Math.Clamp((_gait - 0.2f) / 1.2f, 0f, 1f);
             w[(int)SoldierMotion.Standing] = 1f - pace;
             w[(int)SoldierMotion.Running] = pace;
 
@@ -777,10 +871,13 @@ public sealed class SoldierAnimator
     /// <summary>
     /// At ease. Weight on one leg, then slowly on the other — a person standing still does
     /// not stand still, and the slow transfer is what stops an idle from reading as a
-    /// pause button.
+    /// pause button. The boots are planted, so the shift is the hips travelling across
+    /// them: the loaded side rises, the other drops, and the shoulders tip back the other
+    /// way to keep the head over the feet.
     /// </summary>
     private SoldierPose Standing(in Signals s)
     {
+        // Positive loads the right boot.
         float shift = MathF.Sin(s.Time * 0.55f);
 
         // The gesture: every seven seconds the figure brings its right launcher up and looks
@@ -794,9 +891,10 @@ public sealed class SoldierAnimator
             : 0f;
 
         var p = SoldierPose.Rest;
-        p.Sway = shift * 0.035f;
-        p.PelvisRoll = shift * 0.05f;
-        p.ChestRoll = -shift * 0.075f;      // the shoulders stay level over tilted hips
+        p.Rise = -0.008f;                   // knees soft, never locked
+        p.Sway = -shift * 0.028f;
+        p.PelvisRoll = -shift * 0.06f;
+        p.ChestRoll = shift * 0.085f;       // the shoulders stay level over tilted hips
         p.PelvisYaw = shift * 0.05f;
         p.ChestYaw = -shift * 0.06f;
 
@@ -807,66 +905,144 @@ public sealed class SoldierAnimator
         p.HeadYaw = MathF.Sin(s.Time * 0.42f) * 0.4f - check * 0.5f;
         p.HeadNod = MathF.Sin(s.Time * 1.1f) * 0.03f + check * 0.30f;
 
-        // Arms hang with a real bend. The elbows are the point of this figure, so the
-        // resting pose is the one that shows them — and the right one lifts its launcher
-        // into the eye-line for the check.
-        p.LeftArm = LimbPose.FromBend(-0.10f - shift * 0.02f, -0.10f - shift * 0.03f, 0.42f, left: true);
+        // Arms hang just off the body with the elbows soft — the forearm a little ahead of
+        // the upper arm, which is the way an elbow bends and the shape a relaxed arm takes —
+        // and the right one lifts its launcher into the eye-line for the check.
+        p.LeftArm = LimbPose.FromBend(-0.04f - shift * 0.02f, 0.10f + shift * 0.02f, -0.16f, left: true);
         p.RightArm = LimbPose.FromBend(
-            -0.10f + shift * 0.02f - check * 0.95f,
-            -0.10f + shift * 0.03f - check * 0.18f,
-            0.42f + check * 0.55f, left: false);
+            -0.04f + shift * 0.02f - check * 0.95f,
+            0.10f - shift * 0.02f + check * 0.10f,
+            -0.16f - check * 0.80f, left: false);
         p.RightRigLift = check * 0.30f;
 
-        // The straightened leg carries; the other bends and takes almost nothing.
-        p.LeftLeg = LimbPose.FromBend(0.05f - shift * 0.04f, 0.02f,
-            -0.14f - MathF.Max(0f, shift) * 0.12f, left: true);
-        p.RightLeg = LimbPose.FromBend(0.05f + shift * 0.04f, 0.02f,
-            -0.14f - MathF.Max(0f, -shift) * 0.12f, left: false);
+        // The legs only matter while the feet are not holding them, which on the ground is
+        // never; straight with a little give is the right thing for them to fall back to.
+        p.LeftLeg = LimbPose.FromBend(0f, 0.02f, 0.08f, left: true);
+        p.RightLeg = LimbPose.FromBend(0f, 0.02f, 0.08f, left: false);
 
         return p;
     }
 
     /// <summary>
-    /// A stride. Legs opposed, arms opposed to the legs, and — the part that matters — the
-    /// hips and the shoulders turning against each other, so the body counter-rotates
-    /// through every step instead of being carried along as one piece.
+    /// A stride, from an amble to a flat-out run on one continuous dial. The legs are not
+    /// in here — the feet carry them, planted and swung in <see cref="SolveFeet"/> — so this
+    /// is everything the legs <em>do</em> to the rest of the body:
+    ///
+    /// <list type="bullet">
+    /// <item>the hips and the shoulders turning against each other through every step,
+    /// so the body counter-rotates instead of being carried along as one piece;</item>
+    /// <item>the weight coming down through each stance — a walk sways over the planted
+    /// boot and drops the other hip, a run sinks into it and nods the chest;</item>
+    /// <item>the arms opposing the legs: hanging and swinging loose at a walk, driven at a
+    /// right angle at a run, the fist coming up and across as it goes forward and the
+    /// elbow opening as it goes back;</item>
+    /// <item>and the head held level through all of it, which is what a person running
+    /// does and a puppet does not.</item>
+    /// </list>
     /// </summary>
     private SoldierPose Running(in Signals s)
     {
-        float swing = MathF.Sin(_stride);
-        float lift = MathF.Max(0f, MathF.Cos(_stride));
-        float fall = MathF.Max(0f, -MathF.Cos(_stride));
-        float pace = Math.Clamp(_planar / 6f, 0f, 1f);
+        float pace = Math.Clamp(_gait / 1.4f, 0f, 1f);
+        float run = _run;
         float hurt = Math.Clamp(s.Stagger, 0f, 1f);
 
+        float pl = LegPhase(left: true), pr = LegPhase(left: false);
+        float fl = Forwardness(pl), fr = Forwardness(pr);
+        float cl = StanceLoad(pl), cr = StanceLoad(pr);
+        float give = MathF.Max(cl, cr);
+
         var p = SoldierPose.Rest;
-        // Two rises per stride — the body vaults over each planted leg — which is the
-        // cheapest possible thing that makes a run read as pushing off a floor.
-        p.Rise = -0.028f * pace * (0.5f + 0.5f * MathF.Cos(_stride * 2f)) - 0.10f * hurt;
-        p.Surge = 0.02f * pace;
-        p.PelvisPitch = 0.10f * pace + 0.30f * hurt;
-        p.ChestPitch = 0.13f * pace + 0.35f * hurt;
+
+        // Down into every footfall and up out of it — a run more than a walk, and a run
+        // carries itself lower throughout. The walk's own rise and fall over a straight
+        // leg is not written here: the feet produce it, by lowering the hips exactly as far
+        // as a long step needs.
+        p.Rise = (-0.012f - 0.035f * run) * give * pace - 0.015f * run * pace - 0.10f * hurt;
+        p.Surge = 0.02f * run * pace;
+
+        // Leaning into the speed, more at a run.
+        float lean = (0.04f + 0.10f * run) * pace;
+        float chestLean = (0.02f + 0.14f * run) * pace + 0.05f * run * give * pace;
+        p.PelvisPitch = lean + 0.30f * hurt;
+        p.ChestPitch = chestLean + 0.35f * hurt;
 
         // Contrapposto. The leading leg's side of the pelvis comes forward and the chest
-        // answers the other way.
-        p.PelvisYaw = -Contrapposto * swing * pace;
-        p.ChestYaw = Contrapposto * 1.15f * swing * pace;
-        p.PelvisRoll = 0.09f * pace * MathF.Sin(_stride * 2f);
-        p.ChestRoll = -0.06f * pace * MathF.Sin(_stride * 2f);
+        // answers the other way, past where it started.
+        float lead = (fl - fr) * 0.5f;   // +1 with the left boot out ahead
+        p.PelvisYaw = -Contrapposto * lead * pace;
+        p.ChestYaw = Contrapposto * 1.9f * lead * pace;
 
-        p.HeadNod = -0.10f + 0.5f * hurt;
+        // The hip over the boot in the air drops, and a walk sways across onto the one on
+        // the floor. A run carries itself straighter.
+        p.PelvisRoll = 0.07f * (cl - cr) * pace;
+        p.ChestRoll = -0.05f * (cl - cr) * pace;
+        p.Sway = 0.022f * (cl - cr) * (1f - run) * pace;
 
-        float armSwing = 0.62f * pace;
-        p.LeftArm = LimbPose.FromBend(-armSwing * swing, -0.12f, 0.75f + 0.25f * lift, left: true);
-        p.RightArm = LimbPose.FromBend(armSwing * swing, -0.12f, 0.75f + 0.25f * fall, left: false);
+        // The head keeps the eyes level over a body pitched forward and bouncing — and a
+        // body that is hurt stops managing to.
+        p.HeadNod = -0.8f * (lean + chestLean) + 0.5f * hurt;
 
-        p.LeftLeg = LimbPose.FromBend(0.75f * swing * pace + 0.6f * hurt, 0.03f,
-            -0.55f * lift * pace - 0.7f * hurt, left: true);
-        p.RightLeg = LimbPose.FromBend(-0.75f * swing * pace + 0.2f * hurt, 0.03f,
-            -0.55f * fall * pace - 0.4f * hurt, left: false);
+        // Each arm goes with the opposite leg.
+        float swing = Lerp(0.30f, 0.70f, run) * pace;
+        float elbow = Lerp(-0.22f, -1.45f, run);
+        p.LeftArm = ArmStride(fr, swing, elbow, run, left: true);
+        p.RightArm = ArmStride(fl, swing, elbow, run, left: false);
+        if (hurt > 0f)
+        {
+            // Hurt, the arms stop working and hang.
+            p.LeftArm = LimbPose.Lerp(p.LeftArm, LimbPose.FromBend(-0.1f, 0.12f, -0.3f, left: true), hurt * 0.6f);
+            p.RightArm = LimbPose.Lerp(p.RightArm, LimbPose.FromBend(-0.1f, 0.12f, -0.3f, left: false), hurt * 0.6f);
+        }
+
+        // Somewhere for the legs to fall back to in the moments the feet are not holding
+        // them: forward and back with the stride, the knee folding through the swing.
+        p.LeftLeg = LimbPose.FromBend(-0.45f * fl * pace, 0.02f,
+            (0.2f + 0.9f * run * (1f - cl)) * pace, left: true);
+        p.RightLeg = LimbPose.FromBend(-0.45f * fr * pace, 0.02f,
+            (0.2f + 0.9f * run * (1f - cr)) * pace, left: false);
 
         return p;
     }
+
+    /// <summary>
+    /// One arm through a stride, given how far forward the opposite leg is. Swings from the
+    /// shoulder; at a run the forearm comes up as the arm drives forward and the fist
+    /// crosses toward the middle of the chest, then the elbow opens a little on the way back
+    /// — which is the difference between arms that pump and arms that dangle.
+    /// </summary>
+    private static LimbPose ArmStride(float f, float swing, float elbow, float run, bool left)
+    {
+        float ahead = MathF.Max(0f, f), behind = MathF.Max(0f, -f);
+        float bend = elbow - 0.40f * run * ahead + 0.30f * run * behind;
+        var arm = LimbPose.FromBend(-swing * f, 0.08f + 0.05f * run, bend, left);
+        arm.LowerRoll += (left ? -1f : 1f) * 0.28f * run * ahead;
+        return arm;
+    }
+
+    /// <summary>Where one leg is in the stride, 0..1: down at 0, up at the duty, back
+    /// down at 1. The two legs are half a stride apart.</summary>
+    private float LegPhase(bool left)
+    {
+        float t = _stride / MathF.Tau + (left ? 0f : 0.5f);
+        return t - MathF.Floor(t);
+    }
+
+    /// <summary>How far forward a boot is through the stride, +1 at its reach in front (as it
+    /// lands) to −1 at its reach behind (as it leaves). Bent to the stance's share of the
+    /// stride rather than a plain cosine, so whatever reads off it — the arms, the hips —
+    /// turns over at the moment the foot actually does.</summary>
+    private float Forwardness(float phase)
+    {
+        float w = phase < _duty
+            ? 0.5f * phase / _duty
+            : 0.5f + 0.5f * (phase - _duty) / (1f - _duty);
+        return MathF.Cos(w * MathF.Tau);
+    }
+
+    /// <summary>How much of the body's weight one boot is taking: nothing in the air,
+    /// peaking halfway through its time on the floor.</summary>
+    private float StanceLoad(float phase)
+        => phase < _duty ? MathF.Sin(phase / _duty * MathF.PI) : 0f;
 
     /// <summary>
     /// Thrown. The body extends into whatever it was just launched along: chest opening,
@@ -889,8 +1065,8 @@ public sealed class SoldierAnimator
 
         // Arms swept back and out. The elbows stay nearly straight — an extension with
         // bent elbows reads as flailing rather than as commitment.
-        p.LeftArm = LimbPose.FromBend(0.95f * commit, -0.62f * commit, 0.18f, left: true);
-        p.RightArm = LimbPose.FromBend(0.95f * commit, -0.62f * commit, 0.18f, left: false);
+        p.LeftArm = LimbPose.FromBend(0.95f * commit, 0.42f * commit, -0.15f, left: true);
+        p.RightArm = LimbPose.FromBend(0.95f * commit, 0.42f * commit, -0.15f, left: false);
 
         p.LeftLeg = LimbPose.FromBend(0.30f + 0.35f * commit, 0.10f, 0.20f, left: true);
         p.RightLeg = LimbPose.FromBend(0.22f + 0.40f * commit, 0.10f, 0.28f, left: false);
@@ -926,8 +1102,8 @@ public sealed class SoldierAnimator
         // Both arms up and forward on the launchers — the shape a body takes when its
         // weight is hanging off its own hips.
         float haul = Math.Clamp(MathF.Max(s.LeftTension, s.RightTension), 0f, 1f);
-        p.LeftArm = LimbPose.FromBend(-0.95f * fold - 0.25f * haul, -0.26f - 0.14f * fold, 0.48f, left: true);
-        p.RightArm = LimbPose.FromBend(-0.95f * fold - 0.25f * haul, -0.26f - 0.14f * fold, 0.48f, left: false);
+        p.LeftArm = LimbPose.FromBend(-0.95f * fold - 0.25f * haul, 0.16f + 0.10f * fold, -0.48f, left: true);
+        p.RightArm = LimbPose.FromBend(-0.95f * fold - 0.25f * haul, 0.16f + 0.10f * fold, -0.48f, left: false);
 
         // Legs trailing, tucked tighter the faster it goes, and split slightly so the
         // silhouette has two of them rather than one thick one.
@@ -955,11 +1131,12 @@ public sealed class SoldierAnimator
         // Arms drawn up and in, elbows hard — the pose of pulling on something rather than
         // hanging off it. The asymmetry follows which cable is actually taking the load.
         float lean = Math.Clamp(s.RightTension - s.LeftTension, -1f, 1f);
-        p.LeftArm = LimbPose.FromBend(-1.35f - 0.15f * fold, -0.16f + 0.10f * lean, 1.05f, left: true);
-        p.RightArm = LimbPose.FromBend(-1.35f - 0.15f * fold, -0.16f - 0.10f * lean, 1.05f, left: false);
+        p.LeftArm = LimbPose.FromBend(-1.35f - 0.15f * fold, 0.18f + 0.10f * lean, 1.05f, left: true);
+        p.RightArm = LimbPose.FromBend(-1.35f - 0.15f * fold, 0.18f - 0.10f * lean, 1.05f, left: false);
 
-        p.LeftLeg = LimbPose.FromBend(-0.35f, 0.10f, -0.95f - 0.25f * fold, left: true);
-        p.RightLeg = LimbPose.FromBend(-0.25f, 0.10f, -0.85f - 0.25f * fold, left: false);
+        // Knees up under the chest: thighs driven forward, shins hanging back off them.
+        p.LeftLeg = LimbPose.FromBend(-1.15f - 0.20f * fold, 0.10f, 1.45f, left: true);
+        p.RightLeg = LimbPose.FromBend(-0.95f - 0.20f * fold, 0.10f, 1.35f, left: false);
 
         return p;
     }
@@ -992,18 +1169,18 @@ public sealed class SoldierAnimator
 
         // Spread: arms wide and high, elbows soft, legs open — a shape with a lot of
         // surface, which is exactly what it is meant to read as.
-        var wideL = LimbPose.FromBend(-0.55f, 1.05f, 0.55f, left: true);
-        var wideR = LimbPose.FromBend(-0.55f, 1.05f, 0.55f, left: false);
+        var wideL = LimbPose.FromBend(-0.55f, 1.05f, -0.50f, left: true);
+        var wideR = LimbPose.FromBend(-0.55f, 1.05f, -0.50f, left: false);
         // Streamlined: swept back and tight to the body.
-        var tightL = LimbPose.FromBend(0.90f, 0.34f, 0.22f, left: true);
-        var tightR = LimbPose.FromBend(0.90f, 0.34f, 0.22f, left: false);
+        var tightL = LimbPose.FromBend(0.90f, 0.34f, -0.15f, left: true);
+        var tightR = LimbPose.FromBend(0.90f, 0.34f, -0.15f, left: false);
         p.LeftArm = LimbPose.Lerp(wideL, tightL, glide);
         p.RightArm = LimbPose.Lerp(wideR, tightR, glide);
         p.LeftArm.UpperRoll += 0.10f * tumble;
         p.RightArm.UpperRoll -= 0.10f * tumble;
 
-        var legWideL = LimbPose.FromBend(0.10f, 0.26f, -0.45f, left: true);
-        var legWideR = LimbPose.FromBend(0.10f, 0.26f, -0.45f, left: false);
+        var legWideL = LimbPose.FromBend(-0.20f, 0.26f, 0.55f, left: true);
+        var legWideR = LimbPose.FromBend(0.05f, 0.26f, 0.40f, left: false);
         var legTightL = LimbPose.FromBend(0.55f, 0.05f, 0.42f, left: true);
         var legTightR = LimbPose.FromBend(0.55f, 0.05f, 0.42f, left: false);
         p.LeftLeg = LimbPose.Lerp(legWideL, legTightL, glide);
@@ -1024,10 +1201,10 @@ public sealed class SoldierAnimator
         p.HeadNod = -0.22f;
         p.HeadYaw = MathF.Sin(s.Time * 0.6f) * 0.18f;
 
-        p.LeftArm = LimbPose.FromBend(-0.75f, -0.22f, 0.95f, left: true);
-        p.RightArm = LimbPose.FromBend(-1.15f, -0.20f, 1.15f, left: false);
-        p.LeftLeg = LimbPose.FromBend(-0.95f, 0.16f, -1.25f, left: true);
-        p.RightLeg = LimbPose.FromBend(-0.80f, 0.14f, -1.05f, left: false);
+        p.LeftArm = LimbPose.FromBend(-0.75f, 0.14f, 0.95f, left: true);
+        p.RightArm = LimbPose.FromBend(-1.15f, 0.14f, 1.15f, left: false);
+        p.LeftLeg = LimbPose.FromBend(-1.05f, 0.16f, 1.60f, left: true);
+        p.RightLeg = LimbPose.FromBend(-0.85f, 0.14f, 1.40f, left: false);
 
         return p;
     }
@@ -1048,13 +1225,13 @@ public sealed class SoldierAnimator
         p.ChestPitch = 0.30f * hard;
         p.HeadNod = -0.15f;
 
-        p.LeftArm = LimbPose.FromBend(-0.55f * hard, -0.42f * hard, 0.70f, left: true);
-        p.RightArm = LimbPose.FromBend(-0.55f * hard, -0.42f * hard, 0.70f, left: false);
+        p.LeftArm = LimbPose.FromBend(-0.55f * hard, 0.42f * hard, -0.60f, left: true);
+        p.RightArm = LimbPose.FromBend(-0.55f * hard, 0.42f * hard, -0.60f, left: false);
 
         // Knees up and ahead of the hips, so the legs get under the body before it lands
         // rather than after.
-        p.LeftLeg = LimbPose.FromBend(-0.55f * hard, 0.10f, -0.80f * hard, left: true);
-        p.RightLeg = LimbPose.FromBend(-0.48f * hard, 0.10f, -0.72f * hard, left: false);
+        p.LeftLeg = LimbPose.FromBend(-0.70f * hard, 0.10f, 0.95f * hard, left: true);
+        p.RightLeg = LimbPose.FromBend(-0.60f * hard, 0.10f, 0.85f * hard, left: false);
 
         return p;
     }
@@ -1075,13 +1252,15 @@ public sealed class SoldierAnimator
         p.HeadNod = 0.25f * deep;
         p.Surge = -0.02f * deep;
 
-        p.LeftArm = LimbPose.FromBend(-0.30f - 0.55f * deep, -0.30f - 0.25f * deep, 0.85f, left: true);
-        p.RightArm = LimbPose.FromBend(-0.20f - 0.45f * deep, -0.26f - 0.20f * deep, 0.75f, left: false);
+        p.LeftArm = LimbPose.FromBend(-0.30f - 0.55f * deep, 0.22f + 0.25f * deep, -0.70f, left: true);
+        p.RightArm = LimbPose.FromBend(-0.20f - 0.45f * deep, 0.18f + 0.20f * deep, -0.60f, left: false);
 
         // Both knees fold. Not evenly — a person arrives on one leg harder than the other,
-        // and a perfectly symmetric crouch is the one thing a real landing never is.
-        p.LeftLeg = LimbPose.FromBend(-0.28f * deep, 0.10f, -1.15f * deep, left: true);
-        p.RightLeg = LimbPose.FromBend(-0.18f * deep, 0.08f, -0.85f * deep, left: false);
+        // and a perfectly symmetric crouch is the one thing a real landing never is. The
+        // feet are planted by then and have the final say; this is what the legs fall back
+        // to if they are not.
+        p.LeftLeg = LimbPose.FromBend(-0.55f * deep, 0.10f, 1.15f * deep, left: true);
+        p.RightLeg = LimbPose.FromBend(-0.40f * deep, 0.08f, 0.85f * deep, left: false);
 
         return p;
     }
@@ -1214,8 +1393,8 @@ public sealed class SoldierAnimator
     /// </summary>
     private SoldierPose BreathLayer(in Signals s)
     {
-        float effort = 1f + Math.Clamp(_planar / 18f, 0f, 1f) + Math.Clamp(s.Stagger, 0f, 1f);
-        float breath = MathF.Sin(s.Time * (1.5f + 0.6f * effort));
+        float effort = Effort(_planar, s.Stagger);
+        float breath = MathF.Sin(s.Time * BreathRate(_planar, s.Stagger));
 
         var p = SoldierPose.Rest;
         p.Rise = breath * BreathRise * effort;
@@ -1256,6 +1435,15 @@ public sealed class SoldierAnimator
     }
 
     private Spring _lookYaw, _lookNod, _lookChest;
+
+    /// <summary>How hard the body is working: one at rest, up to three running hurt.</summary>
+    private static float Effort(float speed, float stagger)
+        => 1f + Math.Clamp(speed / 18f, 0f, 1f) + Math.Clamp(stagger, 0f, 1f);
+
+    /// <summary>Radians of breath a second, for a body going at <paramref name="speed"/>.
+    /// Public so a recording of the run can bring its breath round with its stride.</summary>
+    public static float BreathRate(float speed, float stagger = 0f)
+        => 1.5f + 0.6f * Effort(speed, stagger);
 
     /// <summary>
     /// Shots and blade swings, as arcs rather than as poses.
@@ -1378,8 +1566,9 @@ public sealed class SoldierAnimator
 
         // And the legs give slightly — a hit that the knees do not answer is a hit that
         // landed on a statue.
-        p.LeftLeg.LowerPitch += -0.20f * amp;
-        p.RightLeg.LowerPitch += -0.16f * amp;
+        p.LeftLeg.LowerPitch += 0.20f * amp;
+        p.RightLeg.LowerPitch += 0.16f * amp;
+        p.Rise -= 0.025f * amp;
         return p;
     }
 
@@ -1450,106 +1639,220 @@ public sealed class SoldierAnimator
     /// The last word. Everything above decides what the body would like to be doing; this
     /// decides what it is actually touching, and where those disagree the contact wins.
     ///
-    /// Two contacts matter on this chassis. Feet: while the boots are down, each one is
-    /// nailed to the spot it was put on and stays there while the body travels over it,
-    /// with the knee solving to keep it there — which is the difference between striding
-    /// and skating, and the only way a foot ever lands on a surface that is not exactly
-    /// where the pose assumed it was. Hands: while a cable is out, the hand goes to the
-    /// launcher it is leaving through, so an arm is visibly holding the line that is
-    /// carrying the body rather than waving near it.
+    /// Two contacts matter on this chassis. Feet: on the ground the legs are not posed at
+    /// all — each boot is either nailed to the spot it was put on, staying there while the
+    /// body travels over it, or on its way through the air to the next one, and the knee is
+    /// solved to whichever. That is the difference between striding and skating. Hands:
+    /// while a cable is out, the hand goes to the launcher it is leaving through, so an arm
+    /// is visibly holding the line that is carrying the body rather than waving near it.
     /// </summary>
     private void SolveContacts(ref SoldierPose p, in Signals s, float dt)
     {
-        if (s.Grounded) SolveFeet(ref p, s, dt);
+        // How much the feet hold the legs: all of it on the ground — at once on the frame
+        // the body arrives, because a landing has to be on its feet the frame it happens —
+        // and fading out over a moment after leaving it, so the legs ease out of their
+        // last step into the air pose instead of snapping to it.
+        if (s.Grounded) _footHold = _justLanded ? 1f : MathF.Min(1f, _footHold + dt / 0.06f);
+        else _footHold = MathF.Max(0f, _footHold - dt / 0.15f);
+
+        if (s.Grounded) PlaceFeet(p, s, dt);
+        if (_footHold > 0.001f && _left.Known) SolveFeet(ref p, s, dt);
+        _justLanded = false;
+
+        if (s.Grounded) ReadFootLoad(s);
+        else if (s.Perched) LeftFootLoad = RightFootLoad = 0.5f;
+        else LeftFootLoad = RightFootLoad = 0f;
+
         SolveHands(ref p, s, dt);
     }
 
     /// <summary>
-    /// Plants each boot in turn and solves the leg to it.
+    /// Decides where each boot is this frame.
     ///
-    /// A foot is planted when the stride says it is carrying, and it is planted at the
-    /// place it happened to be at that moment, on the surface the probe reports under that
-    /// place. It then stays at that world position — not that body-relative position —
-    /// until the stride hands the weight to the other foot, so the body travels over a
-    /// stationary foot exactly as a real one does.
+    /// Striding, the stride owns the feet: a boot whose share of the cycle is on the floor
+    /// is planted — at a world position, which it keeps while the body passes over it —
+    /// and one whose share is in the air is carried from where it left to where it is going
+    /// to land, in the body's own frame. The carry is shaped by the gait: a walk skims the
+    /// boot through low and even; a run kicks the heel up behind and only then drives the
+    /// knee through, which is most of what makes a run read as one.
+    ///
+    /// Standing, the feet stay put, and a boot is only picked up when the body has drifted
+    /// far enough off it — turned on the spot, or come to a stop mid-stride — to need
+    /// putting back under its hip. One at a time, with the other one down.
     /// </summary>
-    private void SolveFeet(ref SoldierPose p, in Signals s, float dt)
+    private void PlaceFeet(in SoldierPose p, in Signals s, float dt)
     {
-        float swing = MathF.Sin(_stride);
-        bool leftDown = swing <= 0f;
-        float pace = Math.Clamp(_planar / 6f, 0f, 1f);
+        float stride = StrideFor(_gait);
+        float reach = _duty * stride * 0.5f;
+        float lift = Lerp(WalkLift, RunLift, _run);
+        // The boots come in under the body as it speeds up: a walk stands on two tracks, a
+        // run lands nearly on one line.
+        float width = (SoldierSkeleton.HipX + 0.25f * SoldierSkeleton.U) * Lerp(1f, 0.55f, _run);
 
-        // Where a boot goes down when it newly takes the weight: a little ahead of the hips
-        // and out on its own side, on whatever surface the probe finds there. Where it goes
-        // down is where it stays, and the body travels over it — which is the whole of not
-        // skating.
-        Vector2 f = Facing(s.Heading);
-        // The figure's own left, in the world. Not the screen's: a model offset of +X is
-        // drawn at (cos h, −sin h), and getting this backwards plants the left boot on the
-        // right-hand side and walks the figure with its legs crossed.
-        var across = new Vector2(f.Y, -f.X) * (SoldierSkeleton.HipX * s.Scale);
-        Vector2 ahead = f * (0.18f + 0.42f * pace);
-
-        if (!leftDown) _leftPlanted = false;
-        else if (!_leftPlanted)
+        for (int i = 0; i < 2; i++)
         {
-            _leftPlant = Torus.Wrap(s.Position + ahead + across);
-            _leftPlantY = GroundProbe?.Invoke(_leftPlant) ?? s.GroundY;
-            _leftPlanted = true;
+            bool left = i == 0;
+            Foot foot = left ? _left : _right;
+            var home = new Vector3(left ? width : -width, 0f, 0f);
+
+            if (!foot.Known || _justLanded)
+            {
+                // Down where the leg is actually reaching as it arrives — no further out
+                // than it could stand on — so a landing takes the weight on the feet the
+                // body came in on rather than on a pair of feet teleported under it.
+                Vector3 at = foot.Known ? SoldierSkeleton.Ankle(p, left) : home;
+                var flat = new Vector2(at.X - home.X, at.Z);
+                if (flat.Length() > 0.3f) flat = flat / flat.Length() * 0.3f;
+                PlantAt(foot, new Vector3(home.X + flat.X, 0f, flat.Y), s);
+                foot.Known = true;
+                continue;
+            }
+
+            if (foot.Down) foot.Cur = ToModel(foot.Plant, foot.PlantY, s);
+
+            if (_striding)
+            {
+                float phase = LegPhase(left);
+                bool stance = phase < _duty;
+                float q = stance ? 0f : (phase - _duty) / (1f - _duty);
+
+                // Lifting off — or a standing step overtaken by the stride, which carries on
+                // from wherever that step had got to.
+                if (!stance && (foot.Down || foot.Settling))
+                {
+                    foot.Down = false;
+                    foot.Settling = false;
+                    foot.From = foot.Cur;
+                    foot.Q0 = q;
+                }
+
+                if (stance && !foot.Down)
+                {
+                    PlantAt(foot, foot.Cur with { Y = 0f }, s);
+                    continue;
+                }
+
+                if (!foot.Down)
+                {
+                    var land = new Vector3(home.X + _gaitDir.X * reach, 0f, _gaitDir.Y * reach);
+                    float k = foot.Q0 >= 0.999f ? 1f
+                        : Math.Clamp((q - foot.Q0) / (1f - foot.Q0), 0f, 1f);
+                    float carry = SmoothStep(0f, 1f, MathF.Pow(k, 1f + 0.5f * _run));
+                    float rise = lift * MathF.Sin(MathF.PI * MathF.Pow(k, 0.8f));
+                    foot.Cur = Vector3.Lerp(foot.From, land, carry) + new Vector3(0f, rise, 0f);
+                }
+            }
+            else
+            {
+                // A step still in the air when the stride stopped finishes as a standing one,
+                // back under its own hip.
+                if (!foot.Down && !foot.Settling)
+                {
+                    foot.Settling = true;
+                    foot.SettleT = 0f;
+                    foot.From = foot.Cur;
+                }
+                if (foot.Settling)
+                {
+                    foot.SettleT += dt / SettleTime;
+                    float k = Math.Clamp(foot.SettleT, 0f, 1f);
+                    foot.Cur = Vector3.Lerp(foot.From, home, SmoothStep(0f, 1f, k))
+                             + new Vector3(0f, SettleLift * MathF.Sin(MathF.PI * k), 0f);
+                    if (k >= 1f) PlantAt(foot, home, s);
+                }
+            }
         }
 
-        if (leftDown) _rightPlanted = false;
-        else if (!_rightPlanted)
+        // A standing body picks a boot up when it has drifted off it: the further one first,
+        // and only with the other one down to stand on.
+        if (!_striding && _left.Down && _right.Down)
         {
-            _rightPlant = Torus.Wrap(s.Position + ahead - across);
-            _rightPlantY = GroundProbe?.Invoke(_rightPlant) ?? s.GroundY;
-            _rightPlanted = true;
+            float dl = Drift(_left, width), dr = Drift(_right, -width);
+            Foot worst = dl >= dr ? _left : _right;
+            if (MathF.Max(dl, dr) > SettleSlack)
+            {
+                worst.Down = false;
+                worst.Settling = true;
+                worst.SettleT = 0f;
+                worst.From = worst.Cur;
+            }
         }
+    }
 
-        // A body barely moving keeps both boots down rather than hopping between them.
-        if (_planar < 0.5f && !_leftPlanted)
-        {
-            _leftPlant = Torus.Wrap(s.Position + across);
-            _leftPlantY = GroundProbe?.Invoke(_leftPlant) ?? s.GroundY;
-            _leftPlanted = true;
-        }
-        if (_planar < 0.5f && !_rightPlanted)
-        {
-            _rightPlant = Torus.Wrap(s.Position - across);
-            _rightPlantY = GroundProbe?.Invoke(_rightPlant) ?? s.GroundY;
-            _rightPlanted = true;
-        }
+    /// <summary>How far a planted boot is, across the floor, from where it belongs under
+    /// its hip.</summary>
+    private static float Drift(Foot foot, float homeX)
+        => new Vector2(foot.Cur.X - homeX, foot.Cur.Z).Length();
 
-        // How far the solve gets to overrule the stride: exactly how much weight each boot
-        // is carrying, which is already worked out once per frame. The hand-over is a ramp
-        // rather than a switch, so the solve fades out of one leg as it fades into the
-        // other and neither snaps.
-        SolveLeg(ref p, ref p.LeftLeg, s, _leftPlant, _leftPlantY, LeftFootLoad, left: true);
-        SolveLeg(ref p, ref p.RightLeg, s, _rightPlant, _rightPlantY, RightFootLoad, left: false);
+    /// <summary>Nails a boot down at a point given in the body's own frame, on whatever
+    /// surface is under it there.</summary>
+    private void PlantAt(Foot foot, Vector3 at, in Signals s)
+    {
+        float c = MathF.Cos(s.Heading), sn = MathF.Sin(s.Heading);
+        float scale = MathF.Max(1e-3f, s.Scale);
+        // The inverse of ToModel. Model +X is the figure's left, drawn at (cos h, −sin h) —
+        // backwards, this plants the left boot on the right and the figure walks with its
+        // legs crossed.
+        var d = new Vector2((at.X * c + at.Z * sn) * scale, (-at.X * sn + at.Z * c) * scale);
+        foot.Plant = Torus.Wrap(s.Position + d);
+        // A grounded body is standing on the surface it is at; the probe, if there is one,
+        // finds a step or a parapet under a boot that has reached past it.
+        foot.PlantY = GroundProbe?.Invoke(foot.Plant) ?? s.Height + at.Y * scale;
+        foot.Cur = ToModel(foot.Plant, foot.PlantY, s);
+        foot.Down = true;
+        foot.Settling = false;
     }
 
     /// <summary>
-    /// Solves one leg onto a planted boot, and blends the answer in by how firmly that boot
-    /// is actually carrying — so a foot swinging through the air keeps the stride the base
-    /// layer wrote, and only a foot with weight on it is overruled.
+    /// Solves both legs onto wherever their boots are, after first lowering the hips far
+    /// enough that both planted boots are actually in reach.
+    ///
+    /// That lowering is a large part of the gait and none of it is authored: a long step
+    /// spreads the feet, a spread pair of feet cannot be stood on as tall as a closed pair,
+    /// and so the body dips through every double support and rises over every planted leg
+    /// — the vault of a walk — and sinks into the crouch a run carries. Sprung, so a boot
+    /// coming down out of a run's flight is taken by the knees over a frame or two rather
+    /// than jerking the hips down to meet it.
     /// </summary>
-    private static void SolveLeg(ref SoldierPose pose, ref LimbPose leg, in Signals s,
-        Vector2 at, float y, float load, bool left)
+    private void SolveFeet(ref SoldierPose p, in Signals s, float dt)
     {
-        if (load < 0.01f) return;
+        float reach = SoldierSkeleton.LegReach * 0.985f;
+        float need = 0f;
+        for (int i = 0; i < 2; i++)
+        {
+            bool left = i == 0;
+            Foot foot = left ? _left : _right;
+            if (!foot.Down) continue;
+            Vector3 hip = SoldierSkeleton.Hip(p, left);
+            Vector3 ankle = foot.Cur + new Vector3(0f, SoldierSkeleton.SoleDrop, 0f);
+            float across = new Vector2(hip.X - ankle.X, hip.Z - ankle.Z).Length();
+            float tallest = ankle.Y + MathF.Sqrt(MathF.Max(0f, reach * reach - across * across));
+            need = MathF.Max(need, hip.Y - tallest);
+        }
+        need *= _footHold;
+        _hipDrop.Step(need, 900f, 60f, dt);
+        p.Rise -= MathF.Max(_hipDrop.Value, need - 0.03f);
 
-        // Both ends in the figure's own frame: the hip where the pose has put it, and the
-        // boot at the world point it was planted on — raised by the height of a sole, since
-        // the chain the solver is solving ends at an ankle and not at the floor.
+        SolveLeg(ref p, ref p.LeftLeg, _left, left: true);
+        SolveLeg(ref p, ref p.RightLeg, _right, left: false);
+    }
+
+    /// <summary>
+    /// One leg onto its boot — the sole where the foot planner put it, raised by the height
+    /// of a sole, since the chain the solver is solving ends at an ankle and not at the
+    /// floor — blended in by how much the feet are holding the legs at all.
+    /// </summary>
+    private void SolveLeg(ref SoldierPose pose, ref LimbPose leg, Foot foot, bool left)
+    {
         Vector3 hip = SoldierSkeleton.Hip(pose, left);
-        Vector3 target = ToModel(at, y, s);
-        target.Y += SoldierSkeleton.SoleDrop;
+        Vector3 target = foot.Cur + new Vector3(0f, SoldierSkeleton.SoleDrop, 0f);
 
-        // Knees point forward. The one pole vector in this file that is not a judgement
-        // call: it is the only direction a knee has ever bent.
-        if (Solve(hip, target, SoldierSkeleton.SegLen, SoldierSkeleton.SegLen,
-                new Vector3(0f, 0f, 1f), out LimbPose solved))
-            leg = LimbPose.Lerp(leg, solved, load);
+        // Knees point forward — the only direction a knee has ever bent — and a touch out,
+        // so a knee driving through a run passes wide of its partner instead of through it.
+        var pole = new Vector3(left ? 0.15f : -0.15f, 0f, 1f);
+        if (Solve(hip, target, SoldierSkeleton.LegSeg, SoldierSkeleton.LegSeg, pole,
+                out LimbPose solved))
+            leg = LimbPose.Lerp(leg, solved, _footHold);
     }
 
     /// <summary>
@@ -1603,7 +1906,7 @@ public sealed class SoldierAnimator
         // Elbows point back and out — the exact opposite of a knee, which is the whole
         // anatomical difference between the two limbs on this figure.
         var pole = new Vector3(left ? 0.6f : -0.6f, -0.25f, -1f);
-        if (Solve(shoulder, at, SoldierSkeleton.SegLen, SoldierSkeleton.SegLen, pole,
+        if (Solve(shoulder, at, SoldierSkeleton.ArmSeg, SoldierSkeleton.ArmSeg, pole,
                 out LimbPose solved))
             arm = LimbPose.Lerp(arm, solved, grip);
     }
@@ -1713,6 +2016,12 @@ public sealed class SoldierAnimator
     private static Vector2 Facing(float heading) => new(MathF.Sin(heading), MathF.Cos(heading));
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;
+
+    private static float SmoothStep(float edge0, float edge1, float x)
+    {
+        float t = Math.Clamp((x - edge0) / (edge1 - edge0), 0f, 1f);
+        return t * t * (3f - 2f * t);
+    }
 
     private static float MoveToward(float value, float target, float maxDelta)
     {

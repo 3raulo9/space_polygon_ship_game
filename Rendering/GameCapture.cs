@@ -46,7 +46,7 @@ public static class GameCapture
         Player("spider", "SPIDER", DesignKind.Creature, PlayerClass.Spider) with { Move = SpiderWalk() },
         Player("virus", "VIRUS", DesignKind.Creature, PlayerClass.Virus),
         Player("fish", "FISH", DesignKind.Creature, PlayerClass.Fish),
-        Player("soldier", "SOLDIER", DesignKind.Creature, PlayerClass.Soldier),
+        Player("soldier", "SOLDIER", DesignKind.Creature, PlayerClass.Soldier) with { Move = SoldierRun() },
         Player("flower", "FLOWER", DesignKind.Creature, PlayerClass.Flower),
     };
 
@@ -66,6 +66,30 @@ public static class GameCapture
         return new Walk(seconds, (er, u) =>
             er.DrawSpider(loadout, Vector2.Zero, 0f, Eye,
                 coreSpin: u * MathF.Tau, legPhase: u * WalkStrides * MathF.Tau, stride: 1f));
+    }
+
+    /// <summary>How many strides the SOLDIER's copied run holds. Two: a run is quick, and two
+    /// strides at forty-eight samples is twelve to a step — enough that the heel kick and
+    /// the arms' follow-through survive being drawn through a curve.</summary>
+    private const int SoldierStrides = 2;
+
+    /// <summary>
+    /// The SOLDIER at a run, at the chassis's own ground speed: the gait the game draws, with
+    /// its springs and planted feet, copied rather than a gait the creator makes up for a
+    /// body it does not understand. The loop is a whole number of strides; the breath runs
+    /// on a clock of its own, so that clock is nudged until the loop is a whole number of
+    /// breaths too, and the seam closes.
+    /// </summary>
+    private static Walk SoldierRun()
+    {
+        float speed = SoldierRig.GroundSpeed;
+        float seconds = SoldierStrides * SoldierAnimator.StrideFor(speed) / speed;
+        float rate = SoldierAnimator.BreathRate(speed);
+        float breaths = MathF.Max(1f, MathF.Round(rate * seconds / MathF.Tau));
+        float clock = breaths * MathF.Tau / (rate * seconds);
+        var loadout = new Loadout { Class = PlayerClass.Soldier };
+        return new Walk(seconds, (er, u) =>
+            er.DrawSoldierRun(loadout, Vector2.Zero, 0f, Eye, u * seconds, speed, clock));
     }
 
     /// <summary>How many times a walk loop is sampled. Denser than the idle: a stride is a
@@ -345,7 +369,10 @@ public static class GameCapture
 
     private static void AddChannel(Clip clip, int part, Channel ch, float[] values, float still)
     {
-        if (values.Max() - values.Min() < still) return;
+        // Only a channel that never leaves the rest pose is dropped. One that holds still a
+        // long way <em>from</em> it — a run carries its arms bent the whole loop — still has
+        // to be written down, or the copy holds them where the idle did.
+        if (values.All(v => MathF.Abs(v) < still)) return;
         var tr = new Track { Part = part, Channel = ch, Mode = TrackMode.Keys };
         for (int k = 0; k < values.Length; k++)
             tr.Keys.Add(new Key { T = (float)k / values.Length, V = MathF.Round(values[k] * 10000f) / 10000f });

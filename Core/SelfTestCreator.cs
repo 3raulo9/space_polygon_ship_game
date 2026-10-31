@@ -19,6 +19,7 @@ public static partial class SelfTest
         failures += Check("every game character copies into the creator exactly", CreatorCopiesGameModelsExactly);
         failures += Check("a copied character idles exactly as the game's does", CreatorCopiesGameIdle);
         failures += Check("the copied spider walks exactly as the Crab-Core does", CreatorCopiesSpiderWalk);
+        failures += Check("the copied soldier runs exactly as the game's soldier does", CreatorCopiesSoldierRun);
         failures += Check("a design survives saving with its edited animations", CreatorRoundTripsEditedAnimation);
         failures += Check("saving a copy never overwrites another file", CreatorSaveNeverClobbers);
         failures += Check("the spine grows when pulled and shrinks when pushed", CreatorSpineGrowsAndShrinks);
@@ -131,10 +132,35 @@ public static partial class SelfTest
         return null;
     }
 
-    private static string? CreatorCopiesSpiderWalk()
+    private static string? CreatorCopiesSpiderWalk() => CreatorCopiesWalk("spider");
+
+    /// <summary>
+    /// The soldier's run, which unlike the spider's walk is not a function of the stride but a
+    /// live animator — springs, planted feet and all — so it is also checked for closing: the
+    /// copy is a loop, and a loop whose last frame does not run on into its first hitches
+    /// once a second for as long as anybody watches it.
+    /// </summary>
+    private static string? CreatorCopiesSoldierRun()
     {
-        var e = GameCapture.All.First(x => x.Id == "spider");
-        if (e.Move is not { } walk) return "the spider has no walk to copy";
+        if (CreatorCopiesWalk("soldier") is { } bad) return bad;
+
+        var e = GameCapture.All.First(x => x.Id == "soldier");
+        var run = GameCapture.RunWalk(e.Move!, CaptureSource);
+        // The step from the last sample to the first must be no bigger than the biggest step
+        // between neighbours anywhere else in the loop.
+        float Step(int a, int b) => WorstGap(GameTriangles(run[a]), GameTriangles(run[b]));
+        float worst = 0f;
+        for (int k = 1; k < run.Count; k++) worst = MathF.Max(worst, Step(k - 1, k));
+        float seam = Step(run.Count - 1, 0);
+        return seam > worst * 1.25f + 0.005f
+            ? $"the run's loop does not close: {seam:F3} across the seam, {worst:F3} anywhere else"
+            : null;
+    }
+
+    private static string? CreatorCopiesWalk(string id)
+    {
+        var e = GameCapture.All.First(x => x.Id == id);
+        if (e.Move is not { } walk) return $"the {id} has no walk to copy";
         var d = CopyOf(e);
         var move = d.Clips.FirstOrDefault(c => c.Name == "MOVE" && !c.BuiltIn);
         if (move == null) return "the copy walks with a made-up gait instead of the game's";
