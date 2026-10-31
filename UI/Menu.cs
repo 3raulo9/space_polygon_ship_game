@@ -31,15 +31,93 @@ public sealed class Menu
         Quit,
     }
 
+    /// <summary>
+    /// The entries, in the order they are listed <em>and</em> the order the cursor walks them
+    /// — one list for both, so the two can never disagree again (they did: the screen said
+    /// MULTIPLAYER then SETTINGS while the cursor went to SETTINGS first).
+    /// </summary>
     public enum Item
     {
         /// <summary>Listed first because it is the game with an intent behind it. SANDBOX sits
         /// under it as the thing you drop to when you would rather just drive.</summary>
         Descent,
         Sandbox,
-        Settings,
         Multiplayer, // host or join a match; a separate mode, not a flavour of the solo run
+        Settings,
     }
+
+    /// <summary>What each entry says on the screen.</summary>
+    public static string Label(Item item) => item switch
+    {
+        Item.Descent => "DESCENT",
+        Item.Sandbox => "SANDBOX",
+        Item.Multiplayer => "MULTIPLAYER",
+        _ => "SETTINGS",
+    };
+
+    /// <summary>How long Escape has to be held on this screen before the game closes. A
+    /// press does nothing but start the count: one stray Escape too many on the way back
+    /// out of a match used to drop the player to the desktop.</summary>
+    public const float QuitHoldSeconds = 5f;
+
+    /// <summary>How far through that hold the player is, 0..1.</summary>
+    public float QuitProgress => Math.Clamp(_quitHeld / QuitHoldSeconds, 0f, 1f);
+
+    /// <summary>How much of the QUITTING notice is showing, 0..1: fades in as the hold
+    /// begins and back out when it is let go of, rather than blinking off.</summary>
+    public float QuitShown { get; private set; }
+
+    private float _quitHeld;
+    private bool _quitArmed;
+    private double _lastUpdate = double.NegativeInfinity;
+
+    /// <summary>Capture harness: UNRENDERED_CAPTURE_QUIT=&lt;seconds&gt; holds the screen that far
+    /// into a held Escape, so the notice can be photographed without a hand on the key.</summary>
+    private readonly float? _stagedHold =
+        float.TryParse(Environment.GetEnvironmentVariable("UNRENDERED_CAPTURE_QUIT"),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out float held) ? held : null;
+
+    public Menu() => Stage();
+
+    private bool Stage()
+    {
+        if (_stagedHold is not { } held) return false;
+        _quitHeld = held;
+        QuitShown = 1f;
+        return true;
+    }
+
+    /// <summary>
+    /// One frame of the hold. Counts only a hold that <em>began</em> on this screen — an
+    /// Escape still down from backing out of the hangar or the settings is not a request to
+    /// leave the game — and starts again from nothing the moment the key comes up. Returns
+    /// true on the frame the hold reaches <see cref="QuitHoldSeconds"/>.
+    /// </summary>
+    internal bool StepQuitHold(bool pressed, bool held, float dt)
+    {
+        if (pressed) _quitArmed = true;
+        if (_quitArmed && held)
+        {
+            _quitHeld += dt;
+            QuitShown = MathF.Min(1f, QuitShown + dt / QuitFadeIn);
+        }
+        else
+        {
+            _quitArmed = false;
+            _quitHeld = 0f;
+            QuitShown = MathF.Max(0f, QuitShown - dt / QuitFadeOut);
+        }
+
+        if (_quitHeld < QuitHoldSeconds) return false;
+        _quitArmed = false;
+        _quitHeld = 0f;
+        QuitShown = 0f;
+        return true;
+    }
+
+    private const float QuitFadeIn = 0.6f;
+    private const float QuitFadeOut = 0.25f;
 
     /// <summary>Every entry is live now that multiplayer has somewhere to go.</summary>
     public static bool IsSelectable(Item item) => true;
@@ -55,7 +133,16 @@ public sealed class Menu
     /// </summary>
     public Action Update()
     {
-        if (InputMap.QuitPressed) return Action.Quit;
+        // A frame or more away from this screen and the hold is void: whatever Escape was
+        // doing while the menu was not being read, it was not holding it.
+        if (Stage()) return Action.None;
+
+        double clock = Raylib_cs.Raylib.GetTime();
+        if (clock - _lastUpdate > 0.25) { _quitArmed = false; _quitHeld = 0f; QuitShown = 0f; }
+        _lastUpdate = clock;
+
+        if (StepQuitHold(InputMap.QuitPressed, InputMap.QuitHeld, Raylib_cs.Raylib.GetFrameTime()))
+            return Action.Quit;
 
         // Secret keybind ('L' position) — undocumented test screen.
         if (InputMap.SecretTestPressed) return Action.OpenTestScreen;

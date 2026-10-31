@@ -262,6 +262,10 @@ public static partial class SelfTest
             ClashesAreReportedWithinASectionOnly);
         failures += Check("the controls list fits the screen wherever it is scrolled to",
             TheControlsListAlwaysFitsOnScreen);
+        failures += Check("the title menu walks its entries in the order it lists them",
+            TheTitleMenuWalksInTheOrderItShows);
+        failures += Check("leaving the game from the title menu takes a five-second hold on Escape",
+            QuittingTakesAFiveSecondHold);
         failures += Check("every cue is on a fader the player can actually reach",
             EveryCueIsOnACategoryBus);
         failures += Check("a category fader turns down its own cues and nobody else's",
