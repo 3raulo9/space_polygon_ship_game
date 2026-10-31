@@ -58,7 +58,7 @@ public sealed class Menu
     /// <summary>How long Escape has to be held on this screen before the game closes. A
     /// press does nothing but start the count: one stray Escape too many on the way back
     /// out of a match used to drop the player to the desktop.</summary>
-    public const float QuitHoldSeconds = 5f;
+    public const float QuitHoldSeconds = 2.5f;
 
     /// <summary>How far through that hold the player is, 0..1.</summary>
     public float QuitProgress => Math.Clamp(_quitHeld / QuitHoldSeconds, 0f, 1f);
