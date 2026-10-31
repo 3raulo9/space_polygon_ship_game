@@ -45,8 +45,9 @@ public sealed class ModInfo
 ///
 /// <para><b>A mod is one file.</b> A <c>.json</c> dropped into <see cref="Folder"/>, read at
 /// boot and again whenever the MODS page is opened from the title menu. Comments and trailing
-/// commas are allowed in it, so the file can document itself — the shipped
-/// <c>swords.json</c> is written to be copied and edited.</para>
+/// commas are allowed in it, so the file can document itself. The game ships none; the
+/// self-test's swords (<c>SelfTestMods</c>) are a complete, commented example of the
+/// format.</para>
 ///
 /// <para>What a file can add is what this loader knows how to read: today that is melee
 /// weapons for the SOLDIER (<see cref="ModWeapon"/>). A .json mod cannot run code. That is

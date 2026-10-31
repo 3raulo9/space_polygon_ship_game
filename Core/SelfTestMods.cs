@@ -6,9 +6,10 @@ using Unrendered.Net;
 namespace Unrendered.Core;
 
 /// <summary>
-/// Headless checks for the mods folder and the first thing in it: the loader, the join check
-/// that keeps two machines on the same files, and the swords — taken by walking over them,
-/// swung on FIRE, let go of, dropped by the dead, and carried across the wire.
+/// Headless checks for the mods folder and the weapons a mod can add: the loader, the join
+/// check that keeps two machines on the same files, and a pair of test swords — taken by
+/// walking over them, swung on FIRE, let go of, dropped by the dead, and carried across the
+/// wire. The game ships no mods; the swords live here, as the file a player would write.
 ///
 /// <para>Every check stands up exactly the mods it needs and the block puts the registry back
 /// to empty when it is done, so nothing here leaks into the checks that run after it — the
@@ -21,7 +22,7 @@ public static partial class SelfTest
         int failures = 0;
         try
         {
-            failures += Check("the shipped swords mod loads two blades", ShippedSwordsLoad);
+            failures += Check("a weapons mod loads its two blades", SwordsModLoads);
             failures += Check("a broken mod file is refused with a reason, not a crash", BrokenModsSayWhy);
             failures += Check("the mods folder reads every .json and nothing else", FolderScanReadsEveryJson);
             failures += Check("the mod fingerprint follows the content, not the comments", FingerprintFollowsContent);
@@ -47,12 +48,97 @@ public static partial class SelfTest
 
     // --- Helpers -----------------------------------------------------------------------------
 
-    private static string ShippedSwordsPath => Path.Combine(AppContext.BaseDirectory, "Mods", "swords.json");
+    /// <summary>
+    /// A weapons mod, exactly as a player would drop it in the Mods folder — comments and
+    /// all, since reading those is part of what is being checked. It used to ship with the
+    /// game as <c>Mods/swords.json</c>; it no longer does, and lives here instead.
+    /// </summary>
+    private const string SwordsMod = """
+        // SWORDS — blades for the SOLDIER.
+        //
+        // A mod is one .json file in the game's Mods folder (SETTINGS > MODS opens it).
+        // Comments like these and trailing commas are allowed. Copy this file, rename it,
+        // change the "id", and you have a new mod.
+        //
+        // In a match: walk over a sword to take it. While it is in your hand FIRE swings it
+        // instead of the rifle (rockets and hooks are unchanged). DROP WEAPON (Z) puts it down.
+        // Only the SOLDIER can carry one, one at a time. Multiplayer needs every player to have
+        // the same mods as the host, or the join is refused.
+        {
+          "format": 1,
+          "id": "swords",              // a-z 0-9 _ -  (defaults to the file name)
+          "name": "SWORDS",
+          "version": "1.0",
+          "author": "UNRENDERED",
+          "description": "Blades for the soldier. Some lie in the city; soldiers drop theirs.",
 
-    /// <summary>Installs the swords file the game ships, exactly as the build copied it.</summary>
+          "weapons": [
+            {
+              "id": "sword",
+              "name": "SWORD",           // shown on the HUD while it is held
+
+              // Damage has two scales, like everything else in the game:
+              //   "damage"       vs hunters, soldiers, bosses   (a rifle round is 1: a hunter has 3,
+              //                                                  an elite 5, a soldier 2)
+              //   "playerDamage" vs other players, only with friendly fire on (a rifle round is 10)
+              "damage": 3,
+              "playerDamage": 25,
+
+              "reach": 3.2,              // metres past the body's edge          (0.5 - 8)
+              "arc": 110,                // width of the sweep in degrees        (10 - 360)
+              "cooldown": 0.55,          // seconds between swings; hold FIRE    (0.1 - 5)
+              "maxTargets": 3,           // most bodies one swing can cut        (1 - 16)
+
+              "spawn": {
+                "field": 3,              // how many lie on the grid when a match opens  (0 - 6)
+                "soldierDrop": 0.25      // chance a killed enemy soldier drops one      (0 - 1)
+              },
+
+              // Any of the game's own sound cues, by name.
+              "sounds": { "swing": "ThrowWhoosh", "hit": "ClawSlam" },
+
+              // The model: boxes, in metres, in the weapon's own frame. The fist is at 0,0,0;
+              // +Y runs up the blade to the tip, +X across the edge, +Z through the flat.
+              // At most 64 boxes, each within 3 of the fist. Colours are "#RRGGBB".
+              "model": [
+                { "from": [-0.035, -0.16, -0.035], "to": [0.035, -0.11, 0.035], "color": "#6B6250" },
+                { "from": [-0.022, -0.11, -0.022], "to": [0.022,  0.03, 0.022], "color": "#232C33" },
+                { "from": [-0.11,   0.03, -0.03 ], "to": [0.11,   0.065, 0.03 ], "color": "#8E9AA3" },
+                { "from": [-0.032,  0.065, -0.009], "to": [0.032, 0.66, 0.009], "color": "#DCE8F0" },
+                { "from": [-0.008,  0.09, -0.011], "to": [0.008,  0.55, 0.011], "color": "#8E9AA3" },
+                { "from": [-0.018,  0.66, -0.007], "to": [0.018,  0.72, 0.007], "color": "#DCE8F0" }
+              ]
+            },
+
+            {
+              "id": "greatsword",
+              "name": "GREATSWORD",
+              "damage": 5,
+              "playerDamage": 40,
+              "reach": 4.2,
+              "arc": 150,
+              "cooldown": 1.1,
+              "maxTargets": 5,
+              "spawn": { "field": 1, "soldierDrop": 0.05 },
+              "sounds": { "swing": "ThrowWhoosh", "hit": "ClawSlam" },
+              "model": [
+                { "from": [-0.045, -0.30, -0.045], "to": [0.045, -0.24, 0.045], "color": "#A33A34" },
+                { "from": [-0.026, -0.24, -0.026], "to": [0.026,  0.03, 0.026], "color": "#232C33" },
+                { "from": [-0.17,   0.03, -0.04 ], "to": [0.17,   0.08, 0.04 ], "color": "#6B6250" },
+                { "from": [-0.05,   0.08, -0.012], "to": [0.05,   0.98, 0.012], "color": "#C8D2DA" },
+                { "from": [-0.012,  0.12, -0.014], "to": [0.012,  0.85, 0.014], "color": "#8E9AA3" },
+                { "from": [-0.03,   0.98, -0.01 ], "to": [0.03,   1.06, 0.01 ], "color": "#C8D2DA" }
+              ]
+            }
+          ]
+        }
+
+        """;
+
+    /// <summary>Installs the test swords.</summary>
     private static ModInfo InstallSwords()
     {
-        ModInfo mod = Mods.Parse(File.ReadAllText(ShippedSwordsPath), "swords.json");
+        ModInfo mod = Mods.Parse(SwordsMod, "swords.json");
         Mods.Install(new[] { mod }, log: false);
         return mod;
     }
@@ -83,9 +169,8 @@ public static partial class SelfTest
 
     // --- The loader ------------------------------------------------------------------------
 
-    private static string? ShippedSwordsLoad()
+    private static string? SwordsModLoads()
     {
-        if (!File.Exists(ShippedSwordsPath)) return $"the build did not copy {ShippedSwordsPath}";
         ModInfo mod = InstallSwords();
         if (!mod.Loaded) return "swords.json failed: " + mod.Error;
         if (mod.Id != "swords") return $"its id came out as \"{mod.Id}\"";
@@ -151,7 +236,7 @@ public static partial class SelfTest
         try
         {
             Directory.CreateDirectory(dir);
-            File.Copy(ShippedSwordsPath, Path.Combine(dir, "b-swords.json"));
+            File.WriteAllText(Path.Combine(dir, "b-swords.json"), SwordsMod);
             File.WriteAllText(Path.Combine(dir, "a-broken.json"), "{ \"weapons\": ");
             File.WriteAllText(Path.Combine(dir, "readme.txt"), "not a mod");
             Environment.SetEnvironmentVariable("UNRENDERED_MODS_DIR", dir);
@@ -219,7 +304,7 @@ public static partial class SelfTest
         Mods.Install(Array.Empty<ModInfo>(), log: false);
         if (Mods.Fingerprint != 0u) return "no mods must fingerprint as 0, which is what an old build sends";
 
-        string text = File.ReadAllText(ShippedSwordsPath);
+        string text = SwordsMod;
         Mods.Install(new[] { Mods.Parse(text, "swords.json") }, log: false);
         uint shipped = Mods.Fingerprint;
         if (shipped == 0u) return "an installed mod fingerprinted as no mods";
