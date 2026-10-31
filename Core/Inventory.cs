@@ -82,6 +82,7 @@ public static class ItemNames
         ItemKind.Moonstone      => "MOONSTONE",
         ItemKind.SunFragment    => "FRAGMENT OF THE SUN",
         ItemKind.MoonFragment   => "FRAGMENT OF THE MOON",
+        _ when Modding.ModItems.Get(kind) is { } m => m.Name,
         _                       => "SALVAGE",
     };
 }
@@ -217,6 +218,7 @@ public sealed class Inventory
         ItemKind.ScrapMetal or ItemKind.CopperWire or ItemKind.SpaceGunpowder
             or ItemKind.DenseAlloy or ItemKind.Lead or ItemKind.Zinc
             or ItemKind.Lithium   => 20,
+        _ when Modding.ModItems.Get(kind) is { } m => Math.Clamp(m.MaxStack, 1, 255),
         _                     => 1,
     };
 
@@ -514,7 +516,7 @@ public sealed class Inventory
             var kind = (ItemKind)src[i * 2];
             int count = src[i * 2 + 1];
             // A malformed byte becomes an empty slot rather than a bogus item.
-            if (!Enum.IsDefined(kind) || count <= 0) { Flat(i) = ItemStack.Empty; continue; }
+            if (!Modding.ModItems.Known(kind) || count <= 0) { Flat(i) = ItemStack.Empty; continue; }
             Flat(i) = new ItemStack(kind, count);
         }
     }

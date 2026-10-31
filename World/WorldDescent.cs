@@ -863,7 +863,8 @@ public sealed partial class World : IDescentField
     private bool EveryoneIsSpent()
     {
         foreach (var p in Players)
-            if (!p.Away && p.Alive) return false;
+            // A craft that went somewhere else is still alive and still being flown.
+            if ((!p.Away || p.Elsewhere) && p.Alive) return false;
         return Players.Count > 0;
     }
 

@@ -587,8 +587,47 @@ public sealed class PlayerTank
     /// its craft in place (frozen, unhurt, un-hunted) so that a reconnection from the same
     /// Steam account can step straight back into it with its lives and position intact. The
     /// renderer dims an away craft; the sim leaves it alone.
+    ///
+    /// <para>Also reads true while the craft is <see cref="Elsewhere"/>: everything that
+    /// leaves a dropped player alone — the hunters, the rounds, the pickups, the triggers —
+    /// has exactly the same reason to leave alone a craft that has gone somewhere else
+    /// entirely. Setting it only ever sets the dropped half.</para>
     /// </summary>
-    public bool Away;
+    public bool Away
+    {
+        get => _away || Elsewhere;
+        set => _away = value;
+    }
+    private bool _away;
+
+    /// <summary>True when the seat is <see cref="Away"/> because its player dropped, as opposed
+    /// to a craft that is merely <see cref="Elsewhere"/>.</summary>
+    public bool Dropped => _away;
+
+    /// <summary>
+    /// A code mod has taken this craft out of the world — through a door of its own, into a
+    /// place this game does not draw. It is alive and still being flown, just not here: the
+    /// field treats it as <see cref="Away"/> (not stepped, not hunted, not hit, picks nothing
+    /// up) and nobody draws it, but a run is never over because its only player is somewhere
+    /// else. Whoever set it owns the craft until they clear it again.
+    /// </summary>
+    public bool Elsewhere;
+
+    /// <summary>
+    /// A code mod moves and draws this craft: a body from somewhere else standing in a seat.
+    /// The world does not step it or read input for it — the mod writes
+    /// <see cref="Position"/>, <see cref="Height"/> and <see cref="Heading"/> itself — but it
+    /// is a full participant otherwise: hunted, shot at, able to take pickups. The renderer
+    /// leaves it to the mod, which knows what it looks like.
+    /// </summary>
+    public bool Puppet;
+
+    /// <summary>
+    /// Takes the craft's damage instead of the shield and hull, when a code mod answers for it
+    /// — a body whose health lives somewhere else. Handed the amount and where it came from;
+    /// returns true when it dealt with the hit, false to let it land on the craft as usual.
+    /// </summary>
+    public Func<float, Vector2?, bool>? DamageHandler;
 
     // --- Remote interpolation (client only; never the local seat, which predicts) ---
     // A craft that is not this machine's own is a puppet the host describes twenty times a
@@ -1173,6 +1212,9 @@ public sealed class PlayerTank
     /// </summary>
     public void TakeDamage(float amount, Vector2? from)
     {
+        // A body whose health is kept somewhere else is told about the hit and keeps it.
+        if (DamageHandler is { } handler && handler(amount, from)) return;
+
         if (from is { } at)
         {
             Vector2 d = Torus.Delta(Position, at);

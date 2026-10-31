@@ -320,6 +320,12 @@ public sealed class Renderer : IDisposable
                 : new Vector3(0f, 1f, 0f);
         }
 
+        // Code mods see the frame before it is drawn: the camera is built and theirs to move,
+        // and the place on screen is theirs to replace. Before any texture pass opens, so a
+        // mod's own off-screen passes have somewhere to run.
+        Modding.ModScene scene = Modding.CodeMods.BeforeDraw(world, _camera);
+        _camera = scene.Camera;
+
         // Render the rotating 3D item icons into their own textures before the world's
         // texture pass opens (a 3D pass can't nest inside it) — the HUD's equip slots
         // blit them the same way the inventory panel does.
@@ -343,15 +349,19 @@ public sealed class Renderer : IDisposable
         bool unseeing = player.Virus is { Exposed: true } && !player.Captured;
 
         Raylib.BeginTextureMode(_target);
-        Raylib.ClearBackground(Palette.Void); // never pure black
-        SkyRenderer.Draw(_camera, (float)Raylib.GetTime());
+        Raylib.ClearBackground(scene.Clear); // never pure black
+        if (!scene.OwnsWorld) SkyRenderer.Draw(_camera, (float)Raylib.GetTime());
 
         Raylib.BeginMode3D(_camera);
-        GridRenderer.Draw(player.Position);
-        _entities.Draw(world, eye);
+        if (!scene.OwnsWorld)
+        {
+            GridRenderer.Draw(player.Position);
+            _entities.Draw(world, eye);
+        }
+        Modding.CodeMods.Draw3D(world, scene);
         Raylib.EndMode3D();
 
-        if (unseeing)
+        if (unseeing && !scene.OwnsWorld)
         {
             DrawMurk();
             Raylib.BeginMode3D(_camera);
@@ -388,16 +398,20 @@ public sealed class Renderer : IDisposable
 
         // Flat instrument panel over the scene: vital bars + radar along the top, plus
         // the R/T/Y/U equip slots showing their 3D item icons.
-        if (instruments) HudRenderer.Draw(world, _itemIcons);
+        if (instruments) HudRenderer.Draw(world, _itemIcons, scene);
 
         // The join/quit feed sits under the instruments, bottom-right. Only in a match.
         if (notices != null) HudRenderer.DrawNotices(notices);
 
         // Floating name + shield bar over each team-mate, so a twenty-player field reads.
-        DrawPlayerTags(world);
+        // Not over a place a mod put there instead: the field's people are not in it.
+        if (!scene.OwnsWorld) DrawPlayerTags(world);
 
         // ...and the places people have pointed at.
-        DrawMarkers(world);
+        if (!scene.OwnsWorld) DrawMarkers(world);
+
+        // ...and whatever code mods put over the picture.
+        Modding.CodeMods.DrawHud(world, scene);
 
         // ...and the whole roster on demand. Only in a match: a solo run's scoreboard is one
         // row about the only person in it.

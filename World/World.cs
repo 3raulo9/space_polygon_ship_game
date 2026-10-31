@@ -1579,6 +1579,7 @@ public sealed partial class World : IAnchorField
         for (int seat = 0; seat < Players.Count; seat++)
         {
             if (Players[seat].Away) continue;   // a dropped player pulls no triggers
+            if (Players[seat].Puppet) continue; // a body a mod moves has no keys here
             DriveSeat(Players[seat], _inputs[seat], dt,
                       live: seat != LocalIndex || acceptCombatInput);
         }
@@ -1743,7 +1744,7 @@ public sealed partial class World : IAnchorField
             // On a client only the local craft predicts; every other seat is a puppet eased
             // toward the host's account by InterpolateRemotes, so stepping it here with a stale
             // (empty) input frame would only fight that. On the host and solo, all seats step.
-            if (!Players[i].Away && (Authoritative || i == LocalIndex))
+            if (!Players[i].Away && !Players[i].Puppet && (Authoritative || i == LocalIndex))
                 Players[i].Update(dt, _inputs[i]);
         // What the craft is standing on, before anything asks whether it is inside a
         // building: a SPIDER that has just landed on a roof is up there for the whole of
@@ -3520,6 +3521,8 @@ public sealed partial class World : IAnchorField
 
         PlayerTank who = Players[seat];
         Vector2 at = Torus.Wrap(who.Position + who.Forward * ThrowReach);
+        // Something a code mod added has no salvage here to become; its mod puts it down.
+        if (Modding.ModItems.Get(kind) is { } item) { item.Thrown?.Invoke(this, who, at); return true; }
         TossSalvage(at, SalvageOf(kind));
         return true;
     }
@@ -3646,6 +3649,15 @@ public sealed partial class World : IAnchorField
                 slot.Count -= Math.Min(loaded, slot.Count);
                 if (slot.Count <= 0) slot = ItemStack.Empty;
                 if (local) Audio.PlayPickup(player.Position);
+                return true;
+            }
+
+            // Something a code mod added does whatever its mod says spending it does.
+            case var kind when Modding.ModItems.Get(kind) is { Use: { } use }:
+            {
+                if (!use(this, player, index)) return false;
+                ref ItemStack after = ref inv.Slots[index];   // the mod may have moved things
+                if (!after.IsEmpty && after.Kind == kind && --after.Count <= 0) after = ItemStack.Empty;
                 return true;
             }
 
