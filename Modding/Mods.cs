@@ -28,6 +28,13 @@ public sealed class ModInfo
 
     public IReadOnlyList<ModWeapon> Weapons { get; init; } = Array.Empty<ModWeapon>();
 
+    /// <summary>True for a .dll — a code mod (see <see cref="IGameMod"/>) rather than data.</summary>
+    public bool Code { get; init; }
+
+    /// <summary>A code mod's bytes, hashed: two machines run the same code only if this
+    /// matches, whatever the file says its version is. Empty for a .json mod.</summary>
+    public string Digest { get; init; } = "";
+
     public bool Loaded => Error == null;
 
     internal static ModInfo Failed(string file, string why) => new() { File = file, Error = why };
@@ -42,10 +49,15 @@ public sealed class ModInfo
 /// <c>swords.json</c> is written to be copied and edited.</para>
 ///
 /// <para>What a file can add is what this loader knows how to read: today that is melee
-/// weapons for the SOLDIER (<see cref="ModWeapon"/>). A mod cannot run code. That is the
-/// price of one-file mods anyone can open in a text editor, and it is also what makes the
+/// weapons for the SOLDIER (<see cref="ModWeapon"/>). A .json mod cannot run code. That is
+/// the price of one-file mods anyone can open in a text editor, and it is also what makes the
 /// multiplayer rule simple — two machines with the same files are running the same game,
 /// which <see cref="Fingerprint"/> checks at the door.</para>
+///
+/// <para><b>Code mods</b> are the other kind: a .dll in the same folder holding an
+/// <see cref="IGameMod"/>, which the game calls from its loop (see <see cref="CodeMods"/>).
+/// Still one file, still listed here, and the fingerprint covers their exact bytes — so the
+/// multiplayer rule stays the same rule.</para>
 ///
 /// <para>Static, like <see cref="Input.InputMap.Active"/>: there is one mods folder per
 /// install and every part of the game reads the same registry. Never swapped mid-match —
@@ -116,6 +128,7 @@ public static class Mods
                 catch (Exception e) { found.Add(ModInfo.Failed(name, "COULD NOT READ: " + e.Message)); continue; }
                 found.Add(Parse(text, name));
             }
+            CodeMods.Scan(folder, found);
         }
         catch (Exception e)
         {
@@ -171,7 +184,9 @@ public static class Mods
         if (!log) return;
         foreach (var m in all)
             Console.WriteLine(m.Loaded
-                ? $"[mods] loaded {m.File}: {m.Name} {m.Version} ({m.Weapons.Count} weapon(s))"
+                ? m.Code
+                    ? $"[mods] loaded {m.File}: {m.Name} {m.Version} (code)"
+                    : $"[mods] loaded {m.File}: {m.Name} {m.Version} ({m.Weapons.Count} weapon(s))"
                 : $"[mods] FAILED {m.File}: {m.Error}");
     }
 
@@ -417,13 +432,13 @@ public static class Mods
         throw new ModError($"{where}.sounds: NO SOUND CALLED \"{text}\"");
     }
 
-    private static bool IsId(string id)
+    internal static bool IsId(string id)
         => id.Length is > 0 and <= 32
            && id.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-');
 
     /// <summary>Upper-cased and cut to length, because the game's font is capitals and the
     /// screen is 320 pixels wide.</summary>
-    private static string Upper(string s, int max)
+    internal static string Upper(string s, int max)
     {
         s = s.Trim().ToUpperInvariant();
         return s.Length <= max ? s : s[..max];
@@ -444,6 +459,7 @@ public static class Mods
         foreach (var mod in loaded)
         {
             sb.Append(mod.Id).Append('|').Append(mod.Version).Append('|');
+            if (mod.Code) sb.Append("code:").Append(mod.Digest).Append('|');
             foreach (var w in mod.Weapons)
             {
                 sb.Append(w.Id).Append(',').Append(w.Name).Append(',')

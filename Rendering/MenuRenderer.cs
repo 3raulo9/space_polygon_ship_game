@@ -66,7 +66,7 @@ internal static class MenuRenderer
         if (all.Count == 0)
         {
             DrawCentredText(font, "NO MODS INSTALLED", top + 6, Scale(Palette.HudChrome, 0.6f), alpha);
-            DrawCentredText(font, "ONE .JSON FILE PER MOD", top + 26, Scale(Palette.HudChrome, 0.4f), alpha);
+            DrawCentredText(font, "ONE .JSON OR .DLL PER MOD", top + 26, Scale(Palette.HudChrome, 0.4f), alpha);
             DrawCentredText(font, "GOES IN THE MODS FOLDER", top + 38, Scale(Palette.HudChrome, 0.4f), alpha);
         }
         else
@@ -82,6 +82,7 @@ internal static class MenuRenderer
                     ? (m.Name + " " + m.Version).Trim()
                     : m.File.ToUpperInvariant();
                 string status = !m.Loaded ? "FAILED"
+                    : m.Code ? "CODE"
                     : m.Weapons.Count == 1 ? "1 WEAPON"
                     : $"{m.Weapons.Count} WEAPONS";
 

@@ -35,10 +35,12 @@ public static partial class SelfTest
             failures += Check("a held sword goes down with a spent life", SwordGoesDownWithTheLife);
             failures += Check("swords on the grid and in hand cross the wire", SwordsCrossTheWire);
             failures += Check("a guest with different mods is refused at the door", MismatchedModsAreRefused);
+            failures += Check("an item a code mod adds stacks, names itself, crosses the wire and is spent", ModItemsLiveInThePack);
         }
         finally
         {
             Mods.Install(Array.Empty<ModInfo>(), log: false);
+            ModItems.Reset();
         }
         return failures;
     }
@@ -173,6 +175,43 @@ public static partial class SelfTest
             Environment.SetEnvironmentVariable("UNRENDERED_MODS_DIR", before);
             try { Directory.Delete(dir, recursive: true); } catch { /* the OS will have it */ }
         }
+    }
+
+    private static string? ModItemsLiveInThePack()
+    {
+        ModItems.Reset();
+        if (ModItems.Known((ItemKind)ModItems.First)) return "with no code mod, the mod range must name nothing";
+        var pack = new Inventory();
+        int used = 0;
+        ModItem? item = ModItems.Register(new ModItem
+        {
+            ModId = "test", Id = "pebble", Name = "PEBBLE", MaxStack = 5,
+            Use = (_, _, _) => { used++; return true; },
+        });
+        if (item is null || !ModItems.IsMod(item.Kind)) return "registering a kind handed back nothing";
+        if (!ReferenceEquals(ModItems.Register(new ModItem { ModId = "test", Id = "pebble", Name = "X" }), item))
+            return "the same key registered twice made two kinds";
+        if (pack.Add(item.Kind, 7) != 0) return "seven pebbles did not fit an empty pack";
+        if (pack.Slots[0].Count != 5 || pack.Slots[1].Count != 2) return "pebbles did not stack at their own ceiling";
+        if (ItemNames.Of(item.Kind) != "PEBBLE") return "the panel does not call it by its name";
+
+        Span<byte> wire = stackalloc byte[Inventory.WireSize];
+        pack.Write(wire);
+        var mirror = new Inventory();
+        mirror.Read(wire);
+        if (mirror.Fingerprint() != pack.Fingerprint()) return "a pack holding a mod's item did not cross the wire whole";
+
+        var w = new World.World(new Loadout());
+        Inventory own = w.InventoryOf(0);
+        own.Add(item.Kind, 2);
+        int slot = Array.FindIndex(own.Slots, s => !s.IsEmpty && s.Kind == item.Kind);
+        if (!w.ChargeFromSlot(w.Players[0], own, slot) || used != 1 || own.Slots[slot].Count != 1)
+            return "spending one did not go through the mod and take one";
+
+        ModItems.Reset();
+        mirror.Read(wire);
+        if (!mirror.Slots[0].IsEmpty) return "without the mod, its item must read as an empty slot";
+        return null;
     }
 
     private static string? FingerprintFollowsContent()
