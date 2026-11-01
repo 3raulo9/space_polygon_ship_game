@@ -29,6 +29,7 @@ internal static class MenuRenderer
         DrawTitle(elapsed);
         DrawItems(menu);
         DrawFooter(elapsed);
+        DrawQuitting(menu, elapsed);
     }
 
     /// <summary>Draws whichever settings page is up. <paramref name="alpha"/> fades the
@@ -212,10 +213,38 @@ internal static class MenuRenderer
         int y = 116;
         const int step = 24;
 
-        DrawItem(font, "DESCENT", Menu.Item.Descent, menu, y, null);
-        DrawItem(font, "SANDBOX", Menu.Item.Sandbox, menu, y + step, null);
-        DrawItem(font, "MULTIPLAYER", Menu.Item.Multiplayer, menu, y + step * 2, null);
-        DrawItem(font, "SETTINGS", Menu.Item.Settings, menu, y + step * 3, null);
+        // Straight down the enum, which is also the order the cursor walks — so what is on
+        // the screen and where the arrows go are the same list.
+        foreach (var item in System.Enum.GetValues<Menu.Item>())
+        {
+            DrawItem(font, Menu.Label(item), item, menu, y, null);
+            y += step;
+        }
+    }
+
+    /// <summary>
+    /// The held-Escape notice, in the bottom-left corner: QUITTING fading in as the hold
+    /// starts, its dots ticking over, and a hairline under it filling toward the moment the
+    /// game closes — which is the only way a player can tell that letting go now still saves
+    /// them. Fades back out when the key comes up.
+    /// </summary>
+    private static void DrawQuitting(Menu menu, float elapsed)
+    {
+        float shown = menu.QuitShown;
+        if (shown <= 0.001f) return;
+        byte alpha = (byte)(255 * shown);
+
+        Font font = Raylib.GetFontDefault();
+        string text = "QUITTING" + new string('.', 1 + (int)(elapsed * 3f) % 3);
+        const int size = 10;   // the default font's own size; 8 comes apart at this scale
+        const int x = 8;
+        int y = H - 22;
+        Raylib.DrawTextEx(font, text, new Vector2(x, y), size, Spacing, Fade(Palette.HudChrome, alpha));
+
+        // The hold so far, against how long it has to be.
+        int full = (int)Raylib.MeasureTextEx(font, "QUITTING...", size, Spacing).X;
+        Raylib.DrawRectangle(x, y + size + 3, full, 1, Fade(Scale(Palette.HudChrome, 0.25f), alpha));
+        Raylib.DrawRectangle(x, y + size + 3, (int)(full * menu.QuitProgress), 1, Fade(Palette.NeonRed, alpha));
     }
 
     private static void DrawItem(Font font, string label, Menu.Item item, Menu menu, int y, string? tag)

@@ -262,6 +262,10 @@ public static partial class SelfTest
             ClashesAreReportedWithinASectionOnly);
         failures += Check("the controls list fits the screen wherever it is scrolled to",
             TheControlsListAlwaysFitsOnScreen);
+        failures += Check("the title menu walks its entries in the order it lists them",
+            TheTitleMenuWalksInTheOrderItShows);
+        failures += Check("leaving the game from the title menu takes a long hold on Escape",
+            QuittingTakesALongHold);
         failures += Check("every cue is on a fader the player can actually reach",
             EveryCueIsOnACategoryBus);
         failures += Check("a category fader turns down its own cues and nobody else's",
@@ -286,6 +290,14 @@ public static partial class SelfTest
             FlinchThrowsTheHeadAwayFromTheHit);
         failures += Check("no run of nonsense can put a NaN in a joint",
             NothingProducesANonNumber);
+
+        // On foot: the original's walk and sprint, and the button that reaches the sprint.
+        failures += Check("a soldier walks and sprints at the original's two speeds",
+            SoldierWalksAndSprintsLikeTheOriginal);
+        failures += Check("a quick double tap of forward breaks into a sprint",
+            ADoubleTapOfForwardSprints);
+        failures += Check("on foot, the sprint's key runs and only the mouse shoots",
+            OnFootTheSprintKeyIsNotATrigger);
 
         // DESCENT: the run director, the rolled bosses and the seam that keeps the mode from
         // quietly becoming SANDBOX with a bar over it. Its own block so the output reads as one.
@@ -1604,8 +1616,13 @@ public static partial class SelfTest
         return null;
     }
 
+    /// <summary>UNRENDERED_SELFTEST=&lt;words&gt; runs only the checks whose names contain them —
+    /// for working on one corner of the game without waiting on all of it.</summary>
+    private static readonly string? Only = Environment.GetEnvironmentVariable("UNRENDERED_SELFTEST");
+
     private static int Check(string name, Func<string?> test)
     {
+        if (Only != null && !name.Contains(Only, StringComparison.OrdinalIgnoreCase)) return 0;
         string? err = test();
         if (err == null)
         {

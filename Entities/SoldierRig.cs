@@ -136,13 +136,27 @@ public sealed class GrappleHook
 public sealed class SoldierRig
 {
     // --- On foot ----------------------------------------------------------------
-    // Deliberately slow and heavy. Being on the ground is meant to read to the player
-    // as the wrong state to be in: the vulnerable, slow, walking-target state that
-    // leaving costs one press of ENTER to escape.
+    // The walk and the sprint of the blocky-avatar game this body is built after, at this
+    // body's size. Its numbers are blocks a second for a player 1.8 blocks tall; the
+    // soldier everybody else in the match sees is drawn at twice life size, 3.8 m from
+    // boots to apex, so one of those blocks is 2.1 m here. Quick off the mark and quick to
+    // stop with only a short slide, like the original — on the ground the body goes where
+    // the keys say, and the cables are what carry real momentum.
 
-    public const float GroundSpeed = 6f;
-    private const float GroundAccel = 44f;
-    private const float GroundFriction = 34f;
+    /// <summary>Metres in one block of the gait this is matched to: the soldier's drawn
+    /// height over the 1.8 blocks a player of that game stands.</summary>
+    public const float BlockMetres = 2.1f;
+
+    /// <summary>Walking and sprinting, at 4.317 and 5.612 blocks a second.</summary>
+    public const float WalkSpeed = 4.317f * BlockMetres;
+    public const float SprintSpeed = 5.612f * BlockMetres;
+
+    private const float GroundAccel = 62f;
+    private const float GroundFriction = 50f;
+
+    /// <summary>How quickly a second tap of FORWARD has to follow the first to break into a
+    /// sprint — the original's seven ticks.</summary>
+    private const float DoubleTapWindow = 0.35f;
 
     /// <summary>Eye height of a person on foot, against the tank's 3.2. The single
     /// number that makes the same city read as something you are small inside.</summary>
@@ -267,6 +281,21 @@ public sealed class SoldierRig
     /// from the keys by the world. Interpreted against the look direction on foot and in
     /// the air, and as cable tension whenever a hook is anchored.</summary>
     public Vector2 MoveInput;
+
+    /// <summary>This step's SPRINT button, and whether FORWARD went down on it. Handed in by
+    /// the world beside <see cref="MoveInput"/>; the rig latches the sprint off them.</summary>
+    public bool SprintHeld, ForwardTapped;
+
+    /// <summary>
+    /// Running rather than walking. Latched, the way the original does it: SPRINT pressed —
+    /// or FORWARD tapped twice — while going forward starts it, and it then holds for as long
+    /// as forward does, whether or not SPRINT is still down. Letting go of forward ends it;
+    /// so does a wall, a cable taking the body, or a stagger. It survives a jump, so a sprint
+    /// carried into the air comes down still sprinting.
+    /// </summary>
+    public bool Sprinting { get; private set; }
+
+    private float _sinceForwardTap = 99f;
 
     /// <summary>The camera roll, in radians — the bank into an arc. Eased rather than
     /// snapped, because the single most important thing about how a swing feels is that
@@ -458,6 +487,7 @@ public sealed class SoldierRig
         StepHook(Right, dt, p);
 
         Reeling = false;
+        UpdateSprint(dt);
         ApplyIntent(dt, p);
         ApplyGravity(dt);
 
@@ -512,6 +542,8 @@ public sealed class SoldierRig
     public bool RegisterWallHit()
     {
         float speed = PlanarSpeed;
+        // Running into something ends a sprint, as it does in the original.
+        Sprinting = false;
         if (speed < CrashSpeed)
         {
             // A scrape. Kill the component going into the wall by simply damping the
@@ -613,6 +645,19 @@ public sealed class SoldierRig
         }
     }
 
+    /// <summary>Starts, holds and ends the sprint — see <see cref="Sprinting"/>.</summary>
+    private void UpdateSprint(float dt)
+    {
+        bool forward = MoveInput.Y > 0.5f;
+        bool doubleTap = ForwardTapped && _sinceForwardTap <= DoubleTapWindow;
+        _sinceForwardTap = ForwardTapped ? 0f : _sinceForwardTap + dt;
+
+        if (!Sprinting && forward && (SprintHeld || doubleTap) && Stagger <= 0f && !AnyAnchored)
+            Sprinting = true;
+        else if (Sprinting && (!forward || Stagger > 0f || AnyAnchored))
+            Sprinting = false;
+    }
+
     /// <summary>
     /// Turns this step's WASD into force. Which force depends entirely on what the rig
     /// is hanging from: on foot it is walking, in free air it is a weak steer, and on a
@@ -633,10 +678,12 @@ public sealed class SoldierRig
 
         if (Grounded)
         {
-            // Weighted and deliberate. The wish speed is low and the friction is high,
-            // so a soldier leans into a turn and never darts.
+            // Straight to the speed the keys ask for and straight back off it, with only a
+            // short slide either way — the original's feel, where a body on its feet goes
+            // where it is pointed.
+            float speed = Sprinting ? SprintSpeed : WalkSpeed;
             Vector2 target = wish.LengthSquared() > 1e-4f
-                ? Vector2.Normalize(wish) * GroundSpeed * MathF.Min(1f, wish.Length())
+                ? Vector2.Normalize(wish) * speed * MathF.Min(1f, wish.Length())
                 : Vector2.Zero;
 
             var planar = new Vector2(Velocity.X, Velocity.Z);

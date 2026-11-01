@@ -64,6 +64,10 @@ public static class InputMap
 
     public static bool QuitPressed => Raylib.IsKeyPressed(KeyboardKey.Escape);
 
+    /// <summary>Escape held down — read by the title menu, where leaving the game takes a
+    /// long hold rather than a press.</summary>
+    public static bool QuitHeld => Raylib.IsKeyDown(KeyboardKey.Escape);
+
     /// <summary>F11 toggles borderless fullscreen. Read from every screen, so it works on
     /// the menu just as well as mid-run.</summary>
     public static bool FullscreenPressed => Raylib.IsKeyPressed(KeyboardKey.F11);

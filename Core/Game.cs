@@ -251,7 +251,9 @@ public sealed class Game : IDisposable
 
             // The one place a live device becomes simulation input. Read once here, then
             // handed to the fixed steps below one frame at a time — see InputSampler for
-            // why the edges have to be counted rather than re-polled per step.
+            // why the edges have to be counted rather than re-polled per step. On foot, the
+            // sprint's button stops being a trigger — see InputSampler.OnFoot.
+            _input.OnFoot = _world?.Player.Soldier != null;
             _input.Sample();
 
             // F11 flips borderless fullscreen from any screen. The Renderer already

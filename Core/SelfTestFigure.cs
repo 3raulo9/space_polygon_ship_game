@@ -249,15 +249,7 @@ public static partial class SelfTest
 
     /// <summary>Where one ankle is, in the body's own frame — the far end of the two-bone
     /// chain the solver writes.</summary>
-    private static Vector3 Ankle(in SoldierPose p, bool left)
-    {
-        LimbPose leg = left ? p.LeftLeg : p.RightLeg;
-        Vector3 hip = SoldierSkeleton.Hip(p, left);
-        Vector3 knee = hip + SoldierSkeleton.Segment(SoldierSkeleton.SegLen,
-            leg.UpperPitch, leg.UpperRoll);
-        return knee + SoldierSkeleton.Segment(SoldierSkeleton.SegLen,
-            leg.LowerPitch, leg.LowerRoll);
-    }
+    private static Vector3 Ankle(in SoldierPose p, bool left) => SoldierSkeleton.Ankle(p, left);
 
     /// <summary>
     /// The flinch, which is worth nothing without a direction. A hit from the left has to
@@ -338,15 +330,7 @@ public static partial class SelfTest
         return null;
     }
 
-    private static Vector3 Wrist(in SoldierPose p, bool left)
-    {
-        LimbPose arm = left ? p.LeftArm : p.RightArm;
-        Vector3 shoulder = SoldierSkeleton.Shoulder(p, left);
-        Vector3 elbow = shoulder + SoldierSkeleton.Segment(SoldierSkeleton.SegLen,
-            arm.UpperPitch, arm.UpperRoll);
-        return elbow + SoldierSkeleton.Segment(SoldierSkeleton.SegLen,
-            arm.LowerPitch, arm.LowerRoll);
-    }
+    private static Vector3 Wrist(in SoldierPose p, bool left) => SoldierSkeleton.Wrist(p, left);
 
     /// <summary>
     /// The chest turns against the hips through a stride. Contrapposto is a small angle and

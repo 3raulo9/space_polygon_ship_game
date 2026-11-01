@@ -112,7 +112,7 @@ public sealed class SoldierRenderer
         if (spare && world.AnchorInSight is { } ghost)
             DrawAnchorGhost(ghost, eyeXZ, world.AnchorIsWeak, elapsed);
 
-        DrawArms(view, rig);
+        DrawArms(view, rig, p.Build);
         if (held != null) DrawHeldWeapon(view, held);
         DrawMuzzleFlash(view, rig, p, elapsed);
     }
@@ -506,7 +506,9 @@ public sealed class SoldierRenderer
             // The eyes and the body point the same way on this chassis — the mouse turns
             // both — so all the look-at has to carry is the pitch.
             LookYaw: 0f, LookPitch: p.Pitch,
-            GroundY: p.GroundHeight, Scale: 1f, Time: elapsed),
+            // The size every other machine draws this body at, so the gait it reads off its
+            // own speed — a walk or a run — is the gait they see.
+            GroundY: p.GroundHeight, Scale: EnemySoldier.Scale, Time: elapsed),
             Raylib.GetFrameTime());
     }
 
@@ -518,15 +520,7 @@ public sealed class SoldierRenderer
     /// <em>difference</em> from rest is exactly the motion, and it transfers.
     /// </summary>
     private static Vector3 WristOffset(in SoldierPose pose, bool left)
-    {
-        Vector3 shoulder = SoldierSkeleton.Shoulder(pose, left);
-        LimbPose arm = left ? pose.LeftArm : pose.RightArm;
-        Vector3 elbow = shoulder + SoldierSkeleton.Segment(SoldierSkeleton.SegLen,
-            arm.UpperPitch, arm.UpperRoll);
-        Vector3 wrist = elbow + SoldierSkeleton.Segment(SoldierSkeleton.SegLen,
-            arm.LowerPitch, arm.LowerRoll);
-        return wrist - shoulder;
-    }
+        => SoldierSkeleton.Wrist(pose, left) - SoldierSkeleton.Shoulder(pose, left);
 
     /// <summary>Where a wrist hangs on a body doing nothing at all — the zero this
     /// viewmodel measures every other pose against.</summary>
@@ -571,8 +565,12 @@ public sealed class SoldierRenderer
     /// to how a swing reads changes it in the player's hands and on their team-mates'
     /// screens at once, and the two cannot drift apart.
     /// </summary>
-    private void DrawArms(ViewFrame view, SoldierRig rig)
+    private void DrawArms(ViewFrame view, SoldierRig rig, Loadout build)
     {
+        Color sleeve = build.PartColor(PlayerClass.Soldier, 0);
+        Color glove = build.PartColor(PlayerClass.Soldier, 1);
+        Color steel = build.PartColor(PlayerClass.Soldier, 2);
+
         for (int i = 0; i < 2; i++)
         {
             bool right = i == 0;
@@ -580,17 +578,20 @@ public sealed class SoldierRenderer
             Vector3 muzzle = LauncherMuzzle(view, rig, right);
 
             // The forearm, running back from the wrist toward the shoulder — off the bottom
-            // of the frame, which is where an arm attached to a body goes.
+            // of the frame, which is where an arm attached to a body goes. Square, in the
+            // shirt's colour, with the glove over the end of it: the same sleeve and the
+            // same hand the rest of the match sees on this body, from the inside.
             Vector3 elbow = HandAt(view, right, forward: -0.30f)
                           + view.Up * -0.16f + view.Right * (right ? 0.10f : -0.10f);
-            Raylib.DrawCylinderEx(elbow, wrist, 0.062f, 0.048f, 6, Palette.PlayerFill);
+            Vector3 along = Vector3.Normalize(wrist - elbow);
+            DrawBlock(elbow, wrist - along * 0.04f, 0.056f, sleeve, view);
+            DrawBlock(wrist - along * 0.065f, wrist + along * 0.02f, 0.062f, glove, view);
 
             // The launcher housing in the fist, and the muzzle the cable leaves through.
-            Raylib.DrawCylinderEx(wrist, muzzle, 0.07f, 0.04f, 6, Palette.CrabChassis);
-            // A hard chrome collar at the muzzle, so the business end catches the light and
-            // the two grips read as machined rather than as blocks.
-            Raylib.DrawCylinderEx(
-                Vector3.Lerp(wrist, muzzle, 0.82f), muzzle, 0.05f, 0.042f, 6, Palette.HudChrome);
+            DrawBlock(wrist, muzzle, 0.045f, steel, view);
+            // A hard collar at the muzzle in the harness colour, so the business end reads
+            // as a separate machined piece rather than the housing just stopping.
+            DrawBlock(Vector3.Lerp(wrist, muzzle, 0.80f), muzzle, 0.052f, glove, view);
 
             // The seated hook, when this launcher is holding one — the same piece of steel
             // that gets thrown, at a size that fits in the frame. Its absence is the most
@@ -599,6 +600,34 @@ public sealed class SoldierRenderer
             if (rig.Hook(right).State == HookState.Stowed)
                 DrawHook(muzzle + view.Forward * 0.05f, view.Forward, anchored: false, scale: 0.2f);
         }
+    }
+
+    /// <summary>A unit box, stretched between two points by <see cref="DrawBlock"/>.</summary>
+    private static readonly PolyMesh Block = new PolyMesh().AddBox(Color.White, 0.5f, 0.5f, 0f, 1f);
+
+    /// <summary>
+    /// A square bar of <paramref name="half"/> half-width from <paramref name="from"/> to
+    /// <paramref name="to"/>, its flat faces squared to the view's up — the viewmodel's
+    /// one primitive, so the arms in frame are built of the same slabs as the body they belong
+    /// to and lit by the same sun.
+    /// </summary>
+    private static void DrawBlock(Vector3 from, Vector3 to, float half, Color color, in ViewFrame view)
+    {
+        Vector3 up = view.Up;
+        Vector3 y = to - from;
+        if (y.LengthSquared() < 1e-8f) return;
+        Vector3 dir = Vector3.Normalize(y);
+        Vector3 x = Vector3.Cross(dir, up);
+        if (x.LengthSquared() < 1e-6f) x = Vector3.Cross(dir, Vector3.UnitX);
+        x = Vector3.Normalize(x);
+        Vector3 z = Vector3.Cross(x, dir);
+        float w = half * 2f;
+        var world = new Matrix4x4(
+            x.X * w, x.Y * w, x.Z * w, 0f,
+            y.X, y.Y, y.Z, 0f,
+            z.X * w, z.Y * w, z.Z * w, 0f,
+            from.X, from.Y, from.Z, 1f);
+        Block.Draw(world, view.Eye, color);
     }
 
     /// <summary>

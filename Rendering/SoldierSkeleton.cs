@@ -13,16 +13,29 @@ namespace Unrendered.Rendering;
 /// </summary>
 public static class SoldierSkeleton
 {
-    /// <summary>One unit of the blocky-avatar grid, in world metres. Thirty-two of them is
-    /// the figure's full height — 1.86m.</summary>
+    /// <summary>One unit of the blocky-avatar grid, in world metres. Thirty-two and a bit of
+    /// them is the figure's full height — 1.89m.</summary>
     public const float U = 0.058f;
 
+    /// <summary>The torso: eight wide and four deep, straight up and down. It used to taper
+    /// in to the hips; the blocky convention is a plain slab, and a plain slab is what makes
+    /// the figure read as one at a glance.</summary>
     public const float BodyHalfW = 4f * U;
     public const float BodyHalfD = 2f * U;
 
+    /// <summary>How far the sole is below the ankle the shin pivots the boot from. The
+    /// solver plants soles and the chain ends at ankles, so somebody has to know this or
+    /// every planted foot is buried to the laces.</summary>
+    public const float SoleDrop = 0.6f * U;
+
+    /// <summary>A thigh and a shin. Equal lengths, which makes the two-bone solve well
+    /// conditioned everywhere except dead straight.</summary>
+    public const float LegSeg = 6f * U;
+
     /// <summary>Where the legs meet the pelvis, and the pivot the whole upper body turns
-    /// about.</summary>
-    public const float HipY = 12f * U;
+    /// about: exactly one locked leg and a sole off the floor, so a figure standing
+    /// straight is standing on the grid rather than kneeling into it.</summary>
+    public const float HipY = 2f * LegSeg + SoleDrop;
 
     /// <summary>Where the pelvis ends and the chest begins. The torso used to be one block
     /// from the hips to the neck; the waist is the cut that lets the shoulders disagree
@@ -30,24 +43,33 @@ public static class SoldierSkeleton
     /// that disagreement.</summary>
     public const float WaistY = 4.5f * U;
 
-    /// <summary>Top of the torso, measured from the hips.</summary>
+    /// <summary>Top of the torso, measured from the hips. Twelve, like the legs.</summary>
     public const float NeckY = 12f * U;
 
     public const float LimbHalf = 2f * U;
 
-    /// <summary>Upper arm, forearm, thigh and shin alike. Equal lengths, which makes the
-    /// two-bone solve well conditioned everywhere except dead straight.</summary>
-    public const float SegLen = 6f * U;
+    /// <summary>An upper arm and a forearm. Shorter than the leg's segments because the
+    /// arm's pivot is two units down inside it — the shoulder's cap rides above the joint —
+    /// and the convention is that the whole arm is exactly as long as the torso: flush with
+    /// the top of the shoulders, ending at the hips.</summary>
+    public const float ArmSeg = 5f * U;
 
+    /// <summary>The part of the upper arm above its pivot — the shoulder.</summary>
+    public const float ShoulderCap = 2f * U;
+
+    /// <summary>The head: a pyramid on an eight-by-eight base, as wide as the torso and
+    /// twice as deep, so it overhangs front and back the way the blocky head does.</summary>
     public const float HeadHalf = 4f * U;
     public const float HeadTall = 8f * U;
 
-    /// <summary>Shoulders sit just outside the chest and just under the neck — measured
-    /// from the <em>waist</em>, since that is the joint they now hang from.</summary>
+    /// <summary>Shoulders sit just outside the chest, two units under its top, so the cap of
+    /// each arm is flush with the shoulder line — measured from the <em>waist</em>, since
+    /// that is the joint they now hang from.</summary>
     public const float ShoulderX = BodyHalfW + LimbHalf;
-    public const float ShoulderY = NeckY - WaistY - 1f * U;
+    public const float ShoulderY = NeckY - WaistY - ShoulderCap;
 
-    /// <summary>Hips sit inside the pelvis, measured from the hip pivot itself.</summary>
+    /// <summary>Hips sit inside the pelvis, measured from the hip pivot itself: each leg
+    /// directly under its own half of the torso.</summary>
     public const float HipX = 2f * U;
 
     /// <summary>Neck height above the waist, where the head is hung.</summary>
@@ -55,15 +77,10 @@ public static class SoldierSkeleton
 
     /// <summary>How far a leg reaches with the knee locked. The ceiling on any foot the
     /// solver is asked to plant.</summary>
-    public const float LegReach = SegLen * 2f;
+    public const float LegReach = LegSeg * 2f;
 
     /// <summary>And an arm, from the shoulder. Nothing can be gripped past this.</summary>
-    public const float ArmReach = SegLen * 2f;
-
-    /// <summary>How far the sole is below the ankle the shin pivots the boot from. The
-    /// solver plants soles and the chain ends at ankles, so somebody has to know this or
-    /// every planted foot is buried to the laces.</summary>
-    public const float SoleDrop = 1.6f * U;
+    public const float ArmReach = ArmSeg * 2f;
 
     // ================================================================================
     //  Forward kinematics
@@ -144,11 +161,30 @@ public static class SoldierSkeleton
         => Root(p) + new Vector3(left ? HipX : -HipX, HipY, 0f);
 
     /// <summary>Where one hip launcher is mounted — and so where that hand has to be for
-    /// the figure to be holding it.</summary>
+    /// the figure to be holding it. On the belt, clear of the torso's side and a touch
+    /// behind the hip line — right where a hanging hand comes to rest on it.</summary>
     public static Vector3 Launcher(in SoldierPose p, bool left)
     {
         float lift = left ? p.LeftRigLift : p.RightRigLift;
         return Root(p) + new Vector3(
-            (left ? 1f : -1f) * (BodyHalfW + 1f * U), HipY + 1f * U + lift, 0f);
+            (left ? 1f : -1f) * (BodyHalfW + 1.4f * U), HipY + 0.5f * U + lift, -0.5f * U);
+    }
+
+    /// <summary>One wrist, at the far end of an arm. The model hangs the glove here and a
+    /// held weapon from it; the solver reaches it toward a launcher.</summary>
+    public static Vector3 Wrist(in SoldierPose p, bool left)
+    {
+        LimbPose arm = left ? p.LeftArm : p.RightArm;
+        Vector3 elbow = Shoulder(p, left) + Segment(ArmSeg, arm.UpperPitch, arm.UpperRoll);
+        return elbow + Segment(ArmSeg, arm.LowerPitch, arm.LowerRoll);
+    }
+
+    /// <summary>One ankle, at the far end of a leg — where the boot hangs, and the end of the
+    /// chain the solver plants.</summary>
+    public static Vector3 Ankle(in SoldierPose p, bool left)
+    {
+        LimbPose leg = left ? p.LeftLeg : p.RightLeg;
+        Vector3 knee = Hip(p, left) + Segment(LegSeg, leg.UpperPitch, leg.UpperRoll);
+        return knee + Segment(LegSeg, leg.LowerPitch, leg.LowerRoll);
     }
 }
